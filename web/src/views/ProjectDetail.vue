@@ -349,12 +349,13 @@
 </template>
 
 <script>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useProjectStore } from '../stores/projectStore'
 import { useAgentStore } from '../stores/agentStore'
 import { useTaskStore } from '../stores/taskStore'
 import { useContextStore } from '../stores/contextStore'
+import { useWebSocket } from '../composables/useWebSocket'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -366,6 +367,7 @@ export default {
     const agentStore = useAgentStore()
     const taskStore = useTaskStore()
     const contextStore = useContextStore()
+    const { connect, disconnect, on } = useWebSocket(route.params.id)
 
     const activeTab = ref('agents')
     const showAddAgentModal = ref(false)
@@ -434,6 +436,29 @@ export default {
       agentStore.fetchProjectAgents(projectId)
       taskStore.fetchProjectTasks(projectId)
       contextStore.fetchProjectContexts(projectId)
+      
+      // Connect to WebSocket for real-time updates
+      connect()
+      
+      // Add listeners for real-time updates
+      on('task_update', (data) => {
+        console.log('Task update received:', data)
+        taskStore.fetchProjectTasks(projectId)
+      })
+      
+      on('agent_update', (data) => {
+        console.log('Agent update received:', data)
+        agentStore.fetchProjectAgents(projectId)
+      })
+      
+      on('context_added', (data) => {
+        console.log('Context added:', data)
+        contextStore.fetchProjectContexts(projectId)
+      })
+    })
+
+    onUnmounted(() => {
+      disconnect()
     })
 
     const handleAddAgent = async () => {

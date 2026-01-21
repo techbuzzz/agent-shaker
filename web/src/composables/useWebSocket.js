@@ -4,15 +4,20 @@ const ws = ref(null)
 const isConnected = ref(false)
 const listeners = new Map()
 
-export function useWebSocket() {
+export function useWebSocket(projectId) {
   const connect = () => {
+    if (!projectId) {
+      console.error('Project ID is required for WebSocket connection')
+      return
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.hostname}:${window.location.port}/ws`
+    const wsUrl = `${protocol}//${window.location.hostname}:${window.location.port}/ws?project_id=${encodeURIComponent(projectId)}`
     
     ws.value = new WebSocket(wsUrl)
 
     ws.value.onopen = () => {
-      console.log('WebSocket connected')
+      console.log('WebSocket connected for project:', projectId)
       isConnected.value = true
     }
 

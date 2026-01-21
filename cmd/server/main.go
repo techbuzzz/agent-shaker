@@ -17,25 +17,29 @@ func main() {
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		databaseURL = "postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable"
+		databaseURL = "postgres://mcp:secret@localhost:5433/mcp_tracker?sslmode=disable"
 	}
 
 	// Connect to database
 	db, err := database.NewDB(databaseURL)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
-	}
-	defer db.Close()
+		log.Printf("Failed to connect to database: %v", err)
+		log.Println("Starting server without database for WebSocket testing...")
+		db = nil
+	} else {
+		defer db.Close()
 
-	// Configure connection pool
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+		// Configure connection pool
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(5)
 
-	log.Println("Connected to database")
+		log.Println("Connected to database")
 
-	// Run migrations
-	if err := runMigrations(db); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		// Run migrations
+		if err := runMigrations(db); err != nil {
+			log.Printf("Failed to run migrations: %v", err)
+			log.Println("Continuing without migrations...")
+		}
 	}
 
 	// Create WebSocket hub
@@ -47,7 +51,7 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(db, hub)
 	taskHandler := handlers.NewTaskHandler(db, hub)
 	contextHandler := handlers.NewContextHandler(db, hub)
-	wsHandler := handlers.NewWebSocketHandler(hub)
+	wsHandler := handlers.NewWebSocketHandler()
 	docsHandler := handlers.NewDocsHandler()
 
 	// Setup router
@@ -113,7 +117,7 @@ func main() {
 		}`))
 	}).Methods("GET")
 
-	// Setup CORS
+	// Setup CORS for API routes only
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -121,14 +125,33 @@ func main() {
 		AllowCredentials: true,
 	})
 
-	// Apply middleware
-	handler := middleware.Recovery(
-		middleware.Logger(
-			middleware.RequestSizeLimit(10 * 1024 * 1024)( // 10MB limit
-				c.Handler(r),
+	// Create a custom handler that routes WebSocket without middleware
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// WebSocket requests bypass all middleware
+		if req.URL.Path == "/ws" {
+			wsHandler.HandleWebSocket(w, req)
+			return
+		}
+
+		// API routes get full middleware
+		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
+			middleware.Recovery(
+				middleware.Logger(
+					middleware.RequestSizeLimit(10 * 1024 * 1024)(
+						c.Handler(api),
+					),
+				),
+			).ServeHTTP(w, req)
+			return
+		}
+
+		// Other routes (health, root) get minimal middleware
+		middleware.Recovery(
+			middleware.Logger(
+				r,
 			),
-		),
-	)
+		).ServeHTTP(w, req)
+	})
 
 	// Start server
 	port := os.Getenv("PORT")
