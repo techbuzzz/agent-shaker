@@ -124,9 +124,9 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 // Agent handlers
 func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ProjectID string            `json:"project_id"`
-		Name      string            `json:"name"`
-		Role      models.AgentRole  `json:"role"`
+		ProjectID uuid.UUID        `json:"project_id"`
+		Name      string           `json:"name"`
+		Role      models.AgentRole `json:"role"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

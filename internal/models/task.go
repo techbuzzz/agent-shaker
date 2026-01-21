@@ -6,12 +6,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// TaskStatus represents the status of a task
+type TaskStatus string
+
+const (
+	StatusPending    TaskStatus = "pending"
+	StatusInProgress TaskStatus = "in_progress"
+	StatusCompleted  TaskStatus = "completed"
+	StatusFailed     TaskStatus = "failed"
+)
+
 type Task struct {
 	ID          uuid.UUID  `json:"id" db:"id"`
 	ProjectID   uuid.UUID  `json:"project_id" db:"project_id"`
 	Title       string     `json:"title" db:"title"`
 	Description string     `json:"description" db:"description"`
-	Status      string     `json:"status" db:"status"`
+	Status      TaskStatus `json:"status" db:"status"`
 	Priority    string     `json:"priority" db:"priority"`
 	CreatedBy   uuid.UUID  `json:"created_by" db:"created_by"`
 	AssignedTo  *uuid.UUID `json:"assigned_to" db:"assigned_to"`

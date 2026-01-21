@@ -6,11 +6,19 @@ import (
 	"github.com/google/uuid"
 )
 
+// AgentRole represents the role of an agent
+type AgentRole string
+
+const (
+	RoleBackend  AgentRole = "backend"
+	RoleFrontend AgentRole = "frontend"
+)
+
 type Agent struct {
 	ID        uuid.UUID `json:"id" db:"id"`
 	ProjectID uuid.UUID `json:"project_id" db:"project_id"`
 	Name      string    `json:"name" db:"name"`
-	Role      string    `json:"role" db:"role"`
+	Role      AgentRole `json:"role" db:"role"`
 	Team      string    `json:"team" db:"team"`
 	Status    string    `json:"status" db:"status"`
 	LastSeen  time.Time `json:"last_seen" db:"last_seen"`
