@@ -1,0 +1,27 @@
+{
+  "name": "agent-shaker-mcp-bridge",
+  "version": "1.0.0",
+  "description": "MCP Bridge for Agent Shaker - Connect GitHub Copilot to Agent Shaker API",
+  "main": "mcp-bridge.js",
+  "bin": {
+    "agent-shaker": "./mcp-bridge.js"
+  },
+  "scripts": {
+    "start": "node mcp-bridge.js",
+    "test": "node test-bridge.js"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "github-copilot",
+    "agent-shaker"
+  ],
+  "author": "Agent Shaker Team",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

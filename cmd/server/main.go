@@ -92,16 +92,24 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
-	// Serve Vue.js app (try dist first for production, fallback to static for old version)
-	// Check if Vue.js build exists
-	if _, err := os.Stat("./web/dist"); err == nil {
-		// Serve Vue.js SPA
-		spa := spaHandler{staticPath: "./web/dist", indexPath: "index.html"}
-		r.PathPrefix("/").Handler(spa)
-	} else {
-		// Fallback to old static files
-		r.PathPrefix("/").Handler(http.FileServer(http.Dir("./web/static")))
-	}
+	// Root endpoint - API info (no Vue.js serving from Go)
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"name": "MCP Multi-Agent Task Tracker API",
+			"version": "1.0.0",
+			"endpoints": {
+				"projects": "/api/projects",
+				"agents": "/api/agents",
+				"tasks": "/api/tasks",
+				"contexts": "/api/contexts",
+				"docs": "/api/docs",
+				"websocket": "/ws",
+				"health": "/health"
+			},
+			"documentation": "/api/docs"
+		}`))
+	}).Methods("GET")
 
 	// Setup CORS
 	c := cors.New(cors.Options{
@@ -127,6 +135,14 @@ func main() {
 	}
 
 	log.Printf("Server starting on port %s", port)
+	log.Println("MCP API Server - Endpoints:")
+	log.Println("  API:        http://localhost:" + port + "/api")
+	log.Println("  WebSocket:  ws://localhost:" + port + "/ws")
+	log.Println("  Health:     http://localhost:" + port + "/health")
+	log.Println("  Docs:       http://localhost:" + port + "/api/docs")
+	log.Println("")
+	log.Println("Web UI available through Nginx at: http://localhost:80")
+	
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -140,30 +156,4 @@ func runMigrations(db *database.DB) error {
 
 	_, err = db.Exec(string(migrationSQL))
 	return err
-}
-
-// spaHandler implements the http.Handler interface for serving a SPA
-type spaHandler struct {
-	staticPath string
-	indexPath  string
-}
-
-// ServeHTTP inspects the URL path to locate a file within the static dir
-// on the SPA handler. If a file is found, it will be served. If not, the
-// file located at the index path on the SPA handler will be served. This
-// is suitable behavior for serving an SPA (single page application).
-func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Get the absolute path to prevent directory traversal
-	path := r.URL.Path
-
-	// Check if file exists
-	fullPath := h.staticPath + path
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		// File does not exist, serve index.html
-		http.ServeFile(w, r, h.staticPath+"/"+h.indexPath)
-		return
-	}
-
-	// Otherwise, serve the file
-	http.FileServer(http.Dir(h.staticPath)).ServeHTTP(w, r)
 }

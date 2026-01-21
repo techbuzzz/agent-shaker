@@ -66,23 +66,33 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (h *AgentHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	projectIDStr := r.URL.Query().Get("project_id")
+
+	var rows *sql.Rows
+	var err error
+
 	if projectIDStr == "" {
-		http.Error(w, "project_id query parameter is required", http.StatusBadRequest)
-		return
+		// If no project_id, return all agents
+		rows, err = h.db.Query(`
+			SELECT id, project_id, name, role, team, status, last_seen, created_at
+			FROM agents
+			ORDER BY created_at DESC
+		`)
+	} else {
+		// If project_id provided, filter by project
+		projectID, parseErr := uuid.Parse(projectIDStr)
+		if parseErr != nil {
+			http.Error(w, "Invalid project_id format", http.StatusBadRequest)
+			return
+		}
+
+		rows, err = h.db.Query(`
+			SELECT id, project_id, name, role, team, status, last_seen, created_at
+			FROM agents
+			WHERE project_id = $1
+			ORDER BY created_at DESC
+		`, projectID)
 	}
 
-	projectID, err := uuid.Parse(projectIDStr)
-	if err != nil {
-		http.Error(w, "Invalid project_id format", http.StatusBadRequest)
-		return
-	}
-
-	rows, err := h.db.Query(`
-		SELECT id, project_id, name, role, team, status, last_seen, created_at
-		FROM agents
-		WHERE project_id = $1
-		ORDER BY created_at DESC
-	`, projectID)
 	if err != nil {
 		http.Error(w, "Failed to retrieve agents", http.StatusInternalServerError)
 		return
