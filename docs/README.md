@@ -45,6 +45,14 @@ Technical documentation:
 - **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Implementation details
 - **[AGENTS_PAGE_IMPLEMENTATION.md](AGENTS_PAGE_IMPLEMENTATION.md)** - Agents page implementation
 
+## 🎨 Frontend & UI
+
+User interface documentation:
+
+- **[UI_IMPROVEMENTS.md](UI_IMPROVEMENTS.md)** - Modal and form UI improvements
+- **[STATIC_DEMO_SETUP.md](STATIC_DEMO_SETUP.md)** - Static HTML demo setup from Go backend
+- **[FRONTEND_COMPARISON.md](FRONTEND_COMPARISON.md)** - Vue.js vs Static HTML comparison
+
 ## 🔧 Troubleshooting & Fixes
 
 Problem solving and fixes:
@@ -88,6 +96,10 @@ docs/
 │   ├── API.md
 │   ├── IMPLEMENTATION_SUMMARY.md
 │   └── AGENTS_PAGE_IMPLEMENTATION.md
+├── Frontend & UI
+│   ├── UI_IMPROVEMENTS.md
+│   ├── STATIC_DEMO_SETUP.md
+│   └── FRONTEND_COMPARISON.md
 ├── Troubleshooting & Fixes
 │   ├── NGINX_FIX.md
 │   ├── DEPLOYMENT_SUCCESS.md
@@ -115,6 +127,12 @@ docs/
 ### API Development?
 → Check **[API.md](API.md)**
 
+### Frontend Development?
+→ See **[FRONTEND_COMPARISON.md](FRONTEND_COMPARISON.md)** and **[STATIC_DEMO_SETUP.md](STATIC_DEMO_SETUP.md)**
+
+### UI Improvements?
+→ Check **[UI_IMPROVEMENTS.md](UI_IMPROVEMENTS.md)**
+
 ### Having Issues?
 → Look at **[NGINX_FIX.md](NGINX_FIX.md)** and **[ARCHITECTURE_VERIFICATION.md](ARCHITECTURE_VERIFICATION.md)**
 
@@ -133,4 +151,4 @@ docs/
 ---
 
 **Last Updated**: January 21, 2026
-**Total Documentation Files**: 24
+**Total Documentation Files**: 27

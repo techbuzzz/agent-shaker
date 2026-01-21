@@ -86,6 +86,11 @@ func main() {
 	// WebSocket
 	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
 
+	// Static demo HTML (for testing/demo purposes)
+	staticDir := http.Dir("web/static")
+	staticHandler := http.StripPrefix("/demo/", http.FileServer(staticDir))
+	r.PathPrefix("/demo/").Handler(staticHandler)
+
 	// Health check
 	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -140,6 +145,7 @@ func main() {
 	log.Println("  WebSocket:  ws://localhost:" + port + "/ws")
 	log.Println("  Health:     http://localhost:" + port + "/health")
 	log.Println("  Docs:       http://localhost:" + port + "/api/docs")
+	log.Println("  Static Demo: http://localhost:" + port + "/demo/")
 	log.Println("")
 	log.Println("Web UI available through Nginx at: http://localhost:80")
 	
