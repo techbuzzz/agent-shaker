@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Task Tracker - WebSocket Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.connected {
+            background: #10b981;
+            box-shadow: 0 0 10px #10b981;
+        }
+
+        .status-indicator.disconnected {
+            background: #ef4444;
+        }
+
+        .status-text {
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .updates-container {
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .update-item {
+            background: #f9fafb;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .update-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .task-status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .task-status.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .task-status.in_progress {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .task-status.completed {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .task-status.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .timestamp {
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+
+        .message {
+            color: #374151;
+            margin-top: 8px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .info-item {
+            background: #f3f4f6;
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        .info-label {
+            color: #6b7280;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .info-value {
+            color: #1f2937;
+            font-weight: 600;
+            font-size: 1.25rem;
+        }
+
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #5568d3;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            padding: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 MCP Task Tracker</h1>
+            <p>Real-time Agent Coordination Dashboard</p>
+        </div>
+
+        <div class="card">
+            <h2>WebSocket Connection</h2>
+            <p style="margin-top: 10px;">
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span class="status-text" id="statusText">Connecting...</span>
+            </p>
+            
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Total Updates</div>
+                    <div class="info-value" id="updateCount">0</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Completed Tasks</div>
+                    <div class="info-value" id="completedCount">0</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">In Progress</div>
+                    <div class="info-value" id="inProgressCount">0</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Pending</div>
+                    <div class="info-value" id="pendingCount">0</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Live Task Updates</h2>
+            <div class="updates-container" id="updatesContainer">
+                <div class="empty-state">
+                    <p>Waiting for task updates...</p>
+                    <p style="font-size: 0.875rem; margin-top: 8px;">Run the demo script to see live updates!</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let updateCount = 0;
+        let statusCounts = {
+            completed: 0,
+            in_progress: 0,
+            pending: 0,
+            failed: 0
+        };
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname;
+            const port = window.location.port || '8080';
+            
+            ws = new WebSocket(`${protocol}//${host}:${port}/ws?project_id=demo`);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateStatus(true);
+            };
+
+            ws.onmessage = (event) => {
+                console.log('Received message:', event.data);
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'task_update') {
+                    handleTaskUpdate(data.data);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateStatus(false);
+                
+                // Reconnect after 3 seconds
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function updateStatus(connected) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            indicator.className = 'status-indicator ' + (connected ? 'connected' : 'disconnected');
+            text.textContent = connected ? 'Connected' : 'Disconnected';
+        }
+
+        function handleTaskUpdate(update) {
+            updateCount++;
+            
+            // Update status counts
+            if (statusCounts.hasOwnProperty(update.status)) {
+                statusCounts[update.status]++;
+            }
+            
+            // Update counters
+            document.getElementById('updateCount').textContent = updateCount;
+            document.getElementById('completedCount').textContent = statusCounts.completed;
+            document.getElementById('inProgressCount').textContent = statusCounts.in_progress;
+            document.getElementById('pendingCount').textContent = statusCounts.pending;
+            
+            // Add update to list
+            const container = document.getElementById('updatesContainer');
+            
+            // Remove empty state
+            if (container.querySelector('.empty-state')) {
+                container.innerHTML = '';
+            }
+            
+            const updateItem = document.createElement('div');
+            updateItem.className = 'update-item';
+            updateItem.innerHTML = `
+                <div class="update-header">
+                    <span class="task-status ${update.status}">${update.status.replace('_', ' ')}</span>
+                    <span class="timestamp">${new Date(update.timestamp).toLocaleTimeString()}</span>
+                </div>
+                <div style="font-weight: 600; color: #1f2937;">Task ID: ${update.task_id.substring(0, 8)}...</div>
+                <div style="color: #6b7280; font-size: 0.875rem; margin-top: 4px;">Agent: ${update.agent_id.substring(0, 8)}...</div>
+                ${update.message ? `<div class="message">💬 ${update.message}</div>` : ''}
+            `;
+            
+            container.insertBefore(updateItem, container.firstChild);
+            
+            // Keep only last 20 updates
+            while (container.children.length > 20) {
+                container.removeChild(container.lastChild);
+            }
+        }
+
+        // Connect on page load
+        connect();
+    </script>
+</body>
+</html>
