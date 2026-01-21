@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    <div id="status">Testing connection...</div>
+    <div id="messages"></div>
+
+    <script>
+        const projectId = '550e8400-e29b-41d4-a716-446655440001';
+        const wsUrl = `ws://localhost/ws?project_id=${projectId}`;
+
+        const statusDiv = document.getElementById('status');
+        const messagesDiv = document.getElementById('messages');
+
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = function(event) {
+            statusDiv.textContent = '✅ WebSocket Connected Successfully!';
+            statusDiv.style.color = 'green';
+            messagesDiv.innerHTML += '<p>Connection opened</p>';
+        };
+
+        ws.onmessage = function(event) {
+            messagesDiv.innerHTML += `<p>Received: ${event.data}</p>`;
+        };
+
+        ws.onclose = function(event) {
+            statusDiv.textContent = '❌ WebSocket Connection Closed';
+            statusDiv.style.color = 'red';
+            messagesDiv.innerHTML += `<p>Connection closed: ${event.code} ${event.reason}</p>`;
+        };
+
+        ws.onerror = function(error) {
+            statusDiv.textContent = '❌ WebSocket Connection Error';
+            statusDiv.style.color = 'red';
+            messagesDiv.innerHTML += `<p>Error: ${error}</p>`;
+        };
+
+        // Test sending a message after 2 seconds
+        setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({type: 'test', message: 'Hello from test client'}));
+                messagesDiv.innerHTML += '<p>Sent test message</p>';
+            }
+        }, 2000);
+    </script>
+</body>
+</html></content>
+<parameter name="filePath">c:\Sources\GitHub\agent-shaker\websocket-test.html

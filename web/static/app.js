@@ -12,7 +12,6 @@ let contexts = [];
 document.addEventListener('DOMContentLoaded', () => {
     setupTabs();
     loadProjects();
-    setupWebSocket();
 });
 
 // Tab management

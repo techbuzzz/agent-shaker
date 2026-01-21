@@ -74,128 +74,153 @@
     <div id="projectModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <span class="close" onclick="closeModal('projectModal')">&times;</span>
                 <h2 class="modal-title">Create New Project</h2>
+                <span class="close" onclick="closeModal('projectModal')">&times;</span>
             </div>
-            <form onsubmit="createProject(event)">
-                <div class="form-group">
-                    <label>Project Name</label>
-                    <input type="text" id="projectName" required>
-                </div>
-                <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="projectDescription"></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary">Create Project</button>
-            </form>
+            <div class="modal-body">
+                <form onsubmit="createProject(event)">
+                    <div class="form-group">
+                        <label>Project Name</label>
+                        <input type="text" id="projectName" placeholder="Enter project name" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="projectDescription" placeholder="Enter project description"></textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('projectModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Project</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
     <div id="agentModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
+                <h2 class="modal-title">Add Agent to Project</h2>
                 <span class="close" onclick="closeModal('agentModal')">&times;</span>
-                <h2 class="modal-title">Register Agent</h2>
             </div>
-            <form onsubmit="createAgent(event)">
-                <div class="form-group">
-                    <label>Project</label>
-                    <select id="agentProjectId" required></select>
-                </div>
-                <div class="form-group">
-                    <label>Agent Name</label>
-                    <input type="text" id="agentName" required>
-                </div>
-                <div class="form-group">
-                    <label>Role</label>
-                    <input type="text" id="agentRole" placeholder="backend, frontend, devops">
-                </div>
-                <div class="form-group">
-                    <label>Team</label>
-                    <input type="text" id="agentTeam">
-                </div>
-                <button type="submit" class="btn btn-primary">Register Agent</button>
-            </form>
+            <div class="modal-body">
+                <form onsubmit="createAgent(event)">
+                    <div class="form-group">
+                        <label>Agent Name</label>
+                        <input type="text" id="agentName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Role</label>
+                        <select id="agentRole" required>
+                            <option value="Frontend">Frontend</option>
+                            <option value="Backend">Backend</option>
+                            <option value="DevOps">DevOps</option>
+                            <option value="QA">QA</option>
+                            <option value="Design">Design</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Team</label>
+                        <input type="text" id="agentTeam" placeholder="Enter team name">
+                    </div>
+                    <div style="display: none;">
+                        <select id="agentProjectId" required></select>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('agentModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Add Agent</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
     <div id="taskModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <span class="close" onclick="closeModal('taskModal')">&times;</span>
                 <h2 class="modal-title">Create Task</h2>
+                <span class="close" onclick="closeModal('taskModal')">&times;</span>
             </div>
-            <form onsubmit="createTask(event)">
-                <div class="form-group">
-                    <label>Project</label>
-                    <select id="taskProjectId" required onchange="loadAgentsForTask()"></select>
-                </div>
-                <div class="form-group">
-                    <label>Title</label>
-                    <input type="text" id="taskTitle" required>
-                </div>
-                <div class="form-group">
-                    <label>Description</label>
-                    <textarea id="taskDescription"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Priority</label>
-                    <select id="taskPriority">
-                        <option value="low">Low</option>
-                        <option value="medium" selected>Medium</option>
-                        <option value="high">High</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Created By (Agent)</label>
-                    <select id="taskCreatedBy" required></select>
-                </div>
-                <div class="form-group">
-                    <label>Assigned To (Agent)</label>
-                    <select id="taskAssignedTo">
-                        <option value="">Unassigned</option>
-                    </select>
-                </div>
-                <button type="submit" class="btn btn-primary">Create Task</button>
-            </form>
+            <div class="modal-body">
+                <form onsubmit="createTask(event)">
+                    <div class="form-group">
+                        <label>Project</label>
+                        <select id="taskProjectId" required onchange="loadAgentsForTask()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="taskTitle" placeholder="Enter task title" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="taskDescription" placeholder="Enter task description"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select id="taskPriority">
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Created By (Agent)</label>
+                        <select id="taskCreatedBy" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Assigned To (Agent)</label>
+                        <select id="taskAssignedTo">
+                            <option value="">Unassigned</option>
+                        </select>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('taskModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Task</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
     <div id="contextModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <span class="close" onclick="closeModal('contextModal')">&times;</span>
                 <h2 class="modal-title">Add Documentation</h2>
+                <span class="close" onclick="closeModal('contextModal')">&times;</span>
             </div>
-            <form onsubmit="createContext(event)">
-                <div class="form-group">
-                    <label>Project</label>
-                    <select id="contextProjectId" required onchange="loadAgentsAndTasksForContext()"></select>
-                </div>
-                <div class="form-group">
-                    <label>Agent</label>
-                    <select id="contextAgentId" required></select>
-                </div>
-                <div class="form-group">
-                    <label>Related Task (Optional)</label>
-                    <select id="contextTaskId">
-                        <option value="">None</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Title</label>
-                    <input type="text" id="contextTitle" required>
-                </div>
-                <div class="form-group">
-                    <label>Content (Markdown)</label>
-                    <textarea id="contextContent" style="min-height: 200px;"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Tags (comma-separated)</label>
-                    <input type="text" id="contextTags" placeholder="api, documentation, backend">
-                </div>
-                <button type="submit" class="btn btn-primary">Add Documentation</button>
-            </form>
+            <div class="modal-body">
+                <form onsubmit="createContext(event)">
+                    <div class="form-group">
+                        <label>Project</label>
+                        <select id="contextProjectId" required onchange="loadAgentsAndTasksForContext()"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Agent</label>
+                        <select id="contextAgentId" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Related Task (Optional)</label>
+                        <select id="contextTaskId">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="contextTitle" placeholder="Enter documentation title" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Content (Markdown)</label>
+                        <textarea id="contextContent" placeholder="Enter markdown content" style="min-height: 200px;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Tags (comma-separated)</label>
+                        <input type="text" id="contextTags" placeholder="api, documentation, backend">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" onclick="closeModal('contextModal')">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Add Documentation</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
