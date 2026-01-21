@@ -145,7 +145,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent := &models.Agent{
-		ID:        uuid.New().String(),
+		ID:        uuid.New(),
 		ProjectID: req.ProjectID,
 		Name:      req.Name,
 		Role:      req.Role,

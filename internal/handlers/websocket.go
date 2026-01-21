@@ -52,5 +52,5 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 	h.hub.Register(client)
 
 	go client.WritePump()
-	go client.ReadPump(h.hub)
+	go client.ReadPump()
 }

@@ -40,6 +40,6 @@ type CreateTaskRequest struct {
 }
 
 type UpdateTaskRequest struct {
-	Status string `json:"status"`
-	Output string `json:"output"`
+	Status TaskStatus `json:"status"`
+	Output string     `json:"output"`
 }

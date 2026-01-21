@@ -72,7 +72,7 @@ func ValidateUpdateTaskRequest(req *models.UpdateTaskRequest) error {
 		"done":        true,
 		"cancelled":   true,
 	}
-	if !validStatuses[req.Status] {
+	if !validStatuses[string(req.Status)] {
 		return ErrInvalidStatus
 	}
 	return nil

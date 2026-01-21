@@ -3,11 +3,24 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"net/http"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/techbuzzz/agent-shaker/internal/models"
 )
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		// In production, validate specific origins
+		// For now, allow all origins for development
+		// TODO: Configure allowed origins via environment variable
+		return true
+	},
+}
 
 type Message struct {
 	Type    string      `json:"type"`
@@ -19,6 +32,7 @@ type Client struct {
 	ProjectID uuid.UUID
 	Conn      *websocket.Conn
 	Send      chan []byte
+	hub       *Hub
 }
 
 type Hub struct {
@@ -129,6 +143,15 @@ func (h *Hub) BroadcastToProject(projectID uuid.UUID, messageType string, payloa
 	h.broadcast <- message
 }
 
+// BroadcastTaskUpdate sends a task update to all connected clients
+func (h *Hub) BroadcastTaskUpdate(update *models.TaskUpdate) {
+	message := &Message{
+		Type:    "task_update",
+		Payload: update,
+	}
+	h.broadcast <- message
+}
+
 func (h *Hub) Register(client *Client) {
 	h.register <- client
 }
@@ -137,9 +160,43 @@ func (h *Hub) Unregister(client *Client) {
 	h.unregister <- client
 }
 
-func (c *Client) ReadPump(hub *Hub) {
+// HandleWebSocket handles WebSocket connections
+func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+
+	projectIDStr := r.URL.Query().Get("project_id")
+	if projectIDStr == "" {
+		projectIDStr = "00000000-0000-0000-0000-000000000000" // default uuid
+	}
+
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		log.Printf("Invalid project_id: %v", err)
+		conn.Close()
+		return
+	}
+
+	client := &Client{
+		ID:        uuid.New().String(),
+		ProjectID: projectID,
+		Conn:      conn,
+		Send:      make(chan []byte, 256),
+		hub:       h,
+	}
+
+	h.Register(client)
+
+	go client.WritePump()
+	go client.ReadPump()
+}
+
+func (c *Client) ReadPump() {
 	defer func() {
-		hub.Unregister(c)
+		c.hub.Unregister(c)
 		c.Conn.Close()
 	}()
 

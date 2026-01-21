@@ -21,14 +21,6 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Client represents a WebSocket client
-type Client struct {
-	hub       *Hub
-	conn      *websocket.Conn
-	send      chan []byte
-	projectID string
-}
-
 // Hub manages WebSocket connections and broadcasts
 type Hub struct {
 	clients    map[*Client]bool

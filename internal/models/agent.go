@@ -28,7 +28,7 @@ type Agent struct {
 type CreateAgentRequest struct {
 	ProjectID uuid.UUID `json:"project_id"`
 	Name      string    `json:"name"`
-	Role      string    `json:"role"`
+	Role      AgentRole `json:"role"`
 	Team      string    `json:"team"`
 }
 
