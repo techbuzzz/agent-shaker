@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Task Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            background: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .tab:hover {
+            background: #e9ecef;
+        }
+
+        .tab.active {
+            background: #007bff;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        .card-header {
+            margin-bottom: 15px;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+
+        .card-meta {
+            font-size: 12px;
+            color: #6c757d;
+        }
+
+        .card-body {
+            margin-bottom: 15px;
+        }
+
+        .card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 15px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .badge.pending { background: #fff3cd; color: #856404; }
+        .badge.in_progress { background: #cfe2ff; color: #084298; }
+        .badge.blocked { background: #f8d7da; color: #842029; }
+        .badge.done { background: #d1e7dd; color: #0f5132; }
+        .badge.high { background: #f8d7da; color: #842029; }
+        .badge.medium { background: #fff3cd; color: #856404; }
+        .badge.low { background: #d1e7dd; color: #0f5132; }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #495057;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .close {
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #6c757d;
+        }
+
+        .notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            display: none;
+            z-index: 2000;
+        }
+
+        .notification.show {
+            display: block;
+            animation: slideIn 0.3s;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+            }
+            to {
+                transform: translateX(0);
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #6c757d;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 MCP Task Tracker</h1>
+            <p>AI Agent Task Coordination System</p>
+            <span class="status online" id="wsStatus">● Connected</span>
+        </header>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="projects">Projects</button>
+            <button class="tab" data-tab="agents">Agents</button>
+            <button class="tab" data-tab="tasks">Tasks</button>
+            <button class="tab" data-tab="contexts">Documentation</button>
+        </div>
+
+        <div id="projects" class="tab-content active">
+            <div style="margin-bottom: 20px;">
+                <button class="btn btn-primary" onclick="openProjectModal()">+ New Project</button>
+            </div>
+            <div id="projectsList" class="grid"></div>
+        </div>
+
+        <div id="agents" class="tab-content">
+            <div style="margin-bottom: 20px;">
+                <button class="btn btn-primary" onclick="openAgentModal()">+ Register Agent</button>
+            </div>
+            <div id="agentsList" class="grid"></div>
+        </div>
+
+        <div id="tasks" class="tab-content">
+            <div style="margin-bottom: 20px;">
+                <button class="btn btn-primary" onclick="openTaskModal()">+ Create Task</button>
+            </div>
+            <div id="tasksList" class="grid"></div>
+        </div>
+
+        <div id="contexts" class="tab-content">
+            <div style="margin-bottom: 20px;">
+                <button class="btn btn-primary" onclick="openContextModal()">+ Add Documentation</button>
+            </div>
+            <div id="contextsList" class="grid"></div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="projectModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close" onclick="closeModal('projectModal')">&times;</span>
+                <h2 class="modal-title">Create New Project</h2>
+            </div>
+            <form onsubmit="createProject(event)">
+                <div class="form-group">
+                    <label>Project Name</label>
+                    <input type="text" id="projectName" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="projectDescription"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Project</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="agentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close" onclick="closeModal('agentModal')">&times;</span>
+                <h2 class="modal-title">Register Agent</h2>
+            </div>
+            <form onsubmit="createAgent(event)">
+                <div class="form-group">
+                    <label>Project</label>
+                    <select id="agentProjectId" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Agent Name</label>
+                    <input type="text" id="agentName" required>
+                </div>
+                <div class="form-group">
+                    <label>Role</label>
+                    <input type="text" id="agentRole" placeholder="backend, frontend, devops">
+                </div>
+                <div class="form-group">
+                    <label>Team</label>
+                    <input type="text" id="agentTeam">
+                </div>
+                <button type="submit" class="btn btn-primary">Register Agent</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="taskModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close" onclick="closeModal('taskModal')">&times;</span>
+                <h2 class="modal-title">Create Task</h2>
+            </div>
+            <form onsubmit="createTask(event)">
+                <div class="form-group">
+                    <label>Project</label>
+                    <select id="taskProjectId" required onchange="loadAgentsForTask()"></select>
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="taskTitle" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="taskDescription"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Priority</label>
+                    <select id="taskPriority">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Created By (Agent)</label>
+                    <select id="taskCreatedBy" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Assigned To (Agent)</label>
+                    <select id="taskAssignedTo">
+                        <option value="">Unassigned</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Task</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="contextModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="close" onclick="closeModal('contextModal')">&times;</span>
+                <h2 class="modal-title">Add Documentation</h2>
+            </div>
+            <form onsubmit="createContext(event)">
+                <div class="form-group">
+                    <label>Project</label>
+                    <select id="contextProjectId" required onchange="loadAgentsAndTasksForContext()"></select>
+                </div>
+                <div class="form-group">
+                    <label>Agent</label>
+                    <select id="contextAgentId" required></select>
+                </div>
+                <div class="form-group">
+                    <label>Related Task (Optional)</label>
+                    <select id="contextTaskId">
+                        <option value="">None</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" id="contextTitle" required>
+                </div>
+                <div class="form-group">
+                    <label>Content (Markdown)</label>
+                    <textarea id="contextContent" style="min-height: 200px;"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Tags (comma-separated)</label>
+                    <input type="text" id="contextTags" placeholder="api, documentation, backend">
+                </div>
+                <button type="submit" class="btn btn-primary">Add Documentation</button>
+            </form>
+        </div>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
