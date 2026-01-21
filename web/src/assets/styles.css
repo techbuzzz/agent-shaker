@@ -1,138 +1,221 @@
 @import "tailwindcss";
 
-/* Custom styles for markdown content */
-.prose {
-  color: #1f2937;
-  line-height: 1.75;
+/* Base styles */
+html {
+  scroll-behavior: smooth;
 }
 
-.prose h1 {
-  font-size: 1.875rem;
-  font-weight: 700;
-  color: #111827;
-  margin-bottom: 1rem;
-  margin-top: 1.5rem;
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  color: rgb(30 41 59);
 }
 
-.prose h2 {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #111827;
-  margin-bottom: 0.75rem;
-  margin-top: 1.25rem;
-}
-
-.prose h3 {
-  font-size: 1.25rem;
+h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
-  color: #111827;
-  margin-bottom: 0.5rem;
-  margin-top: 1rem;
+  line-height: 1.25;
+  color: rgb(15 23 42);
 }
 
-.prose h4 {
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: #111827;
-  margin-bottom: 0.5rem;
-  margin-top: 0.75rem;
+a {
+  color: rgb(37 99 235);
+  text-decoration: none;
+  transition: color 0.2s ease;
 }
 
-.prose p {
-  margin-bottom: 1rem;
+a:hover {
+  color: rgb(29 78 216);
 }
 
-.prose a {
-  color: #2563eb;
-  text-decoration: underline;
-}
-
-.prose a:hover {
-  color: #1e40af;
-}
-
-.prose ul {
-  list-style-type: disc;
-  list-style-position: inside;
-  margin-bottom: 1rem;
-}
-
-.prose ul li {
-  margin-left: 1rem;
-  margin-bottom: 0.5rem;
-}
-
-.prose ol {
-  list-style-type: decimal;
-  list-style-position: inside;
-  margin-bottom: 1rem;
-}
-
-.prose ol li {
-  margin-left: 1rem;
-  margin-bottom: 0.5rem;
-}
-
-.prose code {
-  background-color: #f3f4f6;
-  color: #dc2626;
-  padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
+/* Component styles */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
   font-size: 0.875rem;
-  font-family: ui-monospace, monospace;
-}
-
-.prose pre {
-  background-color: #111827;
-  color: #f3f4f6;
-  padding: 1rem;
+  font-weight: 500;
   border-radius: 0.5rem;
-  overflow-x: auto;
-  margin-bottom: 1rem;
+  transition: all 0.2s ease;
+  border: none;
+  cursor: pointer;
+  text-decoration: none;
 }
 
-.prose pre code {
-  background-color: transparent;
-  color: #f3f4f6;
-  padding: 0;
+.btn:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
 
-.prose blockquote {
-  border-left: 4px solid #3b82f6;
-  padding-left: 1rem;
-  font-style: italic;
-  color: #374151;
-  margin: 1rem 0;
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.prose table {
+.btn-primary {
+  background-color: rgb(37 99 235);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: rgb(29 78 216);
+}
+
+.btn-primary:focus {
+  box-shadow: 0 0 0 2px rgb(37 99 235);
+}
+
+.btn-secondary {
+  background-color: rgb(243 244 246);
+  color: rgb(17 24 39);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: rgb(229 231 235);
+}
+
+.btn-secondary:focus {
+  box-shadow: 0 0 0 2px rgb(156 163 175);
+}
+
+.btn-success {
+  background-color: rgb(34 197 94);
+  color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+  background-color: rgb(22 163 74);
+}
+
+.btn-success:focus {
+  box-shadow: 0 0 0 2px rgb(34 197 94);
+}
+
+.btn-warning {
+  background-color: rgb(245 158 11);
+  color: white;
+}
+
+.btn-warning:hover:not(:disabled) {
+  background-color: rgb(217 119 6);
+}
+
+.btn-warning:focus {
+  box-shadow: 0 0 0 2px rgb(245 158 11);
+}
+
+.btn-danger {
+  background-color: rgb(239 68 68);
+  color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: rgb(220 38 38);
+}
+
+.btn-danger:focus {
+  box-shadow: 0 0 0 2px rgb(239 68 68);
+}
+
+.card {
+  background-color: white;
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  border: 1px solid rgb(229 231 235);
+  padding: 1.5rem;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.input {
+  display: block;
   width: 100%;
-  border-collapse: collapse;
-  margin-bottom: 1rem;
-}
-
-.prose th {
-  background-color: #f3f4f6;
-  border: 1px solid #d1d5db;
-  padding: 0.5rem 1rem;
-  text-align: left;
-  font-weight: 600;
-}
-
-.prose td {
-  border: 1px solid #d1d5db;
-  padding: 0.5rem 1rem;
-}
-
-.prose img {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(209 213 219);
   border-radius: 0.5rem;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  margin: 1rem 0;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: rgb(17 24 39);
+  background-color: white;
+  transition: all 0.2s ease;
 }
 
-.prose hr {
-  border-top: 1px solid #d1d5db;
-  margin: 1.5rem 0;
+.input:focus {
+  outline: none;
+  border-color: rgb(37 99 235);
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 0.2);
+}
+
+.input::placeholder {
+  color: rgb(107 114 128);
+}
+
+.label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgb(55 65 81);
+  margin-bottom: 0.5rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.badge-primary {
+  background-color: rgb(219 234 254);
+  color: rgb(30 64 175);
+}
+
+.badge-success {
+  background-color: rgb(220 252 231);
+  color: rgb(21 128 61);
+}
+
+.badge-warning {
+  background-color: rgb(254 243 199);
+  color: rgb(133 77 14);
+}
+
+.badge-danger {
+  background-color: rgb(254 226 226);
+  color: rgb(153 27 27);
+}
+
+.avatar {
+  display: inline-block;
+  height: 2rem;
+  width: 2rem;
+  border-radius: 9999px;
+  border: 2px solid white;
+}
+
+.status-indicator {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+.status-online {
+  background-color: rgb(34 197 94);
+}
+
+.status-offline {
+  background-color: rgb(156 163 175);
+}
+
+.status-busy {
+  background-color: rgb(245 158 11);
 }
 
 /* Custom scrollbar for webkit browsers */
@@ -142,14 +225,14 @@
 }
 
 ::-webkit-scrollbar-track {
-  background-color: #f3f4f6;
+  background-color: rgb(243 244 246);
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #9ca3af;
+  background-color: rgb(156 163 175);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #6b7280;
+  background-color: rgb(107 114 128);
 }

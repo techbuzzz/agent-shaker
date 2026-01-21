@@ -179,8 +179,8 @@
     </div>
 
     <!-- Add Agent Modal -->
-    <div v-if="showAddAgentModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showAddAgentModal = false">
-      <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4" @click.stop>
+    <div v-if="showAddAgentModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showAddAgentModal = false">
+      <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4">
         <h3 class="text-xl font-semibold mb-6">Add Agent to Project</h3>
         <form @submit.prevent="handleAddAgent">
           <div class="mb-4">
@@ -209,8 +209,8 @@
     </div>
 
     <!-- Add Task Modal -->
-    <div v-if="showAddTaskModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showAddTaskModal = false">
-      <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4" @click.stop>
+    <div v-if="showAddTaskModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showAddTaskModal = false">
+      <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4">
         <h3 class="text-xl font-semibold mb-6">Create New Task</h3>
         <form @submit.prevent="handleAddTask">
           <div class="mb-4">
@@ -249,8 +249,8 @@
     </div>
 
     <!-- Add Context Modal -->
-    <div v-if="showAddContextModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="closeContextModal">
-      <div class="bg-white p-6 rounded-lg max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
+    <div v-if="showAddContextModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="closeContextModal">
+      <div class="bg-white p-6 rounded-lg max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         <h3 class="text-xl font-semibold mb-6">{{ editingContext ? 'Edit Context' : 'Add Context / Documentation' }}</h3>
         <form @submit.prevent="handleSaveContext">
           <div class="mb-4">
@@ -308,8 +308,8 @@
     </div>
 
     <!-- View Context Modal -->
-    <div v-if="showViewContextModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showViewContextModal = false">
-      <div class="bg-white p-6 rounded-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto" @click.stop>
+    <div v-if="showViewContextModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showViewContextModal = false">
+      <div class="bg-white p-6 rounded-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         <div class="flex justify-between items-start mb-6">
           <h3 class="text-xl font-semibold text-gray-900">{{ viewingContext?.title }}</h3>
           <button @click="showViewContextModal = false" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
@@ -331,8 +331,8 @@
     </div>
 
     <!-- Delete Confirmation Modal -->
-    <div v-if="showDeleteConfirm" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click="showDeleteConfirm = false">
-      <div class="bg-white p-6 rounded-lg max-w-sm w-full mx-4" @click.stop>
+    <div v-if="showDeleteConfirm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showDeleteConfirm = false">
+      <div class="bg-white p-6 rounded-lg max-w-sm w-full mx-4">
         <h3 class="text-xl font-semibold mb-4 text-red-600">⚠️ Confirm Delete</h3>
         <p class="text-gray-600 mb-6">Are you sure you want to delete the context "{{ deletingContext?.title }}"?</p>
         <div class="flex justify-end gap-3">

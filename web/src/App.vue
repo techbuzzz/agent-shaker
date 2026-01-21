@@ -1,32 +1,87 @@
 <template>
-  <div id="app" class="min-h-screen bg-gray-50">
-    <nav class="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
+  <div id="app" class="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+    <nav class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200 shadow-soft">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="flex flex-col sm:flex-row justify-between items-center py-4 gap-3">
           <div class="flex items-center gap-3 sm:gap-4">
-            <h1 class="text-lg sm:text-xl font-bold text-blue-600">🚀 MCP Task Tracker</h1>
-            <span :class="['px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm font-semibold', connectionStatus === 'online' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800' ]">
-              {{ connectionStatus === 'online' ? '● Connected' : '○ Disconnected' }}
-            </span>
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                <span class="text-white font-bold text-sm">🚀</span>
+              </div>
+              <h1 class="text-lg sm:text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                MCP Task Tracker
+              </h1>
+            </div>
+            <div class="flex items-center gap-2 px-3 py-1.5 bg-slate-100 rounded-full">
+              <div :class="['w-2 h-2 rounded-full transition-colors duration-200', connectionStatus === 'online' ? 'bg-green-500 animate-pulse-slow' : 'bg-slate-400']"></div>
+              <span class="text-xs font-medium text-slate-600 capitalize">{{ connectionStatus }}</span>
+            </div>
           </div>
           <div class="flex flex-wrap justify-center gap-1 sm:gap-2">
-            <router-link to="/" class="text-gray-700 hover:text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-md transition-colors text-sm font-medium" active-class="bg-blue-600 text-white hover:bg-blue-700 hover:text-white">Dashboard</router-link>
-            <router-link to="/projects" class="text-gray-700 hover:text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-md transition-colors text-sm font-medium" active-class="bg-blue-600 text-white hover:bg-blue-700 hover:text-white">Projects</router-link>
-            <router-link to="/agents" class="text-gray-700 hover:text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-md transition-colors text-sm font-medium" active-class="bg-blue-600 text-white hover:bg-blue-700 hover:text-white">Agents</router-link>
-            <router-link to="/tasks" class="text-gray-700 hover:text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-md transition-colors text-sm font-medium" active-class="bg-blue-600 text-white hover:bg-blue-700 hover:text-white">Tasks</router-link>
-            <router-link to="/docs" class="text-gray-700 hover:text-blue-600 hover:bg-blue-50 px-3 sm:px-4 py-2 rounded-md transition-colors text-sm font-medium" active-class="bg-blue-600 text-white hover:bg-blue-700 hover:text-white">📚 Docs</router-link>
+            <router-link
+              to="/"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Dashboard</span>
+              <span class="sm:hidden">🏠</span>
+            </router-link>
+            <router-link
+              to="/projects"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Projects</span>
+              <span class="sm:hidden">📁</span>
+            </router-link>
+            <router-link
+              to="/agents"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Agents</span>
+              <span class="sm:hidden">🤖</span>
+            </router-link>
+            <router-link
+              to="/tasks"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Tasks</span>
+              <span class="sm:hidden">📋</span>
+            </router-link>
+            <router-link
+              to="/docs"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Docs</span>
+              <span class="sm:hidden">📚</span>
+            </router-link>
           </div>
         </div>
       </div>
     </nav>
 
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="page" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </router-view>
     </main>
 
-    <footer class="bg-white border-t border-gray-200 py-6 sm:py-8 mt-12 sm:mt-16">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-gray-500 text-sm">
-        <p>&copy; 2026 MCP Task Tracker - AI Agent Coordination System</p>
+    <footer class="bg-white/50 backdrop-blur-sm border-t border-slate-200 py-6 sm:py-8 mt-12 sm:mt-16">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-gradient-to-br from-blue-500 to-purple-600 rounded-md flex items-center justify-center">
+              <span class="text-white font-bold text-xs">🚀</span>
+            </div>
+            <span class="text-slate-600 text-sm">© 2026 MCP Task Tracker</span>
+          </div>
+          <span class="text-slate-500 text-sm">AI Agent Coordination System</span>
+        </div>
       </div>
     </footer>
   </div>
@@ -60,3 +115,60 @@ export default {
   }
 }
 </script>
+
+<style>
+.nav-link {
+  color: rgb(55 65 81);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.nav-link:hover {
+  color: rgb(37 99 235);
+  background-color: rgb(239 246 255);
+}
+
+.nav-link-active {
+  background-color: rgb(37 99 235);
+  color: white;
+}
+
+.nav-link-active:hover {
+  background-color: rgb(29 78 216);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.page-enter-active, .page-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.page-enter {
+  opacity: 0;
+}
+
+.page-leave-to {
+  opacity: 0;
+}
+</style>
