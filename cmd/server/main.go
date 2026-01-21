@@ -9,6 +9,7 @@ import (
 	"github.com/rs/cors"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
+	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
@@ -25,6 +26,10 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer db.Close()
+
+	// Configure connection pool
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
 
 	log.Println("Connected to database")
 
@@ -91,7 +96,14 @@ func main() {
 		AllowCredentials: true,
 	})
 
-	handler := c.Handler(r)
+	// Apply middleware
+	handler := middleware.Recovery(
+		middleware.Logger(
+			middleware.RequestSizeLimit(10 * 1024 * 1024)( // 10MB limit
+				c.Handler(r),
+			),
+		),
+	)
 
 	// Start server
 	port := os.Getenv("PORT")

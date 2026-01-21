@@ -84,11 +84,26 @@ func (h *Hub) broadcastMessage(message *Message) {
 		return
 	}
 
-	// Extract project ID from payload if it exists
+	// Extract project ID from payload
 	var projectID uuid.UUID
-	if payload, ok := message.Payload.(map[string]interface{}); ok {
+	
+	// Try to extract from different payload types
+	switch payload := message.Payload.(type) {
+	case map[string]interface{}:
 		if pid, ok := payload["project_id"].(string); ok {
 			projectID, _ = uuid.Parse(pid)
+		}
+	default:
+		// Try to use reflection to get ProjectID field
+		// This handles structs like models.Task, models.Agent, etc.
+		payloadBytes, err := json.Marshal(payload)
+		if err == nil {
+			var temp map[string]interface{}
+			if json.Unmarshal(payloadBytes, &temp) == nil {
+				if pid, ok := temp["project_id"].(string); ok {
+					projectID, _ = uuid.Parse(pid)
+				}
+			}
 		}
 	}
 
