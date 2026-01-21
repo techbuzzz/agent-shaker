@@ -1,61 +1,61 @@
-﻿package handlers
+package handlers
 
 import (
-"log"
-"net/http"
+	"log"
+	"net/http"
 
-"github.com/google/uuid"
-"github.com/gorilla/websocket"
-ws "github.com/techbuzzz/agent-shaker/internal/websocket"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+	ws "github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-CheckOrigin: func(r *http.Request) bool {
-return true
-},
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
 
 type WebSocketHandler struct {
-hub *ws.Hub
+	hub *ws.Hub
 }
 
 func NewWebSocketHandler(hub *ws.Hub) *WebSocketHandler {
-return &WebSocketHandler{hub: hub}
+	return &WebSocketHandler{hub: hub}
 }
 
 func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-projectIDStr := r.URL.Query().Get("project_id")
-log.Printf("WebSocket connection attempt with project_id: %s", projectIDStr)
-if projectIDStr == "" {
-log.Printf("WebSocket connection failed: project_id is required")
-http.Error(w, "project_id is required", http.StatusBadRequest)
-return
-}
+	projectIDStr := r.URL.Query().Get("project_id")
+	log.Printf("WebSocket connection attempt with project_id: %s", projectIDStr)
+	if projectIDStr == "" {
+		log.Printf("WebSocket connection failed: project_id is required")
+		http.Error(w, "project_id is required", http.StatusBadRequest)
+		return
+	}
 
-projectID, err := uuid.Parse(projectIDStr)
-if err != nil {
-log.Printf("WebSocket connection failed: Invalid project_id %s: %v", projectIDStr, err)
-http.Error(w, "Invalid project_id", http.StatusBadRequest)
-return
-}
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		log.Printf("WebSocket connection failed: Invalid project_id %s: %v", projectIDStr, err)
+		http.Error(w, "Invalid project_id", http.StatusBadRequest)
+		return
+	}
 
-log.Printf("WebSocket upgrading connection for project %s", projectID)
-conn, err := upgrader.Upgrade(w, r, nil)
-if err != nil {
-log.Printf("WebSocket upgrade error: %v", err)
-return
-}
+	log.Printf("WebSocket upgrading connection for project %s", projectID)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
 
-log.Printf("WebSocket connection established for project %s", projectID)
-client := &ws.Client{
-ID:        uuid.New().String(),
-ProjectID: projectID,
-Conn:      conn,
-Send:      make(chan []byte, 256),
-}
+	log.Printf("WebSocket connection established for project %s", projectID)
+	client := &ws.Client{
+		ID:        uuid.New().String(),
+		ProjectID: projectID,
+		Conn:      conn,
+		Send:      make(chan []byte, 256),
+	}
 
-h.hub.Register(client)
+	h.hub.Register(client)
 
-go client.WritePump()
-go client.ReadPump()
+	go client.WritePump()
+	go client.ReadPump()
 }

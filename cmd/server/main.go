@@ -137,7 +137,7 @@ func main() {
 		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
 			middleware.Recovery(
 				middleware.Logger(
-					middleware.RequestSizeLimit(10 * 1024 * 1024)(
+					middleware.RequestSizeLimit(10*1024*1024)(
 						c.Handler(api),
 					),
 				),
