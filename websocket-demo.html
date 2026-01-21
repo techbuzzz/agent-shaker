@@ -242,13 +242,16 @@
 
             <!-- connection controls -->
             <div class="controls" style="margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <label style="color:#6b7280; font-weight:600; font-size:0.9rem;">Project ID:
-                    <input id="projectIdInput" value="demo" style="margin-left:8px; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb;" />
+                <label style="color:#6b7280; font-weight:600; font-size:0.9rem;">Project ID (UUID):
+                    <input id="projectIdInput" value="550e8400-e29b-41d4-a716-446655440000" style="margin-left:8px; padding:6px 8px; border-radius:6px; border:1px solid #e5e7eb; width: 300px;" placeholder="UUID format required" />
                 </label>
                 <button id="connectBtn" class="btn">Connect</button>
                 <button id="disconnectBtn" class="btn" style="background:#ef4444;">Disconnect</button>
                 <button id="simulateBtn" class="btn" style="background:#10b981;">Simulate Update</button>
                 <button id="clearBtn" class="btn" style="background:#9ca3af;">Clear</button>
+            </div>
+            <div style="margin-top:8px; color:#9ca3af; font-size:0.85rem;">
+                💡 Tip: Create a project via API first, then use its UUID here. Example: <code style="background:#f3f4f6; padding:2px 6px; border-radius:4px;">POST /api/projects</code>
             </div>
 
             <div class="info-grid" style="margin-top:12px;">
@@ -330,7 +333,7 @@
                 // - For http -> use 80 (nginx proxy)
                 // - For https -> use 443 (nginx proxy with SSL)
                 if (locProto === 'file:' || host === 'localhost') {
-                    port = '8080';  // Direct access to Go server
+                    port = '80';  // Direct access to Go server
                 } else {
                     port = isSecure ? '443' : '80';  // Nginx proxy
                 }
@@ -346,7 +349,16 @@
         }
 
         function connect(projectId) {
-            if (!projectId) projectId = document.getElementById('projectIdInput').value || 'demo';
+            if (!projectId) projectId = document.getElementById('projectIdInput').value || '550e8400-e29b-41d4-a716-446655440000';
+            
+            // Validate UUID format
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!uuidRegex.test(projectId)) {
+                alert('Invalid project ID format. Please enter a valid UUID.\n\nExample: 550e8400-e29b-41d4-a716-446655440000\n\nCreate a project first via: POST /api/projects');
+                updateStatus(false);
+                return;
+            }
+            
             manualDisconnect = false;
 
             const url = buildWebSocketUrl(projectId);
@@ -516,7 +528,15 @@
         // clear updates
         function clearUpdates() {
             const container = document.getElementById('updatesContainer');
-            container.innerHTML = `<div class="empty-state"><p>Waiting for task updates...</p><p style="font-size: 0.875rem; margin-top: 8px;">Run the demo script to see live updates!</p></div>`;
+            container.innerHTML = `<div class="empty-state">
+                <p>Waiting for task updates...</p>
+                <p style="font-size: 0.875rem; margin-top: 8px;">
+                    To see live updates:<br>
+                    1. Create a project: <code style="background:#f3f4f6; padding:2px 6px;">POST /api/projects</code><br>
+                    2. Use the project UUID above to connect<br>
+                    3. Create tasks or run the demo script
+                </p>
+            </div>`;
             updateCount = 0;
             statusCounts = { completed:0, in_progress:0, pending:0, failed:0 };
             document.getElementById('updateCount').textContent = updateCount;
