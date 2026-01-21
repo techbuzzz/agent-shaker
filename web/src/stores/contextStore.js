@@ -13,8 +13,11 @@ export const useContextStore = defineStore('contexts', () => {
     error.value = null
     try {
       contexts.value = await api.getContexts()
+      return contexts.value
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to fetch contexts'
+      console.error('Error fetching contexts:', err)
+      throw err
     } finally {
       loading.value = false
     }
@@ -25,8 +28,11 @@ export const useContextStore = defineStore('contexts', () => {
     error.value = null
     try {
       contexts.value = await api.getProjectContexts(projectId)
+      return contexts.value
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to fetch project contexts'
+      console.error('Error fetching project contexts:', err)
+      throw err
     } finally {
       loading.value = false
     }
@@ -37,8 +43,11 @@ export const useContextStore = defineStore('contexts', () => {
     error.value = null
     try {
       currentContext.value = await api.getContext(id)
+      return currentContext.value
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to fetch context'
+      console.error('Error fetching context:', err)
+      throw err
     } finally {
       loading.value = false
     }
@@ -52,7 +61,8 @@ export const useContextStore = defineStore('contexts', () => {
       contexts.value.unshift(context)
       return context
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to create context'
+      console.error('Error creating context:', err)
       throw err
     } finally {
       loading.value = false
@@ -68,9 +78,13 @@ export const useContextStore = defineStore('contexts', () => {
       if (index !== -1) {
         contexts.value[index] = updatedContext
       }
+      if (currentContext.value?.id === id) {
+        currentContext.value = updatedContext
+      }
       return updatedContext
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to update context'
+      console.error('Error updating context:', err)
       throw err
     } finally {
       loading.value = false
@@ -83,12 +97,20 @@ export const useContextStore = defineStore('contexts', () => {
     try {
       await api.deleteContext(id)
       contexts.value = contexts.value.filter(c => c.id !== id)
+      if (currentContext.value?.id === id) {
+        currentContext.value = null
+      }
     } catch (err) {
-      error.value = err.message
+      error.value = err.message || 'Failed to delete context'
+      console.error('Error deleting context:', err)
       throw err
     } finally {
       loading.value = false
     }
+  }
+
+  const clearError = () => {
+    error.value = null
   }
 
   return {
@@ -101,6 +123,7 @@ export const useContextStore = defineStore('contexts', () => {
     fetchContext,
     createContext,
     updateContext,
-    deleteContext
+    deleteContext,
+    clearError
   }
 })

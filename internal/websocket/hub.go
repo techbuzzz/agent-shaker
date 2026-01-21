@@ -59,6 +59,7 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			h.mu.Lock()
+			client.hub = h // Set the hub reference
 			h.clients[client.ID] = client
 			if h.projects[client.ProjectID] == nil {
 				h.projects[client.ProjectID] = make(map[string]*Client)
@@ -100,7 +101,7 @@ func (h *Hub) broadcastMessage(message *Message) {
 
 	// Extract project ID from payload
 	var projectID uuid.UUID
-	
+
 	// Try to extract from different payload types
 	switch payload := message.Payload.(type) {
 	case map[string]interface{}:

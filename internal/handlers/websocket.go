@@ -49,6 +49,7 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 		Send:      make(chan []byte, 256),
 	}
 
+	// Set the hub on the client before registering
 	h.hub.Register(client)
 
 	go client.WritePump()

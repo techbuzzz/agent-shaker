@@ -118,6 +118,32 @@ func (h *AgentHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(agents)
 }
 
+func (h *AgentHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid agent ID format", http.StatusBadRequest)
+		return
+	}
+
+	var agent models.Agent
+	err = h.db.QueryRow(`
+		SELECT id, project_id, name, role, team, status, last_seen, created_at
+		FROM agents
+		WHERE id = $1
+	`, id).Scan(&agent.ID, &agent.ProjectID, &agent.Name, &agent.Role, &agent.Team, &agent.Status, &agent.LastSeen, &agent.CreatedAt)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Failed to retrieve agent", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agent)
+}
+
 func (h *AgentHandler) UpdateAgentStatus(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id, err := uuid.Parse(vars["id"])

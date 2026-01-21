@@ -333,7 +333,7 @@
                 // - For http -> use 80 (nginx proxy)
                 // - For https -> use 443 (nginx proxy with SSL)
                 if (locProto === 'file:' || host === 'localhost') {
-                    port = '80';  // Direct access to Go server
+                    port = '8080';  // Direct access to Go server
                 } else {
                     port = isSecure ? '443' : '80';  // Nginx proxy
                 }

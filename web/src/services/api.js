@@ -39,42 +39,61 @@ export default {
   createProject(data) {
     return api.post('/projects', data)
   },
+  updateProject(id, data) {
+    return api.put(`/projects/${id}`, data)
+  },
+  deleteProject(id) {
+    return api.delete(`/projects/${id}`)
+  },
 
   // Agents
-  getAgents() {
-    return api.get('/agents')
+  getAgents(projectId = null) {
+    const params = projectId ? { project_id: projectId } : {}
+    return api.get('/agents', { params })
   },
   getAgent(id) {
     return api.get(`/agents/${id}`)
   },
   getProjectAgents(projectId) {
-    return api.get(`/projects/${projectId}/agents`)
+    return api.get('/agents', { params: { project_id: projectId } })
   },
   createAgent(data) {
     return api.post('/agents', data)
   },
+  updateAgent(id, data) {
+    return api.put(`/agents/${id}`, data)
+  },
   updateAgentStatus(id, status) {
     return api.put(`/agents/${id}/status`, { status })
   },
+  deleteAgent(id) {
+    return api.delete(`/agents/${id}`)
+  },
 
   // Tasks
-  getTasks() {
-    return api.get('/tasks')
+  getTasks(params = {}) {
+    return api.get('/tasks', { params })
   },
   getTask(id) {
     return api.get(`/tasks/${id}`)
   },
   getProjectTasks(projectId) {
-    return api.get(`/projects/${projectId}/tasks`)
+    return api.get('/tasks', { params: { project_id: projectId } })
   },
   getAgentTasks(agentId) {
-    return api.get(`/agents/${agentId}/tasks`)
+    return api.get('/tasks', { params: { agent_id: agentId } })
   },
   createTask(data) {
     return api.post('/tasks', data)
   },
+  updateTask(id, data) {
+    return api.put(`/tasks/${id}`, data)
+  },
   updateTaskStatus(id, status) {
     return api.put(`/tasks/${id}/status`, { status })
+  },
+  deleteTask(id) {
+    return api.delete(`/tasks/${id}`)
   },
 
   // Context/Documentation

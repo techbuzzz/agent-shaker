@@ -72,43 +72,54 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	projectIDStr := r.URL.Query().Get("project_id")
-	if projectIDStr == "" {
-		http.Error(w, "project_id query parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	projectID, err := uuid.Parse(projectIDStr)
-	if err != nil {
-		http.Error(w, "Invalid project_id format", http.StatusBadRequest)
-		return
-	}
-
 	query := `
 		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, created_at, updated_at
 		FROM tasks
-		WHERE project_id = $1
+		WHERE 1=1
 	`
-	args := []interface{}{projectID}
+	args := []interface{}{}
+	argCount := 1
 
-	// Add filters
-	status := r.URL.Query().Get("status")
-	if status != "" {
-		query += " AND status = $2"
-		args = append(args, status)
+	// Add optional filters
+	projectIDStr := r.URL.Query().Get("project_id")
+	if projectIDStr != "" {
+		projectID, err := uuid.Parse(projectIDStr)
+		if err != nil {
+			http.Error(w, "Invalid project_id format", http.StatusBadRequest)
+			return
+		}
+		query += " AND project_id = $1"
+		args = append(args, projectID)
+		argCount++
 	}
 
-	assignedToStr := r.URL.Query().Get("assigned_to")
-	if assignedToStr != "" {
-		assignedTo, err := uuid.Parse(assignedToStr)
-		if err == nil {
-			if status != "" {
-				query += " AND assigned_to = $3"
-			} else {
-				query += " AND assigned_to = $2"
-			}
-			args = append(args, assignedTo)
+	agentIDStr := r.URL.Query().Get("agent_id")
+	if agentIDStr != "" {
+		agentID, err := uuid.Parse(agentIDStr)
+		if err != nil {
+			http.Error(w, "Invalid agent_id format", http.StatusBadRequest)
+			return
 		}
+		if argCount == 1 {
+			query += " AND assigned_to = $1"
+		} else {
+			query += " AND assigned_to = $2"
+		}
+		args = append(args, agentID)
+		argCount++
+	}
+
+	status := r.URL.Query().Get("status")
+	if status != "" {
+		if argCount == 1 {
+			query += " AND status = $1"
+		} else if argCount == 2 {
+			query += " AND status = $2"
+		} else {
+			query += " AND status = $3"
+		}
+		args = append(args, status)
+		argCount++
 	}
 
 	query += " ORDER BY created_at DESC"
@@ -192,6 +203,73 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	`, req.Status, req.Output, time.Now(), id)
 	if err != nil {
 		http.Error(w, "Failed to update task", http.StatusInternalServerError)
+		return
+	}
+
+	// Get updated task
+	var task models.Task
+	err = h.db.QueryRow(`
+		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, created_at, updated_at
+		FROM tasks
+		WHERE id = $1
+	`, id).Scan(&task.ID, &task.ProjectID, &task.Title, &task.Description, &task.Status, &task.Priority, &task.CreatedBy, &task.AssignedTo, &task.Output, &task.CreatedAt, &task.UpdatedAt)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Failed to retrieve task", http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast task update
+	h.hub.BroadcastToProject(task.ProjectID, "task_update", task)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(task)
+}
+
+func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid task ID format", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Status == "" {
+		http.Error(w, "status is required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate status
+	validStatuses := []string{"pending", "in_progress", "completed", "failed", "blocked"}
+	valid := false
+	for _, s := range validStatuses {
+		if req.Status == s {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		http.Error(w, "invalid status value", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE tasks
+		SET status = $1, updated_at = $2
+		WHERE id = $3
+	`, req.Status, time.Now(), id)
+	if err != nil {
+		http.Error(w, "Failed to update task status", http.StatusInternalServerError)
 		return
 	}
 
