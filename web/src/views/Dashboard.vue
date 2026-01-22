@@ -191,8 +191,8 @@ export default {
       try {
         loading.value = true
         error.value = null
-        const response = await api.get('/api/dashboard')
-        stats.value = response.data
+        const data = await api.getDashboardStats()
+        stats.value = data
       } catch (err) {
         console.error('Error fetching dashboard stats:', err)
         error.value = 'Failed to load dashboard statistics'

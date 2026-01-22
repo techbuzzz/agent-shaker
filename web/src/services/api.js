@@ -124,6 +124,11 @@ export default {
     return api.delete(`/contexts/${id}`)
   },
 
+  // Dashboard
+  getDashboardStats() {
+    return api.get('/dashboard')
+  },
+
   // Health
   checkHealth() {
     return axios.get('/health')
