@@ -36,12 +36,19 @@ Connecting AI agents and Copilot:
 - **[COPILOT_MCP_INTEGRATION.md](COPILOT_MCP_INTEGRATION.md)** - GitHub Copilot integration
 - **[COPILOT_INTEGRATION.md](COPILOT_INTEGRATION.md)** - Copilot integration guide
 - **[MCP_QUICKSTART.md](MCP_QUICKSTART.md)** - MCP bridge quick start
+- **[MARKDOWN_CONTEXT_SHARING.md](MARKDOWN_CONTEXT_SHARING.md)** - ✨ **NEW** - Markdown documentation sharing between agents
+- **[MARKDOWN_QUICK_REFERENCE.md](MARKDOWN_QUICK_REFERENCE.md)** - ✨ **NEW** - Quick markdown templates for agents
+- **[CONTEXT_SHARING_SUMMARY.md](CONTEXT_SHARING_SUMMARY.md)** - ✨ **NEW** - Context sharing enhancement summary
 
 ## 📋 API & Development
 
 Technical documentation:
 
 - **[API.md](API.md)** - REST API documentation
+- **[API_FIXES_SUMMARY.md](API_FIXES_SUMMARY.md)** - API fixes and improvements
+- **[MCP_ENDPOINTS_FIX.md](MCP_ENDPOINTS_FIX.md)** - MCP endpoint database fixes
+- **[MCP_CONTEXT_AWARE_ENDPOINTS.md](MCP_CONTEXT_AWARE_ENDPOINTS.md)** - Context-aware MCP endpoints
+- **[TASK_ASSIGNMENT_FIX.md](TASK_ASSIGNMENT_FIX.md)** - Task assignment bug fix
 - **[IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)** - Implementation details
 - **[AGENTS_PAGE_IMPLEMENTATION.md](AGENTS_PAGE_IMPLEMENTATION.md)** - Agents page implementation
 
@@ -119,7 +126,10 @@ docs/
 → Check **[DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md)** and **[FRESH_DEPLOYMENT.md](FRESH_DEPLOYMENT.md)**
 
 ### Integrating AI Agents?
-→ See **[COPILOT_MCP_INTEGRATION.md](COPILOT_MCP_INTEGRATION.md)** and **[MCP_QUICKSTART.md](MCP_QUICKSTART.md)**
+→ See **[COPILOT_MCP_INTEGRATION.md](COPILOT_MCP_INTEGRATION.md)**, **[MCP_QUICKSTART.md](MCP_QUICKSTART.md)**, and **[MARKDOWN_CONTEXT_SHARING.md](MARKDOWN_CONTEXT_SHARING.md)** ✨
+
+### Want Agents to Share Documentation?
+→ Read **[MARKDOWN_CONTEXT_SHARING.md](MARKDOWN_CONTEXT_SHARING.md)** and **[MARKDOWN_QUICK_REFERENCE.md](MARKDOWN_QUICK_REFERENCE.md)** ✨
 
 ### Understanding Architecture?
 → Read **[CLEAN_ARCHITECTURE.md](CLEAN_ARCHITECTURE.md)** and **[ARCHITECTURE_SUMMARY.md](ARCHITECTURE_SUMMARY.md)**
@@ -150,5 +160,6 @@ docs/
 
 ---
 
-**Last Updated**: January 21, 2026
-**Total Documentation Files**: 27
+**Last Updated**: January 22, 2026
+**Total Documentation Files**: 33 (+6 new markdown context sharing docs)
+

@@ -549,20 +549,20 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 		},
 		{
 			Name:        "list_contexts",
-			Description: "List documentation/contexts for a project",
+			Description: "List all documentation and contexts shared by agents in the project. Content is in markdown format for easy reading.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"project_id": map[string]interface{}{
 						"type":        "string",
-						"description": "Optional project ID to filter contexts",
+						"description": "Optional project ID to filter contexts (uses connection URL context if not provided)",
 					},
 				},
 			},
 		},
 		{
 			Name:        "add_context",
-			Description: "Add documentation or context to a project. If connected with project_id and agent_id in URL, those will be used automatically.",
+			Description: "Add documentation or context to share with other agents in the project. Supports full markdown formatting for better readability. If connected with project_id and agent_id in URL, those will be used automatically. Other agents can read this context to understand your work.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -576,11 +576,11 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 					},
 					"title": map[string]interface{}{
 						"type":        "string",
-						"description": "Context title",
+						"description": "Context title - make it descriptive so other agents can find it",
 					},
 					"content": map[string]interface{}{
 						"type":        "string",
-						"description": "Context content (markdown supported)",
+						"description": "Context content in markdown format. Use headings (# ## ###), code blocks (```), lists (- item), bold (**text**), italic (*text*), links ([text](url)), etc. This will be rendered beautifully for other agents to read.",
 					},
 					"tags": map[string]interface{}{
 						"type":        "array",
@@ -1086,16 +1086,18 @@ func (h *MCPHandler) executeListContexts(args map[string]interface{}) (string, b
 		return `{"error": "Database not connected"}`, true
 	}
 
-	query := `SELECT id, project_id, title, content, tags, created_at FROM contexts`
+	query := `SELECT c.id, c.project_id, c.agent_id, a.name as agent_name, c.title, c.content, c.tags, c.created_at 
+	          FROM contexts c 
+	          LEFT JOIN agents a ON c.agent_id = a.id`
 	var queryArgs []interface{}
 
 	if args != nil {
 		if projectID, ok := args["project_id"].(string); ok && projectID != "" {
-			query += " WHERE project_id = $1"
+			query += " WHERE c.project_id = $1"
 			queryArgs = append(queryArgs, projectID)
 		}
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY c.created_at DESC"
 
 	rows, err := h.db.Query(query, queryArgs...)
 	if err != nil {
@@ -1105,23 +1107,44 @@ func (h *MCPHandler) executeListContexts(args map[string]interface{}) (string, b
 
 	var contexts []map[string]interface{}
 	for rows.Next() {
-		var id, projectID, title, content string
+		var id, projectID, agentID, title, content string
+		var agentName *string
 		var tags interface{}
 		var createdAt interface{}
-		if err := rows.Scan(&id, &projectID, &title, &content, &tags, &createdAt); err != nil {
+		if err := rows.Scan(&id, &projectID, &agentID, &agentName, &title, &content, &tags, &createdAt); err != nil {
 			continue
 		}
+
+		// Create a preview of the content
+		preview := content
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+
+		agentNameStr := "Unknown"
+		if agentName != nil {
+			agentNameStr = *agentName
+		}
+
 		contexts = append(contexts, map[string]interface{}{
 			"id":         id,
 			"project_id": projectID,
+			"agent_id":   agentID,
+			"agent_name": agentNameStr,
 			"title":      title,
 			"content":    content,
+			"preview":    preview,
+			"format":     "markdown",
 			"tags":       tags,
 			"created_at": createdAt,
 		})
 	}
 
-	result, _ := json.MarshalIndent(contexts, "", "  ")
+	result, _ := json.MarshalIndent(map[string]interface{}{
+		"contexts": contexts,
+		"count":    len(contexts),
+		"note":     "Content is in markdown format - render it for best readability",
+	}, "", "  ")
 	return string(result), false
 }
 
@@ -1184,13 +1207,30 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
 
+	// Create a preview of the content (first 200 chars)
+	preview := content
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+
+	// Get agent name for better feedback
+	var agentName string
+	h.db.QueryRow(`SELECT name FROM agents WHERE id = $1`, agentID).Scan(&agentName)
+	if agentName == "" {
+		agentName = "Unknown Agent"
+	}
+
 	result, _ := json.MarshalIndent(map[string]interface{}{
-		"success":    true,
-		"id":         id,
-		"title":      title,
-		"agent_id":   agentID,
-		"tags":       tags,
-		"created_at": createdAt,
+		"success":     true,
+		"id":          id,
+		"title":       title,
+		"agent_id":    agentID,
+		"agent_name":  agentName,
+		"tags":        tags,
+		"preview":     preview,
+		"format":      "markdown",
+		"created_at":  createdAt,
+		"shared_with": "All agents in the project can now read this context",
 	}, "", "  ")
 	return string(result), false
 }
