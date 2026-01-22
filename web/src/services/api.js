@@ -1,11 +1,35 @@
 import axios from 'axios'
 
+// Get base URL from localStorage or use default
+const getBaseUrl = () => {
+  const storedUrl = localStorage.getItem('mcp-server-url')
+  if (storedUrl) {
+    try {
+      const url = new URL(storedUrl)
+      return `${url.protocol}//${url.host}/api`
+    } catch {
+      return '/api'
+    }
+  }
+  return '/api'
+}
+
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: getBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
 })
+
+// Update base URL when it changes
+export const updateApiBaseUrl = (serverUrl) => {
+  try {
+    const url = new URL(serverUrl)
+    api.defaults.baseURL = `${url.protocol}//${url.host}/api`
+  } catch {
+    api.defaults.baseURL = `${serverUrl}/api`
+  }
+}
 
 // Request interceptor
 api.interceptors.request.use(

@@ -42,6 +42,15 @@
               <span class="hidden sm:inline">Tasks</span>
               <span class="sm:hidden">📋</span>
             </router-link>
+            <button
+              @click="showServerUrlModal = true"
+              class="nav-link flex items-center gap-1"
+              :class="{ 'text-green-600': isConnected }"
+            >
+              <span :class="isConnected ? 'text-green-500' : 'text-gray-400'">●</span>
+              <span class="hidden sm:inline">{{ isConnected ? 'Connected' : 'Connect' }}</span>
+              <span class="sm:hidden">🔗</span>
+            </button>
             <a
               href="https://github.com/techbuzzz/agent-shaker"
               target="_blank"
@@ -55,6 +64,13 @@
         </div>
       </div>
     </nav>
+
+    <!-- Server URL Modal -->
+    <ServerUrlModal 
+      :is-open="showServerUrlModal" 
+      @close="showServerUrlModal = false"
+      @connected="onServerConnected"
+    />
 
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 sm:pb-28">
       <router-view v-slot="{ Component }">
@@ -78,10 +94,23 @@
   </div>
 </template>
 
-<script>
-export default {
-  name: 'App'
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import ServerUrlModal from '@/components/ServerUrlModal.vue'
+import { useSettingsStore } from '@/stores/settingsStore'
+
+const settingsStore = useSettingsStore()
+
+const showServerUrlModal = ref(false)
+const isConnected = computed(() => settingsStore.isConnected)
+
+const onServerConnected = (url) => {
+  console.log('Connected to server:', url)
 }
+
+onMounted(async () => {
+  await settingsStore.testConnection()
+})
 </script>
 
 <style>
