@@ -9,7 +9,16 @@ param(
     [string]$AgentName = "",
     
     [Parameter(Mandatory=$false)]
-    [ValidateSet("frontend", "backend")]
+    [ValidateSet(
+        # Development Roles
+        "frontend", "backend", "fullstack", "mobile", "devops", "qa", "security",
+        # Agile Roles
+        "product-owner", "scrum-master", "agile-coach",
+        # R&D Roles
+        "architect", "tech-lead", "researcher", "data-scientist", "ml-engineer",
+        # Design & UX
+        "ux-designer", "ui-designer", "ux-researcher"
+    )]
     [string]$Role = "",
     
     [Parameter(Mandatory=$false)]
@@ -61,11 +70,57 @@ if ($Interactive) {
     # Get role
     if ([string]::IsNullOrWhiteSpace($Role)) {
         Write-Host ""
-        Write-Host "Select agent role:"
-        Write-Host "1. Frontend"
-        Write-Host "2. Backend"
-        $roleChoice = Read-Host "Enter choice (1 or 2)"
-        $Role = if ($roleChoice -eq "1") { "frontend" } else { "backend" }
+        Write-Host "Select agent role:" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Development Roles:" -ForegroundColor Cyan
+        Write-Host "  1. Frontend Developer"
+        Write-Host "  2. Backend Developer"
+        Write-Host "  3. Full Stack Developer"
+        Write-Host "  4. Mobile Developer"
+        Write-Host "  5. DevOps Engineer"
+        Write-Host "  6. QA Engineer"
+        Write-Host "  7. Security Engineer"
+        Write-Host ""
+        Write-Host "Agile Roles:" -ForegroundColor Cyan
+        Write-Host "  8. Product Owner"
+        Write-Host "  9. Scrum Master"
+        Write-Host " 10. Agile Coach"
+        Write-Host ""
+        Write-Host "R&D Roles:" -ForegroundColor Cyan
+        Write-Host " 11. Solution Architect"
+        Write-Host " 12. Tech Lead"
+        Write-Host " 13. Research Engineer"
+        Write-Host " 14. Data Scientist"
+        Write-Host " 15. ML Engineer"
+        Write-Host ""
+        Write-Host "Design & UX:" -ForegroundColor Cyan
+        Write-Host " 16. UX Designer"
+        Write-Host " 17. UI Designer"
+        Write-Host " 18. UX Researcher"
+        Write-Host ""
+        $roleChoice = Read-Host "Enter choice (1-18)"
+        
+        $Role = switch ($roleChoice) {
+            "1"  { "frontend" }
+            "2"  { "backend" }
+            "3"  { "fullstack" }
+            "4"  { "mobile" }
+            "5"  { "devops" }
+            "6"  { "qa" }
+            "7"  { "security" }
+            "8"  { "product-owner" }
+            "9"  { "scrum-master" }
+            "10" { "agile-coach" }
+            "11" { "architect" }
+            "12" { "tech-lead" }
+            "13" { "researcher" }
+            "14" { "data-scientist" }
+            "15" { "ml-engineer" }
+            "16" { "ux-designer" }
+            "17" { "ui-designer" }
+            "18" { "ux-researcher" }
+            default { "frontend" }
+        }
     }
     
     Write-Host ""
@@ -93,6 +148,14 @@ if ([string]::IsNullOrWhiteSpace($ProjectName) -or
     Write-Host ""
     Write-Host "  Command line:"
     Write-Host "    .\setup-agent.ps1 -ProjectName 'InvoiceAI' -AgentName 'InvoiceAI-Frontend' -Role 'frontend'"
+    Write-Host "    .\setup-agent.ps1 -ProjectName 'DataPlatform' -AgentName 'ML-Engineer' -Role 'ml-engineer'"
+    Write-Host "    .\setup-agent.ps1 -ProjectName 'AppProject' -AgentName 'ProductOwner' -Role 'product-owner'"
+    Write-Host ""
+    Write-Host "Available Roles:"
+    Write-Host "  Development: frontend, backend, fullstack, mobile, devops, qa, security"
+    Write-Host "  Agile: product-owner, scrum-master, agile-coach"
+    Write-Host "  R&D: architect, tech-lead, researcher, data-scientist, ml-engineer"
+    Write-Host "  Design: ux-designer, ui-designer, ux-researcher"
     Write-Host ""
     exit 1
 }

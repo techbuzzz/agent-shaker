@@ -187,8 +187,32 @@
           <div class="mb-4">
             <label class="block text-sm font-medium text-gray-700 mb-2">Role</label>
             <select v-model="agentForm.role" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" required>
-              <option value="frontend">Frontend</option>
-              <option value="backend">Backend</option>
+              <optgroup label="Development Roles">
+                <option value="frontend">Frontend Developer</option>
+                <option value="backend">Backend Developer</option>
+                <option value="fullstack">Full Stack Developer</option>
+                <option value="mobile">Mobile Developer</option>
+                <option value="devops">DevOps Engineer</option>
+                <option value="qa">QA Engineer</option>
+                <option value="security">Security Engineer</option>
+              </optgroup>
+              <optgroup label="Agile Roles">
+                <option value="product-owner">Product Owner</option>
+                <option value="scrum-master">Scrum Master</option>
+                <option value="agile-coach">Agile Coach</option>
+              </optgroup>
+              <optgroup label="R&D Roles">
+                <option value="architect">Solution Architect</option>
+                <option value="tech-lead">Tech Lead</option>
+                <option value="researcher">Research Engineer</option>
+                <option value="data-scientist">Data Scientist</option>
+                <option value="ml-engineer">ML Engineer</option>
+              </optgroup>
+              <optgroup label="Design & UX">
+                <option value="ux-designer">UX Designer</option>
+                <option value="ui-designer">UI Designer</option>
+                <option value="ux-researcher">UX Researcher</option>
+              </optgroup>
             </select>
           </div>
           <div class="mb-4">
