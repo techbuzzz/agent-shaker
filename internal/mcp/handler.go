@@ -1008,6 +1008,11 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		}
 	}
 
+	// Use agent_id from context if assigned_to not provided (agent assigns task to themselves)
+	if assignedTo == "" && ctx.AgentID != "" {
+		assignedTo = ctx.AgentID
+	}
+
 	id := uuid.New().String()
 	query := `INSERT INTO tasks (id, project_id, title, description, status, priority, created_by, assigned_to) 
 	          VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7) RETURNING id, created_at`
@@ -1024,7 +1029,7 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
 
-	result, _ := json.MarshalIndent(map[string]interface{}{
+	responseData := map[string]interface{}{
 		"success":    true,
 		"id":         createdID,
 		"title":      title,
@@ -1032,7 +1037,14 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		"priority":   priority,
 		"created_by": createdBy,
 		"created_at": createdAt,
-	}, "", "  ")
+	}
+
+	// Include assigned_to in response if it was set
+	if assignedTo != "" {
+		responseData["assigned_to"] = assignedTo
+	}
+
+	result, _ := json.MarshalIndent(responseData, "", "  ")
 	return string(result), false
 }
 
