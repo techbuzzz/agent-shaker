@@ -481,7 +481,10 @@ For complete MCP documentation, see [MCP_CONTEXT_AWARE_ENDPOINTS.md](./docs/MCP_
 When using GitHub Copilot with the MCP server, you get:
 
 ### Automatic Context from URL
-Connect with: `http://localhost:8080?project_id=YOUR_PROJECT&agent_id=YOUR_AGENT`
+Connect with your actual project and agent IDs:
+```
+http://localhost:8080?project_id=68488bf3-8d73-498f-b871-69d63641d6e3&agent_id=1a9c32e7-f0b0-4cc4-b1ed-6ee92f7ef184
+```
 
 The MCP server automatically knows:
 - ✅ Which project you're working on
