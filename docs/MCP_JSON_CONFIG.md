@@ -4,6 +4,8 @@
 
 The enhanced `mcp.json` configuration provides comprehensive metadata for VS Code's Model Context Protocol (MCP) integration, enabling better project detection, agent identification, and tool definitions.
 
+The Agent Shaker MCP server supports context-aware connections that allow multiple developers to work on the same project with different agent identities. Each developer can configure their VS Code to connect as a specific agent on a specific project.
+
 ## Configuration Structure
 
 ### 1. **MCP Servers Section**
@@ -241,6 +243,145 @@ Global MCP client settings.
 
 VS Code-specific integration settings for terminal environment and task detection.
 
+## Multi-Developer Scenario
+
+### Example: E-Commerce Platform Team
+
+Suppose you have a project "E-Commerce Platform" with two developers:
+- **Alice** - Frontend Developer (React Frontend Agent)
+- **Bob** - Backend Developer (Node Backend Agent)
+
+Each developer configures their VS Code with different agent/project context:
+
+**Alice's `.vscode/mcp.json`:**
+```json
+{
+  "servers": {
+    "agent-shaker": {
+      "type": "http",
+      "url": "http://localhost:8080?project_id=550e8400-e29b-41d4-a716-446655440001&agent_id=660e8400-e29b-41d4-a716-446655440001"
+    }
+  }
+}
+```
+
+**Bob's `.vscode/mcp.json`:**
+```json
+{
+  "servers": {
+    "agent-shaker": {
+      "type": "http",
+      "url": "http://localhost:8080?project_id=550e8400-e29b-41d4-a716-446655440001&agent_id=660e8400-e29b-41d4-a716-446655440002"
+    }
+  }
+}
+```
+
+Now when Alice asks VS Code Copilot about her tasks, it returns only frontend tasks assigned to her agent. Bob gets only backend tasks.
+
+## URL Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `project_id` | UUID of the project to work on |
+| `agent_id` | UUID of the agent identity for this connection |
+
+## Alternative: Using Headers
+
+You can also pass context via HTTP headers:
+- `X-Project-ID`: Project UUID
+- `X-Agent-ID`: Agent UUID
+
+## Available MCP Tools
+
+### Context-Aware Tools (use configured project/agent automatically)
+
+| Tool | Description | Requires |
+|------|-------------|----------|
+| `get_my_identity` | Get current agent identity and project info | project_id or agent_id |
+| `get_my_project` | Get assigned project details with task summary | project_id |
+| `get_my_tasks` | Get tasks assigned to this agent | agent_id |
+| `update_my_status` | Update agent status (idle, working, blocked, offline) | agent_id |
+| `claim_task` | Claim a task and start working on it | agent_id |
+| `complete_task` | Mark a task as done | agent_id |
+
+### General Tools (work without context)
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List all projects in the system |
+| `get_project` | Get details of a specific project |
+| `list_agents` | List all agents, optionally filtered by project |
+| `get_agent` | Get details of a specific agent |
+| `list_tasks` | List tasks, optionally filtered by project/agent/status |
+| `create_task` | Create a new task in a project |
+| `update_task_status` | Update the status of a task |
+| `list_contexts` | List documentation/contexts for a project |
+| `add_context` | Add documentation or context to a project |
+| `get_dashboard` | Get dashboard statistics and overview |
+
+## Getting Project and Agent IDs
+
+### From the Web UI
+1. Go to the Agent Shaker dashboard
+2. Navigate to your project
+3. Click on an agent to view MCP setup instructions
+4. Download the generated `mcp.json` file
+
+### From the API
+```bash
+# List all projects
+curl http://localhost:8080/api/projects
+
+# List agents for a project
+curl http://localhost:8080/api/projects/{project_id}/agents
+```
+
+### From MCP Tools
+```bash
+# Using MCP protocol
+curl -X POST http://localhost:8080 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}'
+```
+
+## Example Workflows
+
+### Workflow 1: Agent Checks Identity
+```
+User: "Who am I and what project am I working on?"
+AI calls: get_my_identity
+Response: Shows agent name, role, project name, and status
+```
+
+### Workflow 2: Agent Gets Tasks
+```
+User: "What tasks are assigned to me?"
+AI calls: get_my_tasks
+Response: Lists all tasks assigned to the configured agent
+```
+
+### Workflow 3: Agent Claims a Task
+```
+User: "I want to work on task 770e8400-e29b-41d4-a716-446655440001"
+AI calls: claim_task with task_id
+Response: Task claimed and status set to in_progress
+```
+
+### Workflow 4: Agent Completes Task
+```
+User: "I finished the product listing page task"
+AI calls: complete_task with task_id
+Response: Task marked as done
+```
+
+### Workflow 5: Agent Updates Status
+```
+User: "I'm blocked waiting for API documentation"
+AI calls: update_my_status with status="blocked"
+Response: Agent status updated
+```
+
 ## Usage
 
 ### 1. **Download the Configuration**
@@ -267,6 +408,53 @@ After placing the file, restart VS Code to load the configuration.
 ### 4. **Verify Connection**
 
 The MCP server should automatically connect. Check the VS Code output panel for MCP-related logs.
+
+## Quick Setup
+
+1. **Start the MCP server:**
+   ```bash
+   docker-compose up -d
+   ./server.exe
+   ```
+
+2. **Create/copy mcp.json to your project:**
+   ```bash
+   mkdir -p .vscode
+   # Download from Agent Shaker UI or create manually
+   ```
+
+3. **Reload VS Code** to pick up the MCP configuration
+
+4. **Test the connection:**
+   - Open VS Code Chat (Copilot)
+   - Ask: "What's my agent identity?"
+   - You should see your configured agent and project info
+
+## Troubleshooting
+
+### Configuration Not Loading
+- Ensure the file is named `mcp.json` and placed in `.vscode/` directory
+- Check for JSON syntax errors
+- Restart VS Code after making changes
+
+### Connection Failures
+- Verify the server URL is correct
+- Check that the MCP server is running
+- Review the `globalSettings.connectionTimeout` value
+
+### Tool Execution Issues
+- Verify endpoint URLs are correct
+- Check authentication settings if enabled
+- Review tool parameters match the API requirements
+
+### "No project_id or agent_id configured"
+Your mcp.json URL doesn't include the context parameters. Add `?project_id=UUID&agent_id=UUID` to the URL.
+
+### "405 Method Not Allowed"
+Make sure you're connecting to the MCP endpoint (port 8080 root) not the REST API endpoint.
+
+### "Database not connected"
+The MCP server needs a PostgreSQL connection. Check that docker-compose is running and DATABASE_URL is set correctly.
 
 ## Benefits
 
@@ -303,40 +491,6 @@ The MCP server should automatically connect. Check the VS Code output panel for 
 - ✅ VS Code terminal integration
 - ✅ Security and logging configuration
 - ✅ Development settings
-
-## Example Use Cases
-
-### 1. **Copilot Agent Identity**
-The agent information allows GitHub Copilot to understand its role and capabilities in the project.
-
-### 2. **Automated Task Management**
-Tools like `get_my_tasks` and `update_task_status` enable automated task workflows.
-
-### 3. **Project Context Sharing**
-The `add_context` and `get_project_contexts` tools enable documentation sharing between agents.
-
-### 4. **Real-time Collaboration**
-WebSocket endpoint enables real-time updates for task and agent status changes.
-
-### 5. **Multi-Agent Coordination**
-The `get_project_agents` tool helps agents discover and coordinate with each other.
-
-## Troubleshooting
-
-### Configuration Not Loading
-- Ensure the file is named `mcp.json` and placed in `.vscode/` directory
-- Check for JSON syntax errors
-- Restart VS Code after making changes
-
-### Connection Failures
-- Verify the server URL is correct
-- Check that the MCP server is running
-- Review the `globalSettings.connectionTimeout` value
-
-### Tool Execution Issues
-- Verify endpoint URLs are correct
-- Check authentication settings if enabled
-- Review tool parameters match the API requirements
 
 ## Related Documentation
 

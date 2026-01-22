@@ -899,10 +899,14 @@ get_project_contexts() {
     const mcpVSCodeJson = computed(() => {
       if (!mcpSetupAgent.value || !project.value) return ''
       
+      // Build MCP URL with project and agent context
+      const baseUrl = mcpApiUrl.value.replace('/api', '')
+      const mcpUrl = `${baseUrl}?project_id=${project.value.id}&agent_id=${mcpSetupAgent.value.id}`
+      
       const config = {
         "mcpServers": {
           "agent-shaker": {
-            "url": mcpApiUrl.value,
+            "url": mcpUrl,
             "type": "http",
             "metadata": {
               "name": "Agent Shaker MCP Server",
@@ -986,11 +990,36 @@ get_project_contexts() {
             },
             "tools": [
               {
+                "name": "get_my_identity",
+                "description": "Get your agent identity and assigned project from MCP connection",
+                "category": "identity"
+              },
+              {
+                "name": "get_my_project",
+                "description": "Get details of your assigned project",
+                "category": "project"
+              },
+              {
                 "name": "get_my_tasks",
                 "description": "Get tasks assigned to this agent",
                 "category": "task-management",
                 "endpoint": `/agents/${mcpSetupAgent.value.id}/tasks`,
                 "method": "GET"
+              },
+              {
+                "name": "claim_task",
+                "description": "Claim a task and set it to in_progress",
+                "category": "task-management"
+              },
+              {
+                "name": "complete_task",
+                "description": "Mark a task as done",
+                "category": "task-management"
+              },
+              {
+                "name": "update_my_status",
+                "description": "Update your agent status (idle, working, blocked, offline)",
+                "category": "status"
               },
               {
                 "name": "update_task_status",

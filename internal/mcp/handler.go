@@ -126,6 +126,14 @@ type Session struct {
 	ID         string
 	CreatedAt  time.Time
 	ClientInfo map[string]interface{}
+	ProjectID  string
+	AgentID    string
+}
+
+// MCPContext holds the current request context (project/agent)
+type MCPContext struct {
+	ProjectID string
+	AgentID   string
 }
 
 func NewMCPHandler(db *database.DB) *MCPHandler {
@@ -134,42 +142,68 @@ func NewMCPHandler(db *database.DB) *MCPHandler {
 	}
 }
 
+// extractContext extracts project_id and agent_id from URL params or headers
+func (h *MCPHandler) extractContext(r *http.Request) MCPContext {
+	ctx := MCPContext{}
+
+	// Try URL query parameters first
+	ctx.ProjectID = r.URL.Query().Get("project_id")
+	ctx.AgentID = r.URL.Query().Get("agent_id")
+
+	// Override with headers if present
+	if headerProjectID := r.Header.Get("X-Project-ID"); headerProjectID != "" {
+		ctx.ProjectID = headerProjectID
+	}
+	if headerAgentID := r.Header.Get("X-Agent-ID"); headerAgentID != "" {
+		ctx.AgentID = headerAgentID
+	}
+
+	return ctx
+}
+
 // HandleMCP handles the main MCP endpoint with SSE support
 func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	// Set CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Project-ID, X-Agent-ID")
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// Extract context from URL/headers
+	ctx := h.extractContext(r)
+	if ctx.ProjectID != "" || ctx.AgentID != "" {
+		log.Printf("MCP Context: project_id=%s, agent_id=%s", ctx.ProjectID, ctx.AgentID)
+	}
+
 	// Check for SSE request (GET with Accept: text/event-stream)
 	if r.Method == "GET" {
 		accept := r.Header.Get("Accept")
 		if accept == "text/event-stream" {
-			h.handleSSE(w, r)
+			h.handleSSE(w, r, ctx)
 			return
 		}
 		// Return server info for plain GET
-		h.handleServerInfo(w, r)
+		h.handleServerInfo(w, r, ctx)
 		return
 	}
 
 	// Handle POST requests (JSON-RPC)
 	if r.Method == "POST" {
-		h.handleJSONRPC(w, r)
+		h.handleJSONRPC(w, r, ctx)
 		return
 	}
 
 	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
-func (h *MCPHandler) handleServerInfo(w http.ResponseWriter, r *http.Request) {
+func (h *MCPHandler) handleServerInfo(w http.ResponseWriter, r *http.Request, ctx MCPContext) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+
+	info := map[string]interface{}{
 		"name":            "agent-shaker",
 		"version":         "1.0.0",
 		"protocolVersion": "2024-11-05",
@@ -177,10 +211,20 @@ func (h *MCPHandler) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 			"tools":     map[string]bool{"listChanged": false},
 			"resources": map[string]bool{"subscribe": false, "listChanged": false},
 		},
-	})
+	}
+
+	// Add context info if present
+	if ctx.ProjectID != "" || ctx.AgentID != "" {
+		info["context"] = map[string]string{
+			"project_id": ctx.ProjectID,
+			"agent_id":   ctx.AgentID,
+		}
+	}
+
+	json.NewEncoder(w).Encode(info)
 }
 
-func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
+func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request, ctx MCPContext) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -193,16 +237,18 @@ func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create session
+	// Create session with context
 	sessionID := uuid.New().String()
 	session := &Session{
 		ID:        sessionID,
 		CreatedAt: time.Now(),
+		ProjectID: ctx.ProjectID,
+		AgentID:   ctx.AgentID,
 	}
 	h.sessions.Store(sessionID, session)
 	defer h.sessions.Delete(sessionID)
 
-	log.Printf("MCP SSE connection established: %s", sessionID)
+	log.Printf("MCP SSE connection established: %s (project=%s, agent=%s)", sessionID, ctx.ProjectID, ctx.AgentID)
 
 	// Send initial endpoint message
 	endpointMsg := fmt.Sprintf("event: endpoint\ndata: /mcp/message?sessionId=%s\n\n", sessionID)
@@ -227,28 +273,28 @@ func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
+func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request, ctx MCPContext) {
 	var req JSONRPCRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.sendError(w, nil, -32700, "Parse error", err.Error())
 		return
 	}
 
-	log.Printf("MCP Request: method=%s, id=%v", req.Method, req.ID)
+	log.Printf("MCP Request: method=%s, id=%v, project=%s, agent=%s", req.Method, req.ID, ctx.ProjectID, ctx.AgentID)
 
 	var result interface{}
 	var rpcErr *JSONRPCError
 
 	switch req.Method {
 	case "initialize":
-		result, rpcErr = h.handleInitialize(req.Params)
+		result, rpcErr = h.handleInitialize(req.Params, ctx)
 	case "initialized":
 		// Client notification that initialization is complete
 		result = map[string]interface{}{}
 	case "tools/list":
-		result, rpcErr = h.handleToolsList()
+		result, rpcErr = h.handleToolsList(ctx)
 	case "tools/call":
-		result, rpcErr = h.handleToolsCall(req.Params)
+		result, rpcErr = h.handleToolsCall(req.Params, ctx)
 	case "resources/list":
 		result, rpcErr = h.handleResourcesList()
 	case "resources/read":
@@ -266,7 +312,7 @@ func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 	h.sendResponse(w, req.ID, result, rpcErr)
 }
 
-func (h *MCPHandler) handleInitialize(params json.RawMessage) (interface{}, *JSONRPCError) {
+func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (interface{}, *JSONRPCError) {
 	// Parse client info if provided
 	var clientParams struct {
 		ProtocolVersion string                 `json:"protocolVersion"`
@@ -277,9 +323,10 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage) (interface{}, *JSO
 		json.Unmarshal(params, &clientParams)
 	}
 
-	log.Printf("MCP Initialize - Client: %v, Protocol: %s", clientParams.ClientInfo, clientParams.ProtocolVersion)
+	log.Printf("MCP Initialize - Client: %v, Protocol: %s, Project: %s, Agent: %s",
+		clientParams.ClientInfo, clientParams.ProtocolVersion, ctx.ProjectID, ctx.AgentID)
 
-	return InitializeResult{
+	result := InitializeResult{
 		ProtocolVersion: "2024-11-05",
 		Capabilities: ServerCapabilities{
 			Tools: &ToolsCapability{
@@ -294,11 +341,87 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage) (interface{}, *JSO
 			Name:    "agent-shaker",
 			Version: "1.0.0",
 		},
-	}, nil
+	}
+
+	return result, nil
 }
 
-func (h *MCPHandler) handleToolsList() (interface{}, *JSONRPCError) {
+func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError) {
 	tools := []Tool{
+		// Context-aware tools (use configured project/agent automatically)
+		{
+			Name:        "get_my_identity",
+			Description: "Get the current agent's identity and assigned project based on MCP connection configuration",
+			InputSchema: InputSchema{
+				Type:       "object",
+				Properties: map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "get_my_project",
+			Description: "Get details of the project assigned to this MCP connection (requires project_id in connection URL)",
+			InputSchema: InputSchema{
+				Type:       "object",
+				Properties: map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "get_my_tasks",
+			Description: "Get tasks assigned to the current agent (requires agent_id in connection URL)",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional status filter (pending, in_progress, done, blocked)",
+					},
+				},
+			},
+		},
+		{
+			Name:        "update_my_status",
+			Description: "Update the current agent's status (requires agent_id in connection URL)",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "New status: idle, working, blocked, offline",
+						"enum":        []string{"idle", "working", "blocked", "offline"},
+					},
+				},
+				Required: []string{"status"},
+			},
+		},
+		{
+			Name:        "claim_task",
+			Description: "Claim (assign to self) a task from the project (requires agent_id in connection URL)",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The task ID to claim",
+					},
+				},
+				Required: []string{"task_id"},
+			},
+		},
+		{
+			Name:        "complete_task",
+			Description: "Mark a task as done (requires agent_id in connection URL)",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The task ID to complete",
+					},
+				},
+				Required: []string{"task_id"},
+			},
+		},
+		// General tools (for exploring all data)
 		{
 			Name:        "list_projects",
 			Description: "List all projects in the system",
@@ -472,7 +595,7 @@ func (h *MCPHandler) handleToolsList() (interface{}, *JSONRPCError) {
 	return ToolsListResult{Tools: tools}, nil
 }
 
-func (h *MCPHandler) handleToolsCall(params json.RawMessage) (interface{}, *JSONRPCError) {
+func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (interface{}, *JSONRPCError) {
 	var callParams ToolCallParams
 	if err := json.Unmarshal(params, &callParams); err != nil {
 		return nil, &JSONRPCError{
@@ -482,12 +605,26 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage) (interface{}, *JSON
 		}
 	}
 
-	log.Printf("MCP Tool Call: %s with args %v", callParams.Name, callParams.Arguments)
+	log.Printf("MCP Tool Call: %s with args %v (project=%s, agent=%s)", callParams.Name, callParams.Arguments, ctx.ProjectID, ctx.AgentID)
 
 	var resultText string
 	var isError bool
 
 	switch callParams.Name {
+	// Context-aware tools
+	case "get_my_identity":
+		resultText, isError = h.executeGetMyIdentity(ctx)
+	case "get_my_project":
+		resultText, isError = h.executeGetMyProject(ctx)
+	case "get_my_tasks":
+		resultText, isError = h.executeGetMyTasks(callParams.Arguments, ctx)
+	case "update_my_status":
+		resultText, isError = h.executeUpdateMyStatus(callParams.Arguments, ctx)
+	case "claim_task":
+		resultText, isError = h.executeClaimTask(callParams.Arguments, ctx)
+	case "complete_task":
+		resultText, isError = h.executeCompleteTask(callParams.Arguments, ctx)
+	// General tools
 	case "list_projects":
 		resultText, isError = h.executeListProjects()
 	case "get_project":
@@ -1043,4 +1180,283 @@ func (h *MCPHandler) sendError(w http.ResponseWriter, id interface{}, code int, 
 		Message: message,
 		Data:    data,
 	})
+}
+
+// Context-aware tool implementations
+
+func (h *MCPHandler) executeGetMyIdentity(ctx MCPContext) (string, bool) {
+	identity := map[string]interface{}{
+		"configured": ctx.ProjectID != "" || ctx.AgentID != "",
+	}
+
+	if ctx.ProjectID != "" {
+		identity["project_id"] = ctx.ProjectID
+		// Fetch project details
+		if h.db != nil {
+			var name, description, status string
+			err := h.db.QueryRow("SELECT name, description, status FROM projects WHERE id = $1", ctx.ProjectID).
+				Scan(&name, &description, &status)
+			if err == nil {
+				identity["project"] = map[string]string{
+					"name":        name,
+					"description": description,
+					"status":      status,
+				}
+			}
+		}
+	}
+
+	if ctx.AgentID != "" {
+		identity["agent_id"] = ctx.AgentID
+		// Fetch agent details
+		if h.db != nil {
+			var name, role, status string
+			var projectID interface{}
+			err := h.db.QueryRow("SELECT name, role, status, project_id FROM agents WHERE id = $1", ctx.AgentID).
+				Scan(&name, &role, &status, &projectID)
+			if err == nil {
+				identity["agent"] = map[string]interface{}{
+					"name":       name,
+					"role":       role,
+					"status":     status,
+					"project_id": projectID,
+				}
+			}
+		}
+	}
+
+	if !identity["configured"].(bool) {
+		identity["message"] = "No project_id or agent_id configured in MCP connection URL. Add ?project_id=UUID&agent_id=UUID to the URL."
+	}
+
+	result, _ := json.MarshalIndent(identity, "", "  ")
+	return string(result), false
+}
+
+func (h *MCPHandler) executeGetMyProject(ctx MCPContext) (string, bool) {
+	if ctx.ProjectID == "" {
+		return `{"error": "No project_id configured in MCP connection URL. Add ?project_id=UUID to the URL."}`, true
+	}
+
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	var id, name, description, status string
+	var createdAt, updatedAt interface{}
+	err := h.db.QueryRow("SELECT id, name, description, status, created_at, updated_at FROM projects WHERE id = $1", ctx.ProjectID).
+		Scan(&id, &name, &description, &status, &createdAt, &updatedAt)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Project not found: %s"}`, err.Error()), true
+	}
+
+	// Get agents count
+	var agentCount int
+	h.db.QueryRow("SELECT COUNT(*) FROM agents WHERE project_id = $1", ctx.ProjectID).Scan(&agentCount)
+
+	// Get tasks summary
+	var pendingTasks, inProgressTasks, doneTasks, blockedTasks int
+	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'pending'", ctx.ProjectID).Scan(&pendingTasks)
+	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'in_progress'", ctx.ProjectID).Scan(&inProgressTasks)
+	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'done'", ctx.ProjectID).Scan(&doneTasks)
+	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'blocked'", ctx.ProjectID).Scan(&blockedTasks)
+
+	result, _ := json.MarshalIndent(map[string]interface{}{
+		"id":          id,
+		"name":        name,
+		"description": description,
+		"status":      status,
+		"created_at":  createdAt,
+		"updated_at":  updatedAt,
+		"agents":      agentCount,
+		"tasks": map[string]int{
+			"pending":     pendingTasks,
+			"in_progress": inProgressTasks,
+			"done":        doneTasks,
+			"blocked":     blockedTasks,
+			"total":       pendingTasks + inProgressTasks + doneTasks + blockedTasks,
+		},
+	}, "", "  ")
+	return string(result), false
+}
+
+func (h *MCPHandler) executeGetMyTasks(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if ctx.AgentID == "" {
+		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
+	}
+
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	query := "SELECT id, project_id, title, description, status, priority, assigned_to, created_at, updated_at FROM tasks WHERE assigned_to = $1"
+	queryArgs := []interface{}{ctx.AgentID}
+
+	if args != nil {
+		if status, ok := args["status"].(string); ok && status != "" {
+			query += " AND status = $2"
+			queryArgs = append(queryArgs, status)
+		}
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.db.Query(query, queryArgs...)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	defer rows.Close()
+
+	var tasks []map[string]interface{}
+	for rows.Next() {
+		var id, projectID, title, status, priority string
+		var description, assignedTo interface{}
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &projectID, &title, &description, &status, &priority, &assignedTo, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		tasks = append(tasks, map[string]interface{}{
+			"id":          id,
+			"project_id":  projectID,
+			"title":       title,
+			"description": description,
+			"status":      status,
+			"priority":    priority,
+			"assigned_to": assignedTo,
+			"created_at":  createdAt,
+			"updated_at":  updatedAt,
+		})
+	}
+
+	result, _ := json.MarshalIndent(map[string]interface{}{
+		"agent_id": ctx.AgentID,
+		"count":    len(tasks),
+		"tasks":    tasks,
+	}, "", "  ")
+	return string(result), false
+}
+
+func (h *MCPHandler) executeUpdateMyStatus(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if ctx.AgentID == "" {
+		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
+	}
+
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	status, ok := args["status"].(string)
+	if !ok {
+		return `{"error": "status is required (idle, working, blocked, offline)"}`, true
+	}
+
+	validStatuses := map[string]bool{"idle": true, "working": true, "blocked": true, "offline": true}
+	if !validStatuses[status] {
+		return `{"error": "Invalid status. Must be one of: idle, working, blocked, offline"}`, true
+	}
+
+	query := "UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2"
+	result, err := h.db.Exec(query, status, ctx.AgentID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return `{"error": "Agent not found"}`, true
+	}
+
+	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
+		"success":  true,
+		"agent_id": ctx.AgentID,
+		"status":   status,
+	}, "", "  ")
+	return string(resultJSON), false
+}
+
+func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if ctx.AgentID == "" {
+		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
+	}
+
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	taskID, ok := args["task_id"].(string)
+	if !ok {
+		return `{"error": "task_id is required"}`, true
+	}
+
+	// Verify task exists and get its current assignment
+	var currentAssignment interface{}
+	var title string
+	err := h.db.QueryRow("SELECT title, assigned_to FROM tasks WHERE id = $1", taskID).Scan(&title, &currentAssignment)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
+	}
+
+	// Update task assignment and set status to in_progress
+	query := "UPDATE tasks SET assigned_to = $1, status = 'in_progress', updated_at = NOW() WHERE id = $2"
+	_, err = h.db.Exec(query, ctx.AgentID, taskID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
+		"success":  true,
+		"task_id":  taskID,
+		"title":    title,
+		"agent_id": ctx.AgentID,
+		"status":   "in_progress",
+		"message":  "Task claimed and status set to in_progress",
+	}, "", "  ")
+	return string(resultJSON), false
+}
+
+func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if ctx.AgentID == "" {
+		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
+	}
+
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	taskID, ok := args["task_id"].(string)
+	if !ok {
+		return `{"error": "task_id is required"}`, true
+	}
+
+	// Verify task is assigned to this agent
+	var assignedTo interface{}
+	var title string
+	err := h.db.QueryRow("SELECT title, assigned_to FROM tasks WHERE id = $1", taskID).Scan(&title, &assignedTo)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
+	}
+
+	// Allow completion only if assigned to this agent (or unassigned)
+	if assignedTo != nil && assignedTo != ctx.AgentID {
+		assignedStr, _ := assignedTo.(string)
+		if assignedStr != "" && assignedStr != ctx.AgentID {
+			return fmt.Sprintf(`{"error": "Task is assigned to a different agent: %s"}`, assignedStr), true
+		}
+	}
+
+	// Update task status to done
+	query := "UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1"
+	_, err = h.db.Exec(query, taskID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
+		"success":  true,
+		"task_id":  taskID,
+		"title":    title,
+		"agent_id": ctx.AgentID,
+		"status":   "done",
+		"message":  "Task marked as completed",
+	}, "", "  ")
+	return string(resultJSON), false
 }
