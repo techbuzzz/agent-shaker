@@ -65,10 +65,15 @@
             <div v-for="agent in agents" :key="agent.id" class="bg-white p-6 rounded-lg shadow-sm">
               <div class="flex justify-between items-start mb-4">
                 <h4 class="text-lg font-semibold text-gray-900">{{ agent.name }}</h4>
-                <span :class=" [
-                  'px-3 py-1 rounded-full text-sm font-semibold',
-                  agent.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                ]">{{ agent.status }}</span>
+                <div class="flex items-center gap-2">
+                  <button @click="openMcpSetup(agent)" class="p-1.5 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded transition-colors" title="Download MCP Setup">
+                    ⚙️
+                  </button>
+                  <span :class=" [
+                    'px-3 py-1 rounded-full text-sm font-semibold',
+                    agent.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                  ]">{{ agent.status }}</span>
+                </div>
               </div>
               <div class="space-y-2">
                 <p class="text-gray-600"><strong class="font-medium text-gray-900">Role:</strong> <span :class=" [
@@ -351,6 +356,101 @@
         </div>
       </div>
     </div>
+
+    <!-- MCP Setup Modal -->
+    <div v-if="showMcpSetupModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showMcpSetupModal = false">
+      <div class="bg-white p-6 rounded-lg max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-start mb-6">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-gradient-to-br from-purple-500 to-blue-600 rounded-xl flex items-center justify-center">
+              <span class="text-white text-lg">⚙️</span>
+            </div>
+            <div>
+              <h3 class="text-xl font-semibold text-gray-900">MCP Setup Files</h3>
+              <p class="text-sm text-gray-500">Configure your IDE for agent: {{ mcpSetupAgent?.name }}</p>
+            </div>
+          </div>
+          <button @click="showMcpSetupModal = false" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+        </div>
+        
+        <div class="space-y-6">
+          <!-- Quick Setup -->
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <h4 class="font-semibold text-blue-900 mb-2">🚀 Quick Setup</h4>
+            <p class="text-sm text-blue-800 mb-3">Download all files and extract to your project's root folder:</p>
+            <button @click="downloadAllMcpFiles" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md font-medium transition-colors flex items-center gap-2">
+              <span>📦</span> Download All Setup Files (.zip)
+            </button>
+          </div>
+
+          <!-- VS Code Settings -->
+          <div class="border border-gray-200 rounded-lg overflow-hidden">
+            <div class="bg-gray-50 px-4 py-3 flex justify-between items-center border-b border-gray-200">
+              <div>
+                <h4 class="font-semibold text-gray-900">.vscode/settings.json</h4>
+                <p class="text-xs text-gray-500">Environment variables for your workspace</p>
+              </div>
+              <button @click="downloadMcpFile('settings')" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
+                <span>📥</span> Download
+              </button>
+            </div>
+            <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-48"><code>{{ mcpSettingsJson }}</code></pre>
+          </div>
+
+          <!-- GitHub Copilot Instructions -->
+          <div class="border border-gray-200 rounded-lg overflow-hidden">
+            <div class="bg-gray-50 px-4 py-3 flex justify-between items-center border-b border-gray-200">
+              <div>
+                <h4 class="font-semibold text-gray-900">.github/copilot-instructions.md</h4>
+                <p class="text-xs text-gray-500">Instructions for GitHub Copilot agent identity</p>
+              </div>
+              <button @click="downloadMcpFile('copilot')" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
+                <span>📥</span> Download
+              </button>
+            </div>
+            <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-48"><code>{{ mcpCopilotInstructions }}</code></pre>
+          </div>
+
+          <!-- PowerShell Helper Script -->
+          <div class="border border-gray-200 rounded-lg overflow-hidden">
+            <div class="bg-gray-50 px-4 py-3 flex justify-between items-center border-b border-gray-200">
+              <div>
+                <h4 class="font-semibold text-gray-900">scripts/mcp-agent.ps1</h4>
+                <p class="text-xs text-gray-500">PowerShell helper script for API interactions</p>
+              </div>
+              <button @click="downloadMcpFile('powershell')" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
+                <span>📥</span> Download
+              </button>
+            </div>
+            <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-48"><code>{{ mcpPowerShellScript }}</code></pre>
+          </div>
+
+          <!-- Bash Helper Script -->
+          <div class="border border-gray-200 rounded-lg overflow-hidden">
+            <div class="bg-gray-50 px-4 py-3 flex justify-between items-center border-b border-gray-200">
+              <div>
+                <h4 class="font-semibold text-gray-900">scripts/mcp-agent.sh</h4>
+                <p class="text-xs text-gray-500">Bash helper script for Linux/Mac</p>
+              </div>
+              <button @click="downloadMcpFile('bash')" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
+                <span>📥</span> Download
+              </button>
+            </div>
+            <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-48"><code>{{ mcpBashScript }}</code></pre>
+          </div>
+        </div>
+
+        <div class="mt-6 pt-4 border-t border-gray-200">
+          <h4 class="font-semibold text-gray-900 mb-2">📖 Setup Instructions</h4>
+          <ol class="list-decimal list-inside text-sm text-gray-600 space-y-2">
+            <li>Download the setup files using the buttons above or the "Download All" option</li>
+            <li>Extract/copy the files to your project's root directory</li>
+            <li>Restart VS Code to apply the environment variables</li>
+            <li>Start using Copilot with your agent identity!</li>
+          </ol>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -381,6 +481,8 @@ export default {
     const showAddContextModal = ref(false)
     const showViewContextModal = ref(false)
     const showDeleteConfirm = ref(false)
+    const showMcpSetupModal = ref(false)
+    const mcpSetupAgent = ref(null)
 
     const newAgent = ref({ name: '', role: 'frontend', team: '' })
     const newTask = ref({ title: '', description: '', agent_id: '', priority: 'medium' })
@@ -434,6 +536,220 @@ export default {
       }
 
       return filtered
+    })
+
+    // MCP Setup computed properties
+    const mcpApiUrl = computed(() => {
+      return `${window.location.protocol}//${window.location.host}/api`
+    })
+
+    const mcpSettingsJson = computed(() => {
+      if (!mcpSetupAgent.value || !project.value) return ''
+      return JSON.stringify({
+        "terminal.integrated.env.windows": {
+          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
+          "MCP_AGENT_ID": mcpSetupAgent.value.id,
+          "MCP_PROJECT_ID": project.value.id,
+          "MCP_PROJECT_NAME": project.value.name,
+          "MCP_API_URL": mcpApiUrl.value
+        },
+        "terminal.integrated.env.linux": {
+          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
+          "MCP_AGENT_ID": mcpSetupAgent.value.id,
+          "MCP_PROJECT_ID": project.value.id,
+          "MCP_PROJECT_NAME": project.value.name,
+          "MCP_API_URL": mcpApiUrl.value
+        },
+        "terminal.integrated.env.osx": {
+          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
+          "MCP_AGENT_ID": mcpSetupAgent.value.id,
+          "MCP_PROJECT_ID": project.value.id,
+          "MCP_PROJECT_NAME": project.value.name,
+          "MCP_API_URL": mcpApiUrl.value
+        }
+      }, null, 2)
+    })
+
+    const mcpCopilotInstructions = computed(() => {
+      if (!mcpSetupAgent.value || !project.value) return ''
+      return `# Agent Identity and MCP Integration
+
+## Your Identity
+- **Agent Name**: ${mcpSetupAgent.value.name}
+- **Agent ID**: ${mcpSetupAgent.value.id}
+- **Role**: ${mcpSetupAgent.value.role}
+- **Team**: ${mcpSetupAgent.value.team || 'Not specified'}
+- **Project**: ${project.value.name}
+- **Project ID**: ${project.value.id}
+
+## MCP API Configuration
+- **API URL**: ${mcpApiUrl.value}
+
+## Your Responsibilities
+As the **${mcpSetupAgent.value.role}** agent, you should:
+${mcpSetupAgent.value.role === 'frontend' ? `
+- Focus on UI/UX implementation
+- Work with Vue.js, React, or other frontend frameworks
+- Implement responsive designs and accessibility
+- Handle client-side state management
+` : `
+- Focus on API development and backend logic
+- Work with databases and data models
+- Implement business logic and validations
+- Handle server-side security and authentication
+`}
+
+## Task Management
+When working on tasks, use these API endpoints:
+
+### Get Your Tasks
+\`\`\`bash
+curl "${mcpApiUrl.value}/agents/${mcpSetupAgent.value.id}/tasks"
+\`\`\`
+
+### Update Task Status
+\`\`\`bash
+curl -X PUT "${mcpApiUrl.value}/tasks/{task_id}/status" \\
+  -H "Content-Type: application/json" \\
+  -d '{"status": "in_progress"}'
+\`\`\`
+
+Status options: \`pending\`, \`in_progress\`, \`done\`, \`blocked\`
+
+### Add Context/Documentation
+\`\`\`bash
+curl -X POST "${mcpApiUrl.value}/contexts" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "project_id": "${project.value.id}",
+    "agent_id": "${mcpSetupAgent.value.id}",
+    "title": "Implementation Notes",
+    "content": "Your documentation here...",
+    "tags": ["documentation", "${mcpSetupAgent.value.role}"]
+  }'
+\`\`\`
+
+## Collaboration Guidelines
+1. Always check for existing tasks before starting new work
+2. Update task status when you begin and complete work
+3. Document important decisions and implementation details
+4. Check other agents' contexts to avoid conflicts
+`
+    })
+
+    const mcpPowerShellScript = computed(() => {
+      if (!mcpSetupAgent.value || !project.value) return ''
+      return `# MCP Agent Helper Script for PowerShell
+# Agent: ${mcpSetupAgent.value.name}
+# Project: ${project.value.name}
+
+$MCP_API_URL = "${mcpApiUrl.value}"
+$MCP_AGENT_ID = "${mcpSetupAgent.value.id}"
+$MCP_PROJECT_ID = "${project.value.id}"
+
+function Get-MyTasks {
+    Invoke-RestMethod -Uri "$MCP_API_URL/agents/$MCP_AGENT_ID/tasks" -Method GET
+}
+
+function Update-TaskStatus {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$TaskId,
+        [Parameter(Mandatory=$true)]
+        [ValidateSet("pending", "in_progress", "done", "blocked")]
+        [string]$Status
+    )
+    
+    $body = @{ status = $Status } | ConvertTo-Json
+    Invoke-RestMethod -Uri "$MCP_API_URL/tasks/$TaskId/status" -Method PUT -Body $body -ContentType "application/json"
+}
+
+function Add-Context {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Title,
+        [Parameter(Mandatory=$true)]
+        [string]$Content,
+        [string[]]$Tags = @()
+    )
+    
+    $body = @{
+        project_id = $MCP_PROJECT_ID
+        agent_id = $MCP_AGENT_ID
+        title = $Title
+        content = $Content
+        tags = $Tags
+    } | ConvertTo-Json
+    
+    Invoke-RestMethod -Uri "$MCP_API_URL/contexts" -Method POST -Body $body -ContentType "application/json"
+}
+
+function Get-ProjectContexts {
+    Invoke-RestMethod -Uri "$MCP_API_URL/projects/$MCP_PROJECT_ID/contexts" -Method GET
+}
+
+# Usage examples:
+# Get-MyTasks
+# Update-TaskStatus -TaskId "task-uuid" -Status "in_progress"
+# Add-Context -Title "API Design" -Content "Documentation content..." -Tags @("api", "design")
+`
+    })
+
+    const mcpBashScript = computed(() => {
+      if (!mcpSetupAgent.value || !project.value) return ''
+      return `#!/bin/bash
+# MCP Agent Helper Script for Bash
+# Agent: ${mcpSetupAgent.value.name}
+# Project: ${project.value.name}
+
+MCP_API_URL="${mcpApiUrl.value}"
+MCP_AGENT_ID="${mcpSetupAgent.value.id}"
+MCP_PROJECT_ID="${project.value.id}"
+
+# Get tasks assigned to this agent
+get_my_tasks() {
+    curl -s "$MCP_API_URL/agents/$MCP_AGENT_ID/tasks" | jq .
+}
+
+# Update task status
+# Usage: update_task_status <task_id> <status>
+# Status: pending, in_progress, done, blocked
+update_task_status() {
+    local task_id=$1
+    local status=$2
+    curl -s -X PUT "$MCP_API_URL/tasks/$task_id/status" \\
+        -H "Content-Type: application/json" \\
+        -d "{\\"status\\": \\"$status\\"}" | jq .
+}
+
+# Add context/documentation
+# Usage: add_context "Title" "Content" "tag1,tag2"
+add_context() {
+    local title=$1
+    local content=$2
+    local tags=$3
+    
+    curl -s -X POST "$MCP_API_URL/contexts" \\
+        -H "Content-Type: application/json" \\
+        -d "{
+            \\"project_id\\": \\"$MCP_PROJECT_ID\\",
+            \\"agent_id\\": \\"$MCP_AGENT_ID\\",
+            \\"title\\": \\"$title\\",
+            \\"content\\": \\"$content\\",
+            \\"tags\\": [\\"$tags\\"]
+        }" | jq .
+}
+
+# Get project contexts
+get_project_contexts() {
+    curl -s "$MCP_API_URL/projects/$MCP_PROJECT_ID/contexts" | jq .
+}
+
+# Usage examples:
+# get_my_tasks
+# update_task_status "task-uuid" "in_progress"
+# add_context "API Design" "Documentation content..." "api,design"
+`
     })
 
     onMounted(() => {
@@ -586,13 +902,88 @@ export default {
       return new Date(dateString).toLocaleString()
     }
 
+    // MCP Setup functions
+    const openMcpSetup = (agent) => {
+      mcpSetupAgent.value = agent
+      showMcpSetupModal.value = true
+    }
+
+    const downloadFile = (filename, content, mimeType = 'text/plain') => {
+      const blob = new Blob([content], { type: mimeType })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+
+    const downloadMcpFile = (fileType) => {
+      switch (fileType) {
+        case 'settings':
+          downloadFile('settings.json', mcpSettingsJson.value, 'application/json')
+          break
+        case 'copilot':
+          downloadFile('copilot-instructions.md', mcpCopilotInstructions.value, 'text/markdown')
+          break
+        case 'powershell':
+          downloadFile('mcp-agent.ps1', mcpPowerShellScript.value, 'text/plain')
+          break
+        case 'bash':
+          downloadFile('mcp-agent.sh', mcpBashScript.value, 'text/plain')
+          break
+      }
+    }
+
+    const downloadAllMcpFiles = async () => {
+      // Using JSZip for creating zip files
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+      
+      // Add files to zip with proper folder structure
+      zip.file('.vscode/settings.json', mcpSettingsJson.value)
+      zip.file('.github/copilot-instructions.md', mcpCopilotInstructions.value)
+      zip.file('scripts/mcp-agent.ps1', mcpPowerShellScript.value)
+      zip.file('scripts/mcp-agent.sh', mcpBashScript.value)
+      
+      // Add a README
+      const readmeContent = `# MCP Setup Files for ${mcpSetupAgent.value.name}
+
+## Contents
+- \`.vscode/settings.json\` - VS Code environment variables
+- \`.github/copilot-instructions.md\` - GitHub Copilot agent instructions
+- \`scripts/mcp-agent.ps1\` - PowerShell helper script
+- \`scripts/mcp-agent.sh\` - Bash helper script
+
+## Setup Instructions
+1. Extract this zip to your project's root directory
+2. Restart VS Code to apply environment variables
+3. Start using Copilot with your agent identity!
+
+## Agent Details
+- **Name**: ${mcpSetupAgent.value.name}
+- **ID**: ${mcpSetupAgent.value.id}
+- **Role**: ${mcpSetupAgent.value.role}
+- **Project**: ${project.value.name}
+- **API URL**: ${mcpApiUrl.value}
+`
+      zip.file('MCP_SETUP_README.md', readmeContent)
+      
+      // Generate and download zip
+      const content = await zip.generateAsync({ type: 'blob' })
+      const agentSlug = mcpSetupAgent.value.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      downloadFile(`mcp-setup-${agentSlug}.zip`, content, 'application/zip')
+    }
+
     return {
       project,
       agents,
       tasks,
       contexts,
-      loading: projectStore.loading,
-      error: projectStore.error,
+      loading: computed(() => projectStore.loading),
+      error: computed(() => projectStore.error),
       isConnected,
       activeTab,
       showAddAgentModal,
@@ -600,6 +991,8 @@ export default {
       showAddContextModal,
       showViewContextModal,
       showDeleteConfirm,
+      showMcpSetupModal,
+      mcpSetupAgent,
       newAgent,
       newTask,
       contextForm,
@@ -610,6 +1003,10 @@ export default {
       contextTagFilter,
       uniqueTags,
       filteredContexts,
+      mcpSettingsJson,
+      mcpCopilotInstructions,
+      mcpPowerShellScript,
+      mcpBashScript,
       handleAddAgent,
       handleAddTask,
       handleSaveContext,
@@ -621,7 +1018,10 @@ export default {
       renderMarkdown,
       getAgentName,
       getTaskTitle,
-      formatDate
+      formatDate,
+      openMcpSetup,
+      downloadMcpFile,
+      downloadAllMcpFiles
     }
   }
 }

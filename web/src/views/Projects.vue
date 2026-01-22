@@ -135,7 +135,7 @@
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useProjectStore } from '../stores/projectStore'
 
 export default {
@@ -194,9 +194,9 @@ export default {
     }
 
     return {
-      projects: projectStore.projects,
-      loading: projectStore.loading,
-      error: projectStore.error,
+      projects: computed(() => projectStore.projects),
+      loading: computed(() => projectStore.loading),
+      error: computed(() => projectStore.error),
       showCreateModal,
       newProject,
       handleCreateProject,
