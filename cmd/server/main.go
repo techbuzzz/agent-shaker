@@ -52,7 +52,6 @@ func main() {
 	taskHandler := handlers.NewTaskHandler(db, hub)
 	contextHandler := handlers.NewContextHandler(db, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
-	docsHandler := handlers.NewDocsHandler()
 
 	// Setup router
 	r := mux.NewRouter()
@@ -85,10 +84,6 @@ func main() {
 	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
 	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
 
-	// Documentation
-	api.HandleFunc("/docs", docsHandler.ListDocs).Methods("GET")
-	api.HandleFunc("/docs/{path:.*}", docsHandler.GetDoc).Methods("GET")
-
 	// WebSocket
 	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
 
@@ -109,11 +104,10 @@ func main() {
 				"agents": "/api/agents",
 				"tasks": "/api/tasks",
 				"contexts": "/api/contexts",
-				"docs": "/api/docs",
 				"websocket": "/ws",
 				"health": "/health"
 			},
-			"documentation": "/api/docs"
+			"repository": "https://github.com/techbuzzz/agent-shaker"
 		}`))
 	}).Methods("GET")
 
@@ -164,7 +158,7 @@ func main() {
 	log.Println("  API:        http://localhost:" + port + "/api")
 	log.Println("  WebSocket:  ws://localhost:" + port + "/ws")
 	log.Println("  Health:     http://localhost:" + port + "/health")
-	log.Println("  Docs:       http://localhost:" + port + "/api/docs")
+	log.Println("  GitHub:     https://github.com/techbuzzz/agent-shaker")
 
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)

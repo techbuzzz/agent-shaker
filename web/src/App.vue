@@ -44,14 +44,15 @@
               <span class="hidden sm:inline">Tasks</span>
               <span class="sm:hidden">📋</span>
             </router-link>
-            <router-link
-              to="/docs"
+            <a
+              href="https://github.com/techbuzzz/agent-shaker"
+              target="_blank"
+              rel="noopener noreferrer"
               class="nav-link"
-              active-class="nav-link-active"
             >
-              <span class="hidden sm:inline">Docs</span>
-              <span class="sm:hidden">📚</span>
-            </router-link>
+              <span class="hidden sm:inline">GitHub</span>
+              <span class="sm:hidden">⭐</span>
+            </a>
           </div>
         </div>
       </div>
