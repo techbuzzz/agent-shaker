@@ -112,7 +112,7 @@ export default {
         formData.value = {
           title: newTask.title,
           description: newTask.description || '',
-          agent_id: newTask.agent_id,
+          agent_id: newTask.assigned_to || newTask.agent_id || '',
           priority: newTask.priority,
           status: newTask.status
         }
@@ -133,7 +133,17 @@ export default {
         alert('Please fill in all required fields')
         return
       }
-      emit('save', { ...formData.value })
+      
+      // Map agent_id to assigned_to for API
+      const taskData = {
+        title: formData.value.title,
+        description: formData.value.description,
+        assigned_to: formData.value.agent_id,
+        priority: formData.value.priority,
+        status: formData.value.status
+      }
+      
+      emit('save', taskData)
     }
 
     return {

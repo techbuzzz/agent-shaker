@@ -130,7 +130,7 @@
               v-for="task in tasks"
               :key="task.id"
               :task="task"
-              :agent-name="getAgentName(task.agent_id)"
+              :agent-name="getAgentName(task.assigned_to)"
               @edit="editTask"
               @delete="confirmDeleteTask"
             />
