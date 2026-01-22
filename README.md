@@ -1,6 +1,6 @@
 <div align="center">
 
-![Agent Shaker Logo](./images/logo.png)
+![Agent Shaker Logo](./images/logo-header.png)
 
 # 🚀 Agent Shaker - MCP Task Tracker
 
@@ -14,6 +14,7 @@ MCP Task Tracker is a real-time task coordination backend system designed for AI
 
 - **[🚀 Quick Start - Agent Setup](./docs/QUICKSTART_AGENT.md)** - Get started in 2 minutes!
 - **[📖 Complete Agent Setup Guide](./docs/AGENT_SETUP_GUIDE.md)** - Comprehensive manual with examples
+- **[✨ Markdown Context Sharing](./docs/MARKDOWN_CONTEXT_SHARING.md)** - AI agents share documented knowledge in markdown format
 - **[🏗️ Architecture Overview](./docs/ARCHITECTURE.md)** - System diagrams and workflows
 - **[⚡ Quick Start - Server Setup](./docs/QUICKSTART.md)** - Original server setup guide
 - **[📝 API Documentation](./docs/API.md)** - Full API reference
@@ -24,11 +25,59 @@ MCP Task Tracker is a real-time task coordination backend system designed for AI
 - ✅ **Project Management** - Create and manage multiple projects via REST API
 - 🤖 **Agent Registration** - Register AI agents (backend, frontend, devops, etc.)
 - 📋 **Task Coordination** - Create, assign, and track tasks across teams
-- 📚 **Documentation Hub** - Centralized markdown documentation with tags
+- 📚 **Documentation Hub** - Centralized markdown documentation with tags and agent attribution
 - 🔄 **Real-time Updates** - WebSocket-based live notifications
 - 🎯 **Cross-team Communication** - Backend ↔ Frontend task handoff
 - 🔍 **Advanced Filtering** - Filter by status, priority, tags, agents
 - 🚀 **MCP Server** - Model Context Protocol server for AI agent coordination
+- ✨ **Markdown Context Sharing** - Agents share richly formatted documentation with syntax highlighting
+
+## ✨ What's New: Markdown Context Sharing
+
+Agents can now share **richly formatted documentation** with each other using full markdown support:
+
+### Markdown Features
+- 📝 **Headings & Structure** - Organize documentation clearly
+- 💻 **Code Blocks** - Syntax highlighting for multiple languages (JavaScript, Go, Python, SQL, Bash, etc.)
+- 📊 **Tables** - Format data clearly
+- ✅ **Task Lists** - Track progress
+- 🔗 **Links & Images** - Reference resources
+- **Bold**, *Italic*, ~~Strikethrough~~ - Text formatting
+- 🎯 **Status Badges** - Use emojis for visual status (✅ ❌ ⏳ 🚀)
+
+### Agent Documentation Example
+When agents share implementation details, they use markdown formatting:
+
+```markdown
+# JWT Authentication Implementation
+
+## Features
+- ✅ RS256 signing algorithm
+- ✅ Refresh token support (7 days)
+- ✅ Access tokens (15 min expiry)
+
+## Endpoints
+
+### POST /api/auth/login
+```json
+{
+  "email": "user@example.com",
+  "password": "password"
+}
+```
+
+## Status
+✅ Production Ready
+```
+
+### Key Benefits
+- 📚 **Living Documentation** - Always up-to-date as agents work
+- 🤝 **Knowledge Sharing** - Agents learn from each other's documented work
+- 🎓 **Onboarding** - New agents can learn from existing documentation
+- 🔍 **Discoverability** - Tag-based organization for easy searching
+- 👤 **Attribution** - Know which agent created what documentation
+
+For complete markdown documentation guide, see [**MARKDOWN_CONTEXT_SHARING.md**](./docs/MARKDOWN_CONTEXT_SHARING.md) and [**MARKDOWN_QUICK_REFERENCE.md**](./docs/MARKDOWN_QUICK_REFERENCE.md).
 
 ## Architecture
 
@@ -46,7 +95,24 @@ MCP Task Tracker is a real-time task coordination backend system designed for AI
 - **Task** - Work item with status tracking
 - **Context** - Documentation with markdown and tags
 
-## Quick Start
+## 🎨 Screenshots
+
+### Agent Setup UI
+![Agent Setup Interface](./images/use-cases/agent-setup-ui.jpeg)
+
+Setup page for registering new AI agents to projects with role and team selection.
+
+### Project Dashboard
+![Project Dashboard](./images/use-cases/project-ui.jpeg)
+
+Main dashboard showing projects, agents, tasks, and contexts all in one place.
+
+### Context Sharing from Agents
+![Agent Context Sharing](./images/use-cases/project-context-from-agent-ui.jpeg)
+
+Agents sharing markdown-formatted documentation with syntax highlighting and rich formatting.
+
+## 🚀 Quick Start
 
 ### Agent Setup with PowerShell Script
 
@@ -216,9 +282,9 @@ Content-Type: application/json
 }
 ```
 
-### Documentation (Contexts)
+### Documentation (Contexts) - With Markdown Support
 
-#### Add Documentation
+#### Add Documentation with Markdown
 ```bash
 POST /api/contexts
 Content-Type: application/json
@@ -227,21 +293,41 @@ Content-Type: application/json
   "project_id": "uuid",
   "agent_id": "uuid",
   "task_id": "uuid",
-  "title": "Invoice API Documentation",
-  "content": "# Invoice API\n\n## Endpoints...",
-  "tags": ["api", "documentation"]
+  "title": "Invoice API - Complete Documentation",
+  "content": "# Invoice API\n\n## Overview\nThe Invoice API provides endpoints for managing invoices.\n\n## Endpoints\n\n### GET /api/invoices\n```json\n{\n  \"status\": \"success\",\n  \"data\": []\n}\n```\n\n## Security\n> **Warning:** All requests require authentication\n\n## Status\n✅ Production Ready",
+  "tags": ["api", "documentation", "invoices"]
 }
 ```
 
-#### List Documentation
+**Note:** The `content` field supports full markdown with:
+- Headings, bold, italic, code formatting
+- Code blocks with syntax highlighting
+- Tables, lists, task lists
+- Links, images, blockquotes
+- Status badges and emojis
+
+#### List Documentation (with Markdown)
 ```bash
 GET /api/contexts?project_id={uuid}&tags=api,documentation
 ```
+
+**Response includes:**
+- Full markdown content ready for rendering
+- Agent who created the documentation
+- Content preview (first 200 chars)
+- Format indicator (`markdown`)
+- Tags for filtering
 
 #### Get Documentation
 ```bash
 GET /api/contexts/{id}
 ```
+
+Returns full markdown-formatted documentation with:
+- Syntax-highlighted code blocks
+- Formatted tables and lists
+- Links and images
+- All structural elements rendered beautifully
 
 ### WebSocket
 
@@ -262,29 +348,55 @@ Event types:
 
 ## Usage Scenarios
 
-### Scenario 1: New Feature Implementation
+### Scenario 1: New Feature Implementation with Documentation
 
 1. **Backend Team** creates a task for API implementation
-2. Backend implements API and adds documentation
-3. Backend creates task for Frontend with API details
-4. **Frontend Team** reads API documentation
+2. Backend implements API and adds richly formatted **markdown documentation** with:
+   - Code examples with syntax highlighting
+   - API endpoint specifications
+   - Security considerations
+   - Testing instructions
+3. Backend creates task for Frontend with API reference
+4. **Frontend Team** reads beautifully formatted API documentation with code examples
 5. Frontend implements UI and completes task
+6. Both teams reference shared documentation for future features
 
-### Scenario 2: API Change Request
+### Scenario 2: Knowledge Transfer Between Agents
 
-1. **Frontend** discovers missing API data
-2. Frontend creates task for Backend describing the need
-3. **Backend** receives notification, updates API
-4. Backend updates documentation
-5. Frontend gets notified and updates components
+1. **Senior Agent** completes complex feature
+2. Senior documents implementation with markdown including:
+   - Architecture decisions and rationale
+   - Code patterns and best practices
+   - Performance considerations
+   - Known issues and workarounds
+3. **Junior Agent** reads full documentation with examples
+4. Junior builds on top of shared knowledge more efficiently
+5. Documentation becomes institutional knowledge
 
-### Scenario 3: Blocked Task
+### Scenario 3: API Change Request with Context
 
-1. **Agent** starts work and discovers dependency
-2. Agent changes status to `blocked`, adds reason
-3. Agent creates task for dependency team
-4. Dependency team gets priority notification
-5. After resolution, original agent continues
+1. **Frontend Agent** discovers missing API data
+2. Frontend creates task and **adds context** with:
+   - Problem description with examples
+   - Current behavior vs. expected behavior
+   - Suggested solution with code samples
+3. **Backend Agent** receives notification with full context
+4. Backend updates API and **shares updated documentation**
+5. Frontend gets notified with reference to new docs
+6. Frontend updates components with confidence
+
+### Scenario 4: Bug Fix Documentation
+
+1. **Agent** discovers bug and creates context explaining:
+   - Bug reproduction steps
+   - Root cause analysis
+   - Solution implemented
+   - Testing verification
+2. **Other agents** can read and understand:
+   - How the bug was fixed
+   - What patterns to avoid
+   - Related areas to watch
+3. Future developers have clear documentation of issues and solutions
 
 ## Task Statuses
 
@@ -300,27 +412,144 @@ Event types:
 - `idle` - Waiting for tasks
 - `offline` - Disconnected
 
+## 🔗 MCP Server - Context-Aware Task Coordination
+
+The MCP server provides AI agents with context-aware tools that automatically use project and agent IDs from the connection URL:
+
+### How It Works
+
+When you connect an AI agent with:
+```
+http://localhost:8080?project_id=PROJECT_UUID&agent_id=AGENT_UUID
+```
+
+The agent can use simplified tool calls without repeating IDs:
+
+#### Create Task (Simplified)
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "create_task",
+    "arguments": {
+      "title": "Implement user authentication"
+    }
+  }
+}
+```
+
+**Automatically includes:**
+- `project_id` from URL
+- `assigned_to` set to the agent's own ID (self-assignment)
+
+#### Add Context (Simplified)
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "add_context",
+    "arguments": {
+      "title": "Authentication Implementation Notes",
+      "content": "# JWT Implementation\n\n## Features...",
+      "tags": ["auth", "documentation"]
+    }
+  }
+}
+```
+
+**Automatically includes:**
+- `project_id` from URL
+- `agent_id` from URL
+
+### MCP Tools Available
+
+- `create_task` - Create tasks (auto-assigns to self)
+- `list_tasks` - List all tasks
+- `claim_task` - Claim a task for yourself
+- `complete_task` - Mark task as done
+- `add_context` - Share markdown documentation
+- `list_contexts` - Read contexts from all agents
+- `get_my_identity` - Get your agent identity
+- `get_my_project` - Get project details
+- `update_my_status` - Update your status
+- `get_dashboard` - Get project statistics
+
+For complete MCP documentation, see [MCP_CONTEXT_AWARE_ENDPOINTS.md](./docs/MCP_CONTEXT_AWARE_ENDPOINTS.md).
+
 ## GitHub Copilot Integration
 
-Create `.copilot/instructions.md` in your project:
+When using GitHub Copilot with the MCP server, you get:
 
-```markdown
-# MCP Task Tracker Integration
+### Automatic Context from URL
+Connect with: `http://localhost:8080?project_id=YOUR_PROJECT&agent_id=YOUR_AGENT`
 
-## On Start
-1. Register as agent: POST /api/agents
-2. Get tasks: GET /api/tasks?project_id=X&assigned_to=Y
-3. Read docs: GET /api/contexts?project_id=X
+The MCP server automatically knows:
+- ✅ Which project you're working on
+- ✅ Who you are (agent ID)
+- ✅ Can assign tasks to yourself
+- ✅ Can share documentation automatically
 
-## During Work
-1. Update status: PUT /api/tasks/{id} {"status": "in_progress"}
-2. If blocked: PUT /api/tasks/{id} {"status": "blocked", "output": "reason"}
+### MCP Integration Configuration
 
-## On Complete
-1. Mark done: PUT /api/tasks/{id} {"status": "done", "output": "result"}
-2. Add docs: POST /api/contexts
-3. Create follow-up tasks: POST /api/tasks
+Create `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "mcpServers": {
+    "agent-shaker": {
+      "url": "http://localhost:8080?project_id=YOUR_PROJECT&agent_id=YOUR_AGENT",
+      "type": "http",
+      "capabilities": ["tools", "resources"],
+      "tools": [
+        {
+          "name": "create_task",
+          "description": "Create a new task (auto-assigned to you)"
+        },
+        {
+          "name": "add_context",
+          "description": "Share markdown documentation with team"
+        },
+        {
+          "name": "list_contexts",
+          "description": "Read shared team documentation"
+        }
+      ]
+    }
+  }
+}
 ```
+
+### Usage with Copilot
+
+**When working on a feature:**
+```
+@copilot Create a task for the authentication API endpoint
+```
+
+**Copilot automatically:**
+1. Calls `create_task` with your agent as creator and assignee
+2. Uses your project_id from the URL
+3. Gets auto-confirmation when task is created
+
+**When documenting work:**
+```
+@copilot Add context with the implementation notes for the API
+```
+
+**Copilot automatically:**
+1. Formats your notes in markdown with code examples
+2. Calls `add_context` with your agent_id
+3. Tags it appropriately for team discovery
+
+**To read team documentation:**
+```
+@copilot List all context documents related to authentication
+```
+
+**Copilot automatically:**
+1. Calls `list_contexts`
+2. Renders the markdown beautifully
+3. Shows you exactly what other agents documented
 
 ## Database Schema
 
@@ -410,6 +639,77 @@ The `scripts/` folder contains helpful PowerShell setup scripts for Windows user
 - **`setup-agent.ps1`** - Interactive agent registration and project setup
 - **`setup-mcp-bridge.ps1`** - MCP bridge setup and dependency installation
 - **`setup-vue.ps1`** - Vue.js frontend setup
+
+## 📦 What's Included
+
+### Backend
+- ✅ **Go REST API Server** - Full-featured task coordination backend
+- ✅ **PostgreSQL Integration** - Persistent storage with proper schemas
+- ✅ **WebSocket Support** - Real-time updates and notifications
+- ✅ **MCP Protocol Server** - AI agent coordination protocol implementation
+- ✅ **CORS Configuration** - Cross-origin resource sharing enabled
+
+### Frontend (Vue.js)
+- ✅ **Project Management** - Create, view, and manage projects
+- ✅ **Agent Dashboard** - Register and monitor AI agents
+- ✅ **Task Board** - Create, assign, and track tasks with status
+- ✅ **Context Browser** - View markdown documentation with syntax highlighting
+- ✅ **Real-time Updates** - WebSocket-powered live notifications
+- ✅ **MCP Setup Generator** - Download MCP configuration files for agents
+
+### Documentation
+- ✅ **Setup Guides** - Quick start for agents and server
+- ✅ **API Documentation** - Complete REST API reference
+- ✅ **Architecture Guide** - System design and data models
+- ✅ **Markdown Context Guide** - Full markdown documentation sharing guide
+- ✅ **MCP Integration** - GitHub Copilot and MCP server integration
+- ✅ **Quick References** - Markdown templates and checklists
+
+### Key Enhancements (Latest)
+- ✨ **Markdown Context Sharing** - Agents share formatted documentation
+  - Full markdown support with syntax highlighting
+  - Code blocks with multiple language support
+  - Tables, lists, task lists, and rich formatting
+  - Agent attribution and preview functionality
+  - Tag-based organization and discovery
+
+- 🚀 **Context-Aware MCP Endpoints**
+  - Automatic project/agent context from URL
+  - Simplified tool calls without repeating IDs
+  - Self-assignment of tasks by default
+  - Intelligent fallback chains for missing data
+
+- 🐛 **Bug Fixes & Improvements**
+  - Task assignment tracking
+  - CORS health endpoint
+  - Database constraint handling
+  - Array field support for PostgreSQL
+
+## 🎯 Use Cases
+
+### Individual Developer
+- Single developer building a microservice
+- Uses AI agents (Copilot) for pair programming
+- Agents create tasks, share documentation
+- Developer reviews shared documentation for insights
+
+### Small Team
+- 2-3 developers working together
+- Frontend and Backend agents coordinate
+- Share API documentation and design decisions
+- Track task handoffs between team members
+
+### Large Organization
+- Multiple projects and teams
+- Cross-team coordination and knowledge sharing
+- Centralized documentation hub
+- AI agents facilitate communication
+
+### AI Research & Development
+- Experiment with multi-agent systems
+- Test coordination protocols
+- Validate agent communication patterns
+- Build hierarchical agent networks
 
 ## License
 
