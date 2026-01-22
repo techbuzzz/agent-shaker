@@ -16,10 +16,49 @@
             </div>
             <p class="text-gray-600 mt-2">{{ project.description }}</p>
           </div>
-          <span :class=" [
-            'px-3 py-1 rounded-full text-sm font-semibold uppercase',
-            project.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-          ]">{{ project.status }}</span>
+          <div class="flex items-center gap-3">
+            <span :class=" [
+              'px-3 py-1 rounded-full text-sm font-semibold uppercase',
+              project.status === 'active' ? 'bg-green-100 text-green-800' : 
+              project.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+              'bg-gray-100 text-gray-800'
+            ]">{{ project.status }}</span>
+            <div class="relative">
+              <button @click="showProjectMenu = !showProjectMenu" class="p-2 hover:bg-gray-100 rounded-md transition-colors">
+                <span class="text-xl">⋮</span>
+              </button>
+              <div v-if="showProjectMenu" class="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-10 min-w-[200px]">
+                <button 
+                  v-if="project.status === 'active'"
+                  @click="handleProjectAction('completed')" 
+                  class="w-full px-4 py-2 text-left hover:bg-gray-50 flex items-center gap-2 text-blue-600"
+                >
+                  <span>✓</span> Mark as Completed
+                </button>
+                <button 
+                  v-if="project.status !== 'archived'"
+                  @click="handleProjectAction('archived')" 
+                  class="w-full px-4 py-2 text-left hover:bg-gray-50 flex items-center gap-2 text-gray-600"
+                >
+                  <span>📦</span> Archive Project
+                </button>
+                <button 
+                  v-if="project.status === 'archived' || project.status === 'completed'"
+                  @click="handleProjectAction('active')" 
+                  class="w-full px-4 py-2 text-left hover:bg-gray-50 flex items-center gap-2 text-green-600"
+                >
+                  <span>↻</span> Reactivate
+                </button>
+                <div class="border-t border-gray-200 my-1"></div>
+                <button 
+                  @click="confirmDeleteProject" 
+                  class="w-full px-4 py-2 text-left hover:bg-red-50 flex items-center gap-2 text-red-600"
+                >
+                  <span>🗑️</span> Delete Project
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="flex gap-0 mb-6 border-b border-gray-200">
@@ -422,7 +461,6 @@
           </div>
           <button @click="showMcpSetupModal = false" class="text-gray-400 hover:text-gray-600 text-2xl">×</button>
         </div>
-        
         <div class="space-y-6">
           <!-- Quick Setup -->
           <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -501,6 +539,23 @@
         </div>
       </div>
     </div>
+
+    <!-- Delete Project Confirmation Modal -->
+    <div v-if="showDeleteProjectConfirm" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50" @click.self="showDeleteProjectConfirm = false">
+      <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4">
+        <h3 class="text-xl font-semibold mb-4 text-red-600">⚠️ Delete Project</h3>
+        <p class="text-gray-600 mb-2">Are you sure you want to permanently delete the project "<strong>{{ project?.name }}</strong>"?</p>
+        <p class="text-sm text-orange-600 mb-6">⚠️ This action cannot be undone. All agents, tasks, and contexts will be deleted.</p>
+        <div class="flex justify-end gap-3">
+          <button @click="showDeleteProjectConfirm = false" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-md font-medium transition-colors">
+            Cancel
+          </button>
+          <button @click="handleDeleteProject" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md font-medium transition-colors">
+            Delete Project
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -540,6 +595,8 @@ export default {
     const showDeleteAgentConfirm = ref(false)
     const showDeleteTaskConfirm = ref(false)
     const showMcpSetupModal = ref(false)
+    const showProjectMenu = ref(false)
+    const showDeleteProjectConfirm = ref(false)
     const mcpSetupAgent = ref(null)
 
     const agentForm = ref({ name: '', role: 'frontend', team: '', status: 'active' })
@@ -1185,6 +1242,97 @@ get_project_contexts() {
       downloadFile(`mcp-setup-${agentSlug}.zip`, content, 'application/zip')
     }
 
+    // Project action handlers
+    const handleProjectAction = async (newStatus) => {
+      showProjectMenu.value = false
+      
+      try {
+        await projectStore.updateProjectStatus(route.params.id, newStatus)
+        
+        let message = ''
+        if (newStatus === 'completed') {
+          message = 'Project marked as completed! 🎉'
+        } else if (newStatus === 'archived') {
+          message = 'Project archived successfully'
+        } else if (newStatus === 'active') {
+          message = 'Project reactivated successfully'
+        }
+        
+        if (message) {
+          // You can add a toast notification here if you have one
+          console.log(message)
+        }
+      } catch (error) {
+        console.error('Failed to update project status:', error)
+        alert('Failed to update project status. Please try again.')
+      }
+    }
+
+    const confirmDeleteProject = () => {
+      showProjectMenu.value = false
+      showDeleteProjectConfirm.value = true
+    }
+
+    const handleDeleteProject = async () => {
+      try {
+        await projectStore.deleteProject(route.params.id)
+        showDeleteProjectConfirm.value = false
+        
+        // Navigate back to projects list
+        window.location.href = '/'
+      } catch (error) {
+        console.error('Failed to delete project:', error)
+        alert('Failed to delete project. Please try again.')
+      }
+    }
+
+    // Close project menu when clicking outside
+    const handleClickOutside = (event) => {
+      if (showProjectMenu.value && !event.target.closest('button')) {
+        showProjectMenu.value = false
+      }
+    }
+
+    onMounted(() => {
+      const projectId = route.params.id
+      projectStore.fetchProject(projectId)
+      agentStore.fetchProjectAgents(projectId)
+      taskStore.fetchProjectTasks(projectId)
+      contextStore.fetchProjectContexts(projectId)
+      
+      // Connect to WebSocket for real-time updates
+      connect()
+      
+      // Add listeners for real-time updates
+      on('task_update', (data) => {
+        console.log('Task update received:', data)
+        taskStore.fetchProjectTasks(projectId)
+      })
+      
+      on('agent_update', (data) => {
+        console.log('Agent update received:', data)
+        agentStore.fetchProjectAgents(projectId)
+      })
+      
+      on('context_added', (data) => {
+        console.log('Context added:', data)
+        contextStore.fetchProjectContexts(projectId)
+      })
+
+      on('project_status_update', (data) => {
+        console.log('Project status update received:', data)
+        projectStore.fetchProject(projectId)
+      })
+
+      // Add click listener for closing menu
+      document.addEventListener('click', handleClickOutside)
+    })
+
+    onUnmounted(() => {
+      disconnect()
+      document.removeEventListener('click', handleClickOutside)
+    })
+
     return {
       project,
       agents,
@@ -1202,6 +1350,8 @@ get_project_contexts() {
       showDeleteAgentConfirm,
       showDeleteTaskConfirm,
       showMcpSetupModal,
+      showProjectMenu,
+      showDeleteProjectConfirm,
       mcpSetupAgent,
       agentForm,
       editingAgent,
@@ -1247,7 +1397,10 @@ get_project_contexts() {
       formatDate,
       openMcpSetup,
       downloadMcpFile,
-      downloadAllMcpFiles
+      downloadAllMcpFiles,
+      handleProjectAction,
+      confirmDeleteProject,
+      handleDeleteProject
     }
   }
 }

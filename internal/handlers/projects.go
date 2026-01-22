@@ -115,3 +115,66 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(project)
 }
+
+func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid project ID format", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate status
+	validStatuses := map[string]bool{
+		"active":    true,
+		"completed": true,
+		"archived":  true,
+	}
+	if !validStatuses[req.Status] {
+		http.Error(w, "Invalid status. Must be: active, completed, or archived", http.StatusBadRequest)
+		return
+	}
+
+	// Update project status
+	result, err := h.db.Exec(`
+		UPDATE projects 
+		SET status = $1, updated_at = $2
+		WHERE id = $3
+	`, req.Status, time.Now(), id)
+	if err != nil {
+		http.Error(w, "Failed to update project status", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Project not found", http.StatusNotFound)
+		return
+	}
+
+	// Fetch updated project
+	var project models.Project
+	err = h.db.QueryRow(`
+		SELECT id, name, description, status, created_at, updated_at
+		FROM projects
+		WHERE id = $1
+	`, id).Scan(&project.ID, &project.Name, &project.Description, &project.Status, &project.CreatedAt, &project.UpdatedAt)
+	if err != nil {
+		http.Error(w, "Failed to retrieve updated project", http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast project update via WebSocket
+	h.hub.BroadcastToProject(id, "project_status_update", project)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(project)
+}

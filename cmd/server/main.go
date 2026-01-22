@@ -67,6 +67,7 @@ func main() {
 	api.HandleFunc("/projects", projectHandler.CreateProject).Methods("POST")
 	api.HandleFunc("/projects", projectHandler.ListProjects).Methods("GET")
 	api.HandleFunc("/projects/{id}", projectHandler.GetProject).Methods("GET")
+	api.HandleFunc("/projects/{id}/status", projectHandler.UpdateProjectStatus).Methods("PUT")
 
 	// Agents
 	api.HandleFunc("/agents", agentHandler.CreateAgent).Methods("POST")

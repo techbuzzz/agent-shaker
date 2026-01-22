@@ -58,8 +58,20 @@
             <h3 class="text-xl font-semibold text-slate-900 group-hover:text-blue-600 transition-colors line-clamp-1">
               {{ project.name }}
             </h3>
-            <span :class="['inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium', project.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-800']">
-              <div :class="['w-1.5 h-1.5 rounded-full mr-1.5', project.status === 'active' ? 'bg-green-500' : 'bg-slate-400']"></div>
+            <span :class="[
+              'inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium',
+              project.status === 'active' ? 'bg-green-100 text-green-800' : 
+              project.status === 'completed' ? 'bg-blue-100 text-blue-800' :
+              project.status === 'archived' ? 'bg-gray-100 text-gray-800' :
+              'bg-slate-100 text-slate-800'
+            ]">
+              <div :class="[
+                'w-1.5 h-1.5 rounded-full mr-1.5',
+                project.status === 'active' ? 'bg-green-500' : 
+                project.status === 'completed' ? 'bg-blue-500' :
+                project.status === 'archived' ? 'bg-gray-500' :
+                'bg-slate-400'
+              ]"></div>
               {{ project.status }}
             </span>
           </div>

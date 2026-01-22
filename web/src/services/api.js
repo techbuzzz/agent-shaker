@@ -45,6 +45,9 @@ export default {
   deleteProject(id) {
     return api.delete(`/projects/${id}`)
   },
+  updateProjectStatus(id, status) {
+    return api.put(`/projects/${id}/status`, { status })
+  },
 
   // Agents
   getAgents(projectId = null) {

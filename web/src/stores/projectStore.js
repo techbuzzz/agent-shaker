@@ -94,6 +94,28 @@ export const useProjectStore = defineStore('projects', () => {
     }
   }
 
+  const updateProjectStatus = async (id, status) => {
+    loading.value = true
+    error.value = null
+    try {
+      const updatedProject = await api.updateProjectStatus(id, status)
+      const index = projects.value.findIndex(p => p.id === id)
+      if (index !== -1) {
+        projects.value[index] = updatedProject
+      }
+      if (currentProject.value?.id === id) {
+        currentProject.value = updatedProject
+      }
+      return updatedProject
+    } catch (err) {
+      error.value = err.message || 'Failed to update project status'
+      console.error('Error updating project status:', err)
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   const clearError = () => {
     error.value = null
   }
@@ -108,6 +130,7 @@ export const useProjectStore = defineStore('projects', () => {
     createProject,
     updateProject,
     deleteProject,
+    updateProjectStatus,
     clearError
   }
 })
