@@ -37,3 +37,4 @@ postgres_data/
 *.swp
 *.swo
 *~
+/.vs
