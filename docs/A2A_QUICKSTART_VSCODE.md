@@ -337,6 +337,12 @@ Test-NetConnection -ComputerName localhost -Port 8080
 - Check Agent Shaker logs in terminal
 - Verify database connection (if using PostgreSQL)
 
+**Discovery error: "cannot unmarshal object into Go struct field AgentCard.capabilities"?**
+- This error is fixed in Agent Shaker v1.0.0+
+- Agent Shaker now supports both array and object formats for capabilities
+- If you see this error, ensure you're running the latest version
+- The external agent you're discovering uses an alternative format that is now automatically handled
+
 ## Resources
 
 - [Full A2A Integration Guide](./A2A_INTEGRATION.md)

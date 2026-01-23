@@ -197,6 +197,38 @@ Check the status of a delegated task:
 
 ## Data Models
 
+### AgentCard
+
+The agent card describes the agent's capabilities and available endpoints. Agent Shaker supports **both standard and alternative capability formats** for maximum compatibility:
+
+**Standard Format (Array):**
+```json
+{
+  "name": "Agent Shaker",
+  "version": "1.0.0",
+  "capabilities": [
+    {"type": "task", "description": "Asynchronous task execution"},
+    {"type": "streaming", "description": "Real-time updates via SSE"}
+  ],
+  "endpoints": [...]
+}
+```
+
+**Alternative Format (Object) - Also Supported:**
+```json
+{
+  "name": "Some Agent",
+  "version": "1.0.0",
+  "capabilities": {
+    "task": "Asynchronous task execution",
+    "streaming": "Real-time updates via SSE"
+  },
+  "endpoints": [...]
+}
+```
+
+> **Note:** Agent Shaker automatically converts the object format to the standard array format during discovery. This ensures compatibility with various A2A implementations that may use different formats.
+
 ### SendMessageRequest
 
 ```json
@@ -393,10 +425,22 @@ curl -s http://localhost:8080/a2a/v1/artifacts | jq .
 - Disable buffering: `X-Accel-Buffering: no` header is set
 - Verify keepalive messages are being sent
 
-**Agent discovery fails**
+**Agent discovery fails with "cannot unmarshal object into Go struct field AgentCard.capabilities"**
+- This error indicates the external agent is using an alternative format for capabilities
+- Agent Shaker now supports both formats:
+  - Standard array format: `"capabilities": [{"type": "task", "description": "..."}]`
+  - Object format: `"capabilities": {"task": "...", "streaming": "..."}`
+- The error should be resolved in version 1.0.0+ automatically
+- If the issue persists, check the agent card response format:
+  ```bash
+  curl https://external-agent/.well-known/agent-card.json | jq .capabilities
+  ```
+
+**Agent discovery fails (general)**
 - Verify the target URL is correct
 - Check network connectivity
 - Ensure the agent exposes `/.well-known/agent-card.json`
+- Verify the agent card has required fields: `name`, `version`
 
 **MCP tools not showing A2A options**
 - Restart the MCP client connection
