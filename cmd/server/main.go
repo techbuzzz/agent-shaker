@@ -4,13 +4,16 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
+	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
+	"github.com/techbuzzz/agent-shaker/internal/task"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
@@ -56,6 +59,29 @@ func main() {
 	dashboardHandler := handlers.NewDashboardHandler(db)
 	mcpHandler := mcp.NewMCPHandler(db)
 
+	// A2A Protocol Setup
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:" + getPort()
+	}
+
+	// Create A2A task store and manager
+	tasksDir := os.Getenv("TASKS_DIR")
+	if tasksDir == "" {
+		tasksDir = "./data/tasks"
+	}
+	taskStore := task.NewMemoryStore(tasksDir)
+	taskManager := task.NewManager(taskStore, nil, baseURL)
+
+	// Create A2A context storage (bridges existing contexts to A2A artifacts)
+	contextStorage := a2aserver.NewDatabaseContextStorage(db)
+
+	// Create A2A handlers
+	agentCardHandler := a2aserver.NewAgentCardHandler("1.0.0", baseURL)
+	a2aHandler := a2aserver.NewA2AHandler(taskManager)
+	streamingHandler := a2aserver.NewStreamingHandler(taskManager)
+	artifactHandler := a2aserver.NewArtifactHandler(contextStorage, baseURL)
+
 	// Setup router
 	r := mux.NewRouter()
 
@@ -94,6 +120,9 @@ func main() {
 	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
 	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
 
+	// A2A Protocol routes
+	a2aserver.RegisterA2ARoutes(r, a2aHandler, streamingHandler, artifactHandler, agentCardHandler)
+
 	// WebSocket
 	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
 
@@ -131,6 +160,17 @@ func main() {
 		// WebSocket requests bypass all middleware
 		if req.URL.Path == "/ws" {
 			wsHandler.HandleWebSocket(w, req)
+			return
+		}
+
+		// A2A Protocol routes - handle with CORS
+		if req.URL.Path == "/.well-known/agent-card.json" ||
+			strings.HasPrefix(req.URL.Path, "/a2a/") {
+			middleware.Recovery(
+				middleware.Logger(
+					c.Handler(r),
+				),
+			).ServeHTTP(w, req)
 			return
 		}
 
@@ -177,12 +217,15 @@ func main() {
 	}
 
 	log.Printf("Server starting on port %s", port)
-	log.Println("MCP API Server - Endpoints:")
-	log.Println("  MCP:        http://localhost:" + port + "/ (Protocol endpoint)")
-	log.Println("  API:        http://localhost:" + port + "/api")
-	log.Println("  WebSocket:  ws://localhost:" + port + "/ws")
-	log.Println("  Health:     http://localhost:" + port + "/health")
-	log.Println("  GitHub:     https://github.com/techbuzzz/agent-shaker")
+	log.Println("Agent Shaker - Multi-Protocol AI Agent Platform")
+	log.Println("Endpoints:")
+	log.Println("  A2A Discovery: http://localhost:" + port + "/.well-known/agent-card.json")
+	log.Println("  A2A API:       http://localhost:" + port + "/a2a/v1")
+	log.Println("  MCP:           http://localhost:" + port + "/ (Protocol endpoint)")
+	log.Println("  REST API:      http://localhost:" + port + "/api")
+	log.Println("  WebSocket:     ws://localhost:" + port + "/ws")
+	log.Println("  Health:        http://localhost:" + port + "/health")
+	log.Println("  GitHub:        https://github.com/techbuzzz/agent-shaker")
 
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Server failed: %v", err)
@@ -197,4 +240,12 @@ func runMigrations(db *database.DB) error {
 
 	_, err = db.Exec(string(migrationSQL))
 	return err
+}
+
+func getPort() string {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	return port
 }

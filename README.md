@@ -15,7 +15,8 @@ MCP Task Tracker is a real-time task coordination backend system designed for AI
 - **[🚀 Quick Start - Agent Setup](./docs/QUICKSTART_AGENT.md)** - Get started in 2 minutes!
 - **[📖 Complete Agent Setup Guide](./docs/AGENT_SETUP_GUIDE.md)** - Comprehensive manual with examples
 - **[✨ Markdown Context Sharing](./docs/MARKDOWN_CONTEXT_SHARING.md)** - AI agents share documented knowledge in markdown format
-- **[🏗️ Architecture Overview](./docs/ARCHITECTURE.md)** - System diagrams and workflows
+- **[� A2A Protocol Integration](./docs/A2A_INTEGRATION.md)** *(NEW)* - Agent-to-Agent protocol guide
+- **[�🏗️ Architecture Overview](./docs/ARCHITECTURE.md)** - System diagrams and workflows
 - **[⚡ Quick Start - Server Setup](./docs/QUICKSTART.md)** - Original server setup guide
 - **[📝 API Documentation](./docs/API.md)** - Full API reference
 - **[📚 Complete Documentation](./docs/README.md)** - All documentation organized by category
@@ -31,6 +32,12 @@ MCP Task Tracker is a real-time task coordination backend system designed for AI
 - 🔍 **Advanced Filtering** - Filter by status, priority, tags, agents
 - 🚀 **MCP Server** - Model Context Protocol server for AI agent coordination
 - ✨ **Markdown Context Sharing** - Agents share richly formatted documentation with syntax highlighting
+- 🌐 **A2A Protocol Support** *(NEW)* - Agent-to-Agent protocol for inter-agent communication
+  - Agent discovery via `/.well-known/agent-card.json`
+  - Asynchronous task execution with status tracking
+  - Real-time streaming updates via SSE
+  - Context sharing as A2A artifacts
+  - Client capability to communicate with external A2A agents
 
 ## ✨ What's New: Markdown Context Sharing
 

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	a2aClient "github.com/techbuzzz/agent-shaker/internal/a2a/client"
+	a2aModels "github.com/techbuzzz/agent-shaker/internal/a2a/models"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 )
 
@@ -599,6 +602,65 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 				Properties: map[string]interface{}{},
 			},
 		},
+		// A2A Integration tools
+		{
+			Name:        "discover_a2a_agent",
+			Description: "Discover an external A2A agent by fetching its agent card. Returns the agent's capabilities, endpoints, and metadata.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"agent_url": map[string]interface{}{
+						"type":        "string",
+						"description": "The base URL of the A2A agent to discover (e.g., https://agent.example.com)",
+					},
+				},
+				Required: []string{"agent_url"},
+			},
+		},
+		{
+			Name:        "delegate_to_a2a_agent",
+			Description: "Delegate a task to an external A2A agent. The agent will process the message and return a task ID for tracking.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"agent_url": map[string]interface{}{
+						"type":        "string",
+						"description": "The base URL of the A2A agent",
+					},
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "The message/task content to send to the agent",
+					},
+					"wait_for_completion": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, wait for the task to complete before returning (default: false)",
+					},
+					"timeout_seconds": map[string]interface{}{
+						"type":        "integer",
+						"description": "Timeout in seconds when waiting for completion (default: 60)",
+					},
+				},
+				Required: []string{"agent_url", "message"},
+			},
+		},
+		{
+			Name:        "get_a2a_task_status",
+			Description: "Get the status of a task from an external A2A agent",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"agent_url": map[string]interface{}{
+						"type":        "string",
+						"description": "The base URL of the A2A agent",
+					},
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The task ID to check",
+					},
+				},
+				Required: []string{"agent_url", "task_id"},
+			},
+		},
 	}
 
 	return ToolsListResult{Tools: tools}, nil
@@ -654,6 +716,13 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		resultText, isError = h.executeAddContext(callParams.Arguments, ctx)
 	case "get_dashboard":
 		resultText, isError = h.executeGetDashboard()
+	// A2A Integration tools
+	case "discover_a2a_agent":
+		resultText, isError = h.executeDiscoverA2AAgent(callParams.Arguments)
+	case "delegate_to_a2a_agent":
+		resultText, isError = h.executeDelegateToA2AAgent(callParams.Arguments)
+	case "get_a2a_task_status":
+		resultText, isError = h.executeGetA2ATaskStatus(callParams.Arguments)
 	default:
 		return nil, &JSONRPCError{
 			Code:    -32601,
@@ -1264,6 +1333,151 @@ func (h *MCPHandler) executeGetDashboard() (string, bool) {
 		"blocked_tasks":     blockedTasks,
 	}, "", "  ")
 	return string(result), false
+}
+
+// A2A Integration tool implementations
+
+func (h *MCPHandler) executeDiscoverA2AAgent(args map[string]interface{}) (string, bool) {
+	agentURL, ok := args["agent_url"].(string)
+	if !ok || agentURL == "" {
+		return `{"error": "agent_url is required"}`, true
+	}
+
+	// Create A2A client and discover agent
+	client := createA2AClient()
+	card, err := client.Discover(context.Background(), agentURL)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to discover agent: %s"}`, err.Error()), true
+	}
+
+	result, _ := json.MarshalIndent(map[string]interface{}{
+		"success":      true,
+		"agent_url":    agentURL,
+		"name":         card.Name,
+		"description":  card.Description,
+		"version":      card.Version,
+		"capabilities": card.Capabilities,
+		"endpoints":    card.Endpoints,
+		"metadata":     card.Metadata,
+	}, "", "  ")
+	return string(result), false
+}
+
+func (h *MCPHandler) executeDelegateToA2AAgent(args map[string]interface{}) (string, bool) {
+	agentURL, ok := args["agent_url"].(string)
+	if !ok || agentURL == "" {
+		return `{"error": "agent_url is required"}`, true
+	}
+
+	message, ok := args["message"].(string)
+	if !ok || message == "" {
+		return `{"error": "message is required"}`, true
+	}
+
+	waitForCompletion := false
+	if wait, ok := args["wait_for_completion"].(bool); ok {
+		waitForCompletion = wait
+	}
+
+	timeoutSeconds := 60
+	if timeout, ok := args["timeout_seconds"].(float64); ok {
+		timeoutSeconds = int(timeout)
+	}
+
+	// Create A2A client
+	client := createA2AClient()
+
+	// Send message
+	req := &a2aModels.SendMessageRequest{
+		Message: a2aModels.Message{
+			Content: message,
+			Format:  "text",
+		},
+	}
+
+	resp, err := client.SendMessage(context.Background(), agentURL, req)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to send message: %s"}`, err.Error()), true
+	}
+
+	result := map[string]interface{}{
+		"success":    true,
+		"agent_url":  agentURL,
+		"task_id":    resp.TaskID,
+		"status":     resp.Status,
+		"created_at": resp.CreatedAt,
+	}
+
+	// If waiting for completion, poll until done
+	if waitForCompletion {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+		defer cancel()
+
+		task, err := pollTaskUntilComplete(ctx, client, agentURL, resp.TaskID)
+		if err != nil {
+			result["wait_error"] = err.Error()
+			result["final_status"] = "unknown"
+		} else {
+			result["final_status"] = task.Status
+			result["task"] = task
+		}
+	}
+
+	resultJSON, _ := json.MarshalIndent(result, "", "  ")
+	return string(resultJSON), false
+}
+
+func (h *MCPHandler) executeGetA2ATaskStatus(args map[string]interface{}) (string, bool) {
+	agentURL, ok := args["agent_url"].(string)
+	if !ok || agentURL == "" {
+		return `{"error": "agent_url is required"}`, true
+	}
+
+	taskID, ok := args["task_id"].(string)
+	if !ok || taskID == "" {
+		return `{"error": "task_id is required"}`, true
+	}
+
+	// Create A2A client and get task
+	client := createA2AClient()
+	task, err := client.GetTask(context.Background(), agentURL, taskID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to get task: %s"}`, err.Error()), true
+	}
+
+	result, _ := json.MarshalIndent(map[string]interface{}{
+		"success":   true,
+		"agent_url": agentURL,
+		"task":      task,
+	}, "", "  ")
+	return string(result), false
+}
+
+// Helper functions for A2A integration
+
+func createA2AClient() *a2aClient.HTTPClient {
+	return a2aClient.NewHTTPClient(a2aClient.WithTimeout(30 * time.Second))
+}
+
+func pollTaskUntilComplete(ctx context.Context, client *a2aClient.HTTPClient, agentURL, taskID string) (*a2aModels.Task, error) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout waiting for task completion")
+		case <-ticker.C:
+			task, err := client.GetTask(ctx, agentURL, taskID)
+			if err != nil {
+				return nil, err
+			}
+
+			if task.Status == a2aModels.TaskStatusCompleted || task.Status == a2aModels.TaskStatusFailed {
+				return task, nil
+			}
+		}
+	}
 }
 
 func (h *MCPHandler) sendResponse(w http.ResponseWriter, id interface{}, result interface{}, rpcErr *JSONRPCError) {
