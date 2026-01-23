@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/techbuzzz/agent-shaker/internal/a2a/client"
+	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
 )
 
 func main() {
@@ -27,10 +28,15 @@ func main() {
 	} else {
 		fmt.Printf("   ✓ Success!\n")
 		fmt.Printf("   Name: %s\n", card1.Name)
-		fmt.Printf("   Version: %s\n", card1.Version)
-		fmt.Printf("   Capabilities: %d\n", len(card1.Capabilities))
-		for _, cap := range card1.Capabilities {
-			fmt.Printf("     - %s: %s\n", cap.Type, cap.Description)
+		fmt.Printf("   Agent Version: %s\n", card1.AgentVersion)
+		fmt.Printf("   Human ID: %s\n", card1.HumanReadableID)
+		fmt.Printf("   A2A Version: %s\n", card1.Capabilities.A2AVersion)
+		if card1.Capabilities.MCPVersion != "" {
+			fmt.Printf("   MCP Version: %s\n", card1.Capabilities.MCPVersion)
+		}
+		fmt.Printf("   Skills: %d\n", len(card1.Skills))
+		for _, skill := range card1.Skills {
+			fmt.Printf("     - %s: %s\n", skill.ID, skill.Name)
 		}
 	}
 
@@ -46,10 +52,25 @@ func main() {
 		fmt.Printf("   ✓ Success!\n")
 		fmt.Printf("   Name: %s\n", card2.Name)
 		fmt.Printf("   Description: %s\n", card2.Description)
-		fmt.Printf("   Version: %s\n", card2.Version)
-		fmt.Printf("   Capabilities: %d (converted from object format)\n", len(card2.Capabilities))
-		for _, cap := range card2.Capabilities {
-			fmt.Printf("     - %s: %s\n", cap.Type, cap.Description)
+		fmt.Printf("   Agent Version: %s\n", card2.AgentVersion)
+		fmt.Printf("   Human ID: %s\n", card2.HumanReadableID)
+
+		// Check for legacy capabilities
+		if card2.Metadata != nil {
+			if legacyCaps, ok := card2.Metadata["legacyCapabilities"].([]models.Capability); ok {
+				fmt.Printf("   Legacy Capabilities: %d (converted from object format)\n", len(legacyCaps))
+				for _, cap := range legacyCaps {
+					fmt.Printf("     - %s: %s\n", cap.Type, cap.Description)
+				}
+			}
+		}
+
+		// Show skills if present
+		if len(card2.Skills) > 0 {
+			fmt.Printf("   Skills: %d\n", len(card2.Skills))
+			for _, skill := range card2.Skills {
+				fmt.Printf("     - %s: %s\n", skill.ID, skill.Name)
+			}
 		}
 
 		// Show raw JSON
@@ -58,10 +79,10 @@ func main() {
 		fmt.Printf("   %s\n", string(jsonBytes))
 
 		// Validate
-		if err := client.ValidateAgentCard(card2); err != nil && card2.Version != "" {
+		if err := client.ValidateAgentCard(card2); err != nil {
 			fmt.Printf("   ⚠️  Validation warning: %v\n", err)
-		} else if card2.Version == "" {
-			fmt.Printf("   ℹ️  Note: Empty version field (non-fatal, agent still usable)\n")
+		} else {
+			fmt.Printf("   ✓ Agent card is valid per official schema v1.0\n")
 		}
 
 		// Check capabilities
