@@ -425,6 +425,24 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 				Required: []string{"task_id"},
 			},
 		},
+		{
+			Name:        "reassign_task",
+			Description: "Reassign a task to another agent",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The task ID to reassign",
+					},
+					"agent_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The ID of the agent to assign the task to",
+					},
+				},
+				Required: []string{"task_id", "agent_id"},
+			},
+		},
 		// General tools (for exploring all data)
 		{
 			Name:        "list_projects",
@@ -695,6 +713,8 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		resultText, isError = h.executeClaimTask(callParams.Arguments, ctx)
 	case "complete_task":
 		resultText, isError = h.executeCompleteTask(callParams.Arguments, ctx)
+	case "reassign_task":
+		resultText, isError = h.executeReassignTask(callParams.Arguments)
 	// General tools
 	case "list_projects":
 		resultText, isError = h.executeListProjects()
@@ -1780,6 +1800,52 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 		"agent_id": ctx.AgentID,
 		"status":   "done",
 		"message":  "Task marked as completed",
+	}, "", "  ")
+	return string(resultJSON), false
+}
+
+func (h *MCPHandler) executeReassignTask(args map[string]interface{}) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	taskID, ok := args["task_id"].(string)
+	if !ok || taskID == "" {
+		return `{"error": "task_id is required"}`, true
+	}
+
+	agentID, ok := args["agent_id"].(string)
+	if !ok || agentID == "" {
+		return `{"error": "agent_id is required"}`, true
+	}
+
+	// Verify the agent exists
+	var agentName string
+	err := h.db.QueryRow("SELECT name FROM agents WHERE id = $1", agentID).Scan(&agentName)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Agent not found: %s"}`, err.Error()), true
+	}
+
+	// Verify the task exists
+	var taskTitle string
+	err = h.db.QueryRow("SELECT title FROM tasks WHERE id = $1", taskID).Scan(&taskTitle)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
+	}
+
+	// Update the task's assigned_to field
+	_, err = h.db.Exec("UPDATE tasks SET assigned_to = $1, updated_at = NOW() WHERE id = $2", agentID, taskID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to reassign task: %s"}`, err.Error()), true
+	}
+
+	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
+		"success":    true,
+		"task_id":    taskID,
+		"task_title": taskTitle,
+		"agent_id":   agentID,
+		"agent_name": agentName,
+		"message":    fmt.Sprintf("Task '%s' reassigned to agent '%s'", taskTitle, agentName),
 	}, "", "  ")
 	return string(resultJSON), false
 }

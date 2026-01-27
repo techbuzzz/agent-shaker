@@ -437,3 +437,80 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id, err := uuid.Parse(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid task ID format", http.StatusBadRequest)
+		return
+	}
+
+	var req models.ReassignTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Verify the new agent exists
+	var agentExists bool
+	err = h.db.QueryRow("SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)", req.AssignedTo).Scan(&agentExists)
+	if err != nil {
+		http.Error(w, "Failed to verify agent", http.StatusInternalServerError)
+		return
+	}
+	if !agentExists {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	_, err = h.db.Exec(`
+		UPDATE tasks
+		SET assigned_to = $1, updated_at = $2
+		WHERE id = $3
+	`, req.AssignedTo, time.Now(), id)
+	if err != nil {
+		http.Error(w, "Failed to reassign task", http.StatusInternalServerError)
+		return
+	}
+
+	// Get updated task
+	var task models.Task
+	var assignedToStr sql.NullString
+	var outputStr sql.NullString
+
+	err = h.db.QueryRow(`
+		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, created_at, updated_at
+		FROM tasks
+		WHERE id = $1
+	`, id).Scan(&task.ID, &task.ProjectID, &task.Title, &task.Description, &task.Status, &task.Priority, &task.CreatedBy, &assignedToStr, &outputStr, &task.CreatedAt, &task.UpdatedAt)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Task not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Failed to retrieve task", http.StatusInternalServerError)
+		return
+	}
+
+	// Handle nullable assigned_to field
+	if assignedToStr.Valid {
+		if assignedToUUID, err := uuid.Parse(assignedToStr.String); err == nil {
+			task.AssignedTo = &assignedToUUID
+		}
+	} else {
+		task.AssignedTo = nil
+	}
+
+	// Handle nullable output field
+	if outputStr.Valid {
+		task.Output = outputStr.String
+	} else {
+		task.Output = ""
+	}
+
+	// Broadcast task reassignment
+	h.hub.BroadcastToProject(task.ProjectID, "task_reassigned", task)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(task)
+}

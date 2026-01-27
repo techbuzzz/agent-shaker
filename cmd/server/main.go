@@ -112,6 +112,7 @@ func main() {
 	api.HandleFunc("/tasks/{id}", taskHandler.UpdateTask).Methods("PUT")
 	api.HandleFunc("/tasks/{id}", taskHandler.DeleteTask).Methods("DELETE")
 	api.HandleFunc("/tasks/{id}/status", taskHandler.UpdateTaskStatus).Methods("PUT")
+	api.HandleFunc("/tasks/{id}/reassign", taskHandler.ReassignTask).Methods("PUT")
 
 	// Contexts
 	api.HandleFunc("/contexts", contextHandler.CreateContext).Methods("POST")

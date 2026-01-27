@@ -18,14 +18,23 @@
       </div>
     </div>
     
-    <p class="text-gray-600 mb-4">{{ task.description }}</p>
+    <p class="text-gray-600 mb-4">{{ truncatedDescription }}</p>
     
     <div class="flex justify-between items-center text-sm text-gray-500 pt-4 border-t border-gray-200">
       <span>Agent: {{ agentName }}</span>
       <span>{{ formattedDate }}</span>
+      <small>Id: {{ task.id }}</small>
     </div>
     
     <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100">
+      <button
+        @click="$emit('reassign', task)"
+        class="flex items-center gap-1 px-3 py-1.5 text-sm bg-purple-50 text-purple-600 hover:bg-purple-100 rounded-md transition-colors"
+        title="Reassign Task"
+      >
+        <span>↔️</span>
+        <span class="hidden sm:inline">Reassign</span>
+      </button>
       <button
         @click="$emit('edit', task)"
         class="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-md transition-colors"
@@ -61,7 +70,7 @@ export default {
       default: 'Unknown'
     }
   },
-  emits: ['edit', 'delete'],
+  emits: ['edit', 'delete', 'reassign'],
   setup(props) {
     /**
      * Get CSS class for priority badge
@@ -104,11 +113,20 @@ export default {
       return new Date(props.task.created_at).toLocaleString()
     })
 
+    /**
+     * Truncate description to 200 characters
+     */
+    const truncatedDescription = computed(() => {
+      const desc = props.task.description || ''
+      return desc.length > 200 ? desc.substring(0, 200) + '...' : desc
+    })
+
     return {
       priorityClass,
       statusClass,
       formatStatus,
-      formattedDate
+      formattedDate,
+      truncatedDescription
     }
   }
 }

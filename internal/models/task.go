@@ -43,3 +43,7 @@ type UpdateTaskRequest struct {
 	Status TaskStatus `json:"status"`
 	Output string     `json:"output"`
 }
+
+type ReassignTaskRequest struct {
+	AssignedTo uuid.UUID `json:"assigned_to"`
+}

@@ -132,6 +132,7 @@
               :task="task"
               :agent-name="getAgentName(task.assigned_to)"
               @edit="editTask"
+              @reassign="openReassignTaskModal"
               @delete="confirmDeleteTask"
             />
           </div>
@@ -214,6 +215,15 @@
       :agents="agents"
       @close="showAddTaskModal = false"
       @save="handleSaveTask"
+    />
+
+    <!-- Reassign Task Modal -->
+    <ReassignModal 
+      :show="showReassignTaskModal"
+      :task="reassigningTask"
+      :agents="agents"
+      @close="showReassignTaskModal = false"
+      @reassign="handleReassignTask"
     />
 
     <!-- Add/Edit Context Modal -->
@@ -302,6 +312,7 @@ import AgentCard from '../components/AgentCard.vue'
 import TaskCard from '../components/TaskCard.vue'
 import AgentModal from '../components/AgentModal.vue'
 import TaskModal from '../components/TaskModal.vue'
+import ReassignModal from '../components/ReassignModal.vue'
 import ContextModal from '../components/ContextModal.vue'
 import ContextViewer from '../components/ContextViewer.vue'
 import ConfirmModal from '../components/ConfirmModal.vue'
@@ -317,6 +328,7 @@ export default {
     TaskCard,
     AgentModal,
     TaskModal,
+    ReassignModal,
     ContextModal,
     ContextViewer,
     ConfirmModal,
@@ -333,6 +345,7 @@ export default {
     const activeTab = ref('agents')
     const showAddAgentModal = ref(false)
     const showAddTaskModal = ref(false)
+    const showReassignTaskModal = ref(false)
     const showAddContextModal = ref(false)
     const showViewContextModal = ref(false)
     const showDeleteConfirm = ref(false)
@@ -355,6 +368,7 @@ export default {
       status: 'pending'
     })
     const editingTask = ref(null)
+    const reassigningTask = ref(null)
     const deletingTask = ref(null)
     const newTask = ref({ title: '', description: '', agent_id: '', priority: 'medium' })
     
@@ -955,6 +969,47 @@ get_project_contexts() {
       showAddTaskModal.value = true
     }
 
+    const openReassignTaskModal = (task) => {
+      reassigningTask.value = task
+      showReassignTaskModal.value = true
+    }
+
+    const handleReassignTask = async (reassignmentData) => {
+      if (!reassigningTask.value) return
+
+      try {
+        const response = await fetch(`/api/tasks/${reassignmentData.taskId}/reassign`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            assigned_to: reassignmentData.agentId
+          })
+        })
+
+        if (!response.ok) {
+          const error = await response.text()
+          throw new Error(error)
+        }
+
+        const updatedTask = await response.json()
+        
+        // Update the task store with the new task data
+        const taskIndex = taskStore.tasks.findIndex(t => t.id === updatedTask.id)
+        if (taskIndex !== -1) {
+          taskStore.tasks[taskIndex] = updatedTask
+        }
+
+        showReassignTaskModal.value = false
+        reassigningTask.value = null
+        alert('Task reassigned successfully!')
+      } catch (error) {
+        console.error('Failed to reassign task:', error)
+        alert('Failed to reassign task. Please try again.')
+      }
+    }
+
     const handleSaveTask = async (taskData) => {
       try {
         if (editingTask.value) {
@@ -1292,6 +1347,7 @@ The mcp.json file includes:
       activeTab,
       showAddAgentModal,
       showAddTaskModal,
+      showReassignTaskModal,
       showAddContextModal,
       showViewContextModal,
       showDeleteConfirm,
@@ -1306,6 +1362,7 @@ The mcp.json file includes:
       deletingAgent,
       taskForm,
       editingTask,
+      reassigningTask,
       deletingTask,
       newTask,
       contextForm,
@@ -1324,6 +1381,8 @@ The mcp.json file includes:
       handleDeleteAgent,
       openAddTaskModal,
       editTask,
+      openReassignTaskModal,
+      handleReassignTask,
       handleSaveTask,
       confirmDeleteTask,
       handleDeleteTask,
