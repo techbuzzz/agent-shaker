@@ -105,16 +105,14 @@ func (a *AgentCard) UnmarshalJSON(data []byte) error {
 
 	// Check if capabilities is present and try legacy formats first
 	var hasLegacyCap bool
+	var legacyCapabilities []Capability
 	if capRaw, exists := raw["capabilities"]; exists {
 		// Try legacy array format []Capability
 		var legacyCaps []Capability
 		if err := json.Unmarshal(capRaw, &legacyCaps); err == nil && len(legacyCaps) > 0 {
 			// Convert legacy array to new Capabilities object structure
-			// Store in metadata for backward compatibility
-			if a.Metadata == nil {
-				a.Metadata = make(map[string]any)
-			}
-			a.Metadata["legacyCapabilities"] = legacyCaps
+			// Store in a temporary variable to preserve across struct assignment
+			legacyCapabilities = legacyCaps
 			hasLegacyCap = true
 		} else if err == nil {
 			// Empty array, still legacy format
@@ -147,10 +145,8 @@ func (a *AgentCard) UnmarshalJSON(data []byte) error {
 							Description: description,
 						})
 					}
-					if a.Metadata == nil {
-						a.Metadata = make(map[string]any)
-					}
-					a.Metadata["legacyCapabilities"] = legacyCaps
+					// Store in a temporary variable to preserve across struct assignment
+					legacyCapabilities = legacyCaps
 					hasLegacyCap = true
 				}
 			} else {
@@ -177,6 +173,14 @@ func (a *AgentCard) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*a = AgentCard(*aux)
+
+		// Restore legacy capabilities after struct assignment
+		if len(legacyCapabilities) > 0 {
+			if a.Metadata == nil {
+				a.Metadata = make(map[string]any)
+			}
+			a.Metadata["legacyCapabilities"] = legacyCapabilities
+		}
 	} else {
 		// New schema format, unmarshal normally
 		aux := &Alias{}
