@@ -42,6 +42,14 @@
               <span class="hidden sm:inline">Tasks</span>
               <span class="sm:hidden">📋</span>
             </router-link>
+            <router-link
+              to="/standups"
+              class="nav-link"
+              active-class="nav-link-active"
+            >
+              <span class="hidden sm:inline">Standups</span>
+              <span class="sm:hidden">🗓️</span>
+            </router-link>
             <button
               @click="showServerUrlModal = true"
               class="nav-link flex items-center gap-1"

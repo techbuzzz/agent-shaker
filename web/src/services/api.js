@@ -156,6 +156,31 @@ export default {
     return api.get('/dashboard')
   },
 
+  // Daily Standups
+  getStandups(filters = {}) {
+    return api.get('/standups', { params: filters })
+  },
+  getStandup(id) {
+    return api.get(`/standups/${id}`)
+  },
+  createStandup(data) {
+    return api.post('/standups', data)
+  },
+  updateStandup(id, data) {
+    return api.put(`/standups/${id}`, data)
+  },
+  deleteStandup(id) {
+    return api.delete(`/standups/${id}`)
+  },
+
+  // Agent Heartbeats
+  recordHeartbeat(data) {
+    return api.post('/heartbeats', data)
+  },
+  getAgentHeartbeats(agentId, limit = 50) {
+    return api.get(`/agents/${agentId}/heartbeats`, { params: { limit } })
+  },
+
   // Health
   checkHealth() {
     return axios.get('/health')

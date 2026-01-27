@@ -55,6 +55,7 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(db, hub)
 	taskHandler := handlers.NewTaskHandler(db, hub)
 	contextHandler := handlers.NewContextHandler(db, hub)
+	standupHandler := handlers.NewStandupHandler(db, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
 	dashboardHandler := handlers.NewDashboardHandler(db)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
@@ -120,6 +121,17 @@ func main() {
 	api.HandleFunc("/contexts/{id}", contextHandler.GetContext).Methods("GET")
 	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
 	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
+
+	// Daily Standups
+	api.HandleFunc("/standups", standupHandler.CreateStandup).Methods("POST")
+	api.HandleFunc("/standups", standupHandler.ListStandups).Methods("GET")
+	api.HandleFunc("/standups/{id}", standupHandler.GetStandup).Methods("GET")
+	api.HandleFunc("/standups/{id}", standupHandler.UpdateStandup).Methods("PUT")
+	api.HandleFunc("/standups/{id}", standupHandler.DeleteStandup).Methods("DELETE")
+
+	// Agent Heartbeats
+	api.HandleFunc("/heartbeats", standupHandler.RecordHeartbeat).Methods("POST")
+	api.HandleFunc("/agents/{id}/heartbeats", standupHandler.GetAgentHeartbeats).Methods("GET")
 
 	// A2A Protocol routes
 	a2aserver.RegisterA2ARoutes(r, a2aHandler, streamingHandler, artifactHandler, agentCardHandler)

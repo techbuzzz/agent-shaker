@@ -4,6 +4,7 @@ import Projects from '../views/Projects.vue'
 import ProjectDetail from '../views/ProjectDetail.vue'
 import Agents from '../views/Agents.vue'
 import Tasks from '../views/Tasks.vue'
+import Standups from '../views/Standups.vue'
 
 const routes = [
   {
@@ -30,6 +31,11 @@ const routes = [
     path: '/tasks',
     name: 'Tasks',
     component: Tasks
+  },
+  {
+    path: '/standups',
+    name: 'Standups',
+    component: Standups
   }
 ]
 

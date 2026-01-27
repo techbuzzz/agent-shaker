@@ -97,68 +97,93 @@ func (a *AgentCard) UnmarshalJSON(data []byte) error {
 	// Define an alias to prevent recursion
 	type Alias AgentCard
 
-	// First, try to unmarshal as the new official schema
-	aux := &Alias{}
-	if err := json.Unmarshal(data, aux); err != nil {
-		return err
-	}
-
-	*a = AgentCard(*aux)
-
-	// Handle legacy format where capabilities might be an array instead of object
-	// This is for backward compatibility with older agent cards
+	// First, parse the raw JSON to handle legacy capabilities formats
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 
-	// Check if capabilities is present and try legacy array format
+	// Check if capabilities is present and try legacy formats first
+	var hasLegacyCap bool
 	if capRaw, exists := raw["capabilities"]; exists {
 		// Try legacy array format []Capability
 		var legacyCaps []Capability
 		if err := json.Unmarshal(capRaw, &legacyCaps); err == nil && len(legacyCaps) > 0 {
 			// Convert legacy array to new Capabilities object structure
-			// Store in metadata for now (could be enhanced later)
+			// Store in metadata for backward compatibility
 			if a.Metadata == nil {
 				a.Metadata = make(map[string]any)
 			}
 			a.Metadata["legacyCapabilities"] = legacyCaps
-			return nil
-		}
-
-		// Try legacy object format map[string]string or map[string]interface{}
-		var legacyCapMap map[string]interface{}
-		if err := json.Unmarshal(capRaw, &legacyCapMap); err == nil && len(legacyCapMap) > 0 {
-			// Check if it looks like legacy format (has keys like "streaming": true)
-			// vs new format (has keys like "a2aVersion")
-			if _, hasA2A := legacyCapMap["a2aVersion"]; !hasA2A {
-				// This is legacy object format, convert it
-				legacyCaps := make([]Capability, 0, len(legacyCapMap))
-				for capType, value := range legacyCapMap {
-					var description string
-					switch v := value.(type) {
-					case string:
-						description = v
-					case bool:
-						description = fmt.Sprintf("%v", v)
-					case float64:
-						description = fmt.Sprintf("%v", v)
-					default:
-						if jsonBytes, err := json.Marshal(v); err == nil {
-							description = string(jsonBytes)
+			hasLegacyCap = true
+		} else if err == nil {
+			// Empty array, still legacy format
+			hasLegacyCap = true
+		} else {
+			// Try legacy object format map[string]string or map[string]interface{}
+			var legacyCapMap map[string]interface{}
+			if err := json.Unmarshal(capRaw, &legacyCapMap); err == nil && len(legacyCapMap) > 0 {
+				// Check if it looks like legacy format (has keys like "streaming": true)
+				// vs new format (has keys like "a2aVersion")
+				if _, hasA2A := legacyCapMap["a2aVersion"]; !hasA2A {
+					// This is legacy object format, convert it
+					legacyCaps := make([]Capability, 0, len(legacyCapMap))
+					for capType, value := range legacyCapMap {
+						var description string
+						switch v := value.(type) {
+						case string:
+							description = v
+						case bool:
+							description = fmt.Sprintf("%v", v)
+						case float64:
+							description = fmt.Sprintf("%v", v)
+						default:
+							if jsonBytes, err := json.Marshal(v); err == nil {
+								description = string(jsonBytes)
+							}
 						}
+						legacyCaps = append(legacyCaps, Capability{
+							Type:        capType,
+							Description: description,
+						})
 					}
-					legacyCaps = append(legacyCaps, Capability{
-						Type:        capType,
-						Description: description,
-					})
+					if a.Metadata == nil {
+						a.Metadata = make(map[string]any)
+					}
+					a.Metadata["legacyCapabilities"] = legacyCaps
+					hasLegacyCap = true
 				}
-				if a.Metadata == nil {
-					a.Metadata = make(map[string]any)
-				}
-				a.Metadata["legacyCapabilities"] = legacyCaps
+			} else {
+				// Even if capabilities is invalid (e.g. plain string), mark as legacy to skip new format parsing
+				hasLegacyCap = true
 			}
 		}
+
+		// If we detected legacy format, remove it from raw so alias unmarshal doesn't fail
+		if hasLegacyCap {
+			delete(raw, "capabilities")
+		}
+	}
+
+	// Reconstruct JSON without problematic capabilities field if it was legacy format
+	if hasLegacyCap {
+		cleanedData, err := json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+		// Unmarshal cleaned data into alias
+		aux := &Alias{}
+		if err := json.Unmarshal(cleanedData, aux); err != nil {
+			return err
+		}
+		*a = AgentCard(*aux)
+	} else {
+		// New schema format, unmarshal normally
+		aux := &Alias{}
+		if err := json.Unmarshal(data, aux); err != nil {
+			return err
+		}
+		*a = AgentCard(*aux)
 	}
 
 	return nil
