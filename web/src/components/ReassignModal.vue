@@ -60,12 +60,15 @@ export default {
     agents: {
       type: Array,
       required: true
+    },
+    isSubmitting: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ['close', 'reassign'],
   setup(props, { emit }) {
     const selectedAgentId = ref('')
-    const isSubmitting = ref(false)
 
     // Filter out the currently assigned agent
     const availableAgents = computed(() => {
@@ -81,7 +84,7 @@ export default {
       }
     })
 
-    const handleSubmit = async () => {
+    const handleSubmit = () => {
       if (!selectedAgentId.value || !props.task) {
         return
       }
@@ -102,7 +105,6 @@ export default {
 
     return {
       selectedAgentId,
-      isSubmitting,
       availableAgents,
       handleSubmit
     }

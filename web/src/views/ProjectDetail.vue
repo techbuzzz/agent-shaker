@@ -222,6 +222,7 @@
       :show="showReassignTaskModal"
       :task="reassigningTask"
       :agents="agents"
+      :is-submitting="isReassigningTask"
       @close="showReassignTaskModal = false"
       @reassign="handleReassignTask"
     />
@@ -347,6 +348,7 @@ export default {
     const showAddAgentModal = ref(false)
     const showAddTaskModal = ref(false)
     const showReassignTaskModal = ref(false)
+    const isReassigningTask = ref(false)
     const showAddContextModal = ref(false)
     const showViewContextModal = ref(false)
     const showDeleteConfirm = ref(false)
@@ -978,6 +980,7 @@ get_project_contexts() {
     const handleReassignTask = async (reassignmentData) => {
       if (!reassigningTask.value) return
 
+      isReassigningTask.value = true
       try {
         const updatedTask = await api.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
         
@@ -1344,6 +1347,7 @@ The mcp.json file includes:
       showAddAgentModal,
       showAddTaskModal,
       showReassignTaskModal,
+      isReassigningTask,
       showAddContextModal,
       showViewContextModal,
       showDeleteConfirm,
