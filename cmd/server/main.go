@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -283,9 +284,18 @@ func runMigrations(db *database.DB) error {
 	rows.Close()
 
 	// Apply pending migrations in order
+	// Only process numbered migrations (e.g., 001_init.sql, 002_sample_data.sql)
+	// Skip helper scripts like bootstrap_existing_db.sql
+	migrationPattern := regexp.MustCompile(`^\d{3}_.*\.sql$`)
 	appliedCount := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip non-numbered migration files (e.g., bootstrap scripts)
+		if !migrationPattern.MatchString(entry.Name()) {
+			log.Printf("Skipping non-numbered migration file: %s", entry.Name())
 			continue
 		}
 
