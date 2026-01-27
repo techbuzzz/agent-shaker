@@ -23,8 +23,10 @@
     <div class="flex justify-between items-center text-sm text-gray-500 pt-4 border-t border-gray-200">
       <span>Agent: {{ agentName }}</span>
       <span>{{ formattedDate }}</span>
-      </br>
+    </div>
+    <div class="flex justify-between items-center text-sm text-gray-500 pt-4 border-t border-gray-200">
       <small>Id: {{ task.id }}</small>
+      <small>Due: {{ task.due_date ? new Date(task.due_date).toLocaleDateString() : 'N/A' }}</small>
     </div>
     
     <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-gray-100">
