@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
@@ -305,11 +306,14 @@ func runMigrations(db *database.DB) error {
 			entry.Name(),
 		).Scan(&claimedVersion)
 		
-		if err != nil {
-			// sql.ErrNoRows means ON CONFLICT happened - another instance already claimed this
+		if err == sql.ErrNoRows {
+			// ON CONFLICT happened - another instance already claimed this migration
 			// This is expected in concurrent scenarios, not an error
 			log.Printf("Migration %s already claimed by another instance, skipping", entry.Name())
 			continue
+		} else if err != nil {
+			// Unexpected database error
+			return err
 		}
 
 		log.Printf("Applying migration: %s", entry.Name())
@@ -317,8 +321,10 @@ func runMigrations(db *database.DB) error {
 		// Read migration file
 		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
 		if err != nil {
-			// Migration was claimed but can't be read - remove the claim
-			db.Exec("DELETE FROM schema_migrations WHERE version = $1", entry.Name())
+			// Migration was claimed but can't be read - attempt to remove the claim
+			if _, delErr := db.Exec("DELETE FROM schema_migrations WHERE version = $1", entry.Name()); delErr != nil {
+				log.Printf("Warning: failed to remove claim for %s after read error: %v", entry.Name(), delErr)
+			}
 			return err
 		}
 
