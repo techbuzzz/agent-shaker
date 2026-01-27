@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -248,6 +249,36 @@ func main() {
 func runMigrations(db *database.DB) error {
 	log.Println("Running database migrations...")
 
+	// Acquire advisory lock to prevent concurrent migrations
+	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
+	const migrationLockKey = 918273645
+	
+	// Try to acquire advisory lock (non-blocking)
+	var lockAcquired bool
+	err := db.QueryRow("SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
+	if err != nil {
+		return fmt.Errorf("failed to acquire migration lock: %w", err)
+	}
+	
+	if !lockAcquired {
+		log.Println("Another instance is running migrations, waiting...")
+		// Block until we can acquire the lock
+		_, err = db.Exec("SELECT pg_advisory_lock($1)", migrationLockKey)
+		if err != nil {
+			return fmt.Errorf("failed to wait for migration lock: %w", err)
+		}
+	}
+	
+	// Ensure we release the lock when done
+	defer func() {
+		_, err := db.Exec("SELECT pg_advisory_unlock($1)", migrationLockKey)
+		if err != nil {
+			log.Printf("Warning: failed to release migration lock: %v", err)
+		}
+	}()
+
+	log.Println("Migration lock acquired, proceeding...")
+
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -286,6 +317,16 @@ func runMigrations(db *database.DB) error {
 	appliedCount := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip bootstrap and helper files (not numbered migrations)
+		if !strings.HasPrefix(entry.Name(), "0") && !strings.HasPrefix(entry.Name(), "1") &&
+			!strings.HasPrefix(entry.Name(), "2") && !strings.HasPrefix(entry.Name(), "3") &&
+			!strings.HasPrefix(entry.Name(), "4") && !strings.HasPrefix(entry.Name(), "5") &&
+			!strings.HasPrefix(entry.Name(), "6") && !strings.HasPrefix(entry.Name(), "7") &&
+			!strings.HasPrefix(entry.Name(), "8") && !strings.HasPrefix(entry.Name(), "9") {
+			log.Printf("Skipping non-migration file: %s", entry.Name())
 			continue
 		}
 
