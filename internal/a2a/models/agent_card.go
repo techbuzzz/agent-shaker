@@ -173,7 +173,7 @@ func (a *AgentCard) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		*a = AgentCard(*aux)
-		
+
 		// Restore legacy capabilities after struct assignment
 		if len(legacyCapabilities) > 0 {
 			if a.Metadata == nil {
