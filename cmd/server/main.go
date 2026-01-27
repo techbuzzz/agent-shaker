@@ -246,13 +246,100 @@ func main() {
 }
 
 func runMigrations(db *database.DB) error {
-	migrationSQL, err := os.ReadFile("migrations/001_init.sql")
+	log.Println("Running database migrations...")
+
+	// Create migrations tracking table if it doesn't exist
+	createTableSQL := `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version VARCHAR(255) PRIMARY KEY,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			checksum VARCHAR(64)
+		);
+	`
+	if _, err := db.Exec(createTableSQL); err != nil {
+		return err
+	}
+
+	// Read all migration files from migrations directory
+	entries, err := os.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec(string(migrationSQL))
-	return err
+	// Get already applied migrations
+	appliedMigrations := make(map[string]bool)
+	rows, err := db.Query("SELECT version FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			rows.Close()
+			return err
+		}
+		appliedMigrations[version] = true
+	}
+	rows.Close()
+
+	// Apply pending migrations in order
+	appliedCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip if already applied
+		if appliedMigrations[entry.Name()] {
+			continue
+		}
+
+		log.Printf("Applying migration: %s", entry.Name())
+
+		// Read migration file
+		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return err
+		}
+
+		// Start transaction for this migration
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		// Execute migration
+		if _, err := tx.Exec(string(migrationSQL)); err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		// Record migration as applied
+		_, err = tx.Exec(
+			"INSERT INTO schema_migrations (version) VALUES ($1)",
+			entry.Name(),
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		appliedCount++
+		log.Printf("✓ Applied migration: %s", entry.Name())
+	}
+
+	if appliedCount == 0 {
+		log.Println("No pending migrations")
+	} else {
+		log.Printf("Successfully applied %d migration(s)", appliedCount)
+	}
+
+	return nil
 }
 
 func getPort() string {

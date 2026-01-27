@@ -182,6 +182,62 @@ cp .env.example .env
 go run cmd/server/main.go
 ```
 
+## 🗄️ Database & Migrations
+
+Agent Shaker uses an **automatic migration system** that applies database schema changes on startup. Migrations are safe, transactional, and idempotent.
+
+### For New Installations
+
+Migrations run automatically on first startup:
+```bash
+docker-compose up -d
+# Migrations apply automatically ✓
+```
+
+### For Existing Databases
+
+If you have an existing database, bootstrap it first:
+
+```powershell
+# Bootstrap existing database (Windows)
+.\scripts\bootstrap-migrations.ps1
+
+# Or manually with psql
+psql $DATABASE_URL -f migrations/bootstrap_existing_db.sql
+```
+
+This marks existing migrations as applied without re-running them.
+
+### Creating New Migrations
+
+Use the migration helper script:
+
+```powershell
+# Create new migration
+.\scripts\create-migration.ps1 "Add User Roles"
+
+# Edit the generated file
+code migrations/004_add_user_roles.sql
+
+# Start server to apply
+go run cmd/server/main.go
+```
+
+### Migration Best Practices
+
+✅ **DO:**
+- Use `CREATE TABLE IF NOT EXISTS`
+- Make migrations idempotent
+- Test locally before deploying
+- Keep migrations small and focused
+
+❌ **DON'T:**
+- Modify existing migrations after deployment
+- Delete data without backups
+- Include transaction statements (handled automatically)
+
+**Full migration documentation:** [docs/MIGRATIONS.md](./docs/MIGRATIONS.md)
+
 ## Client Integration
 
 This is a backend-only service. To build a frontend:
