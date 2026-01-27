@@ -259,12 +259,22 @@ func (h *StandupHandler) DeleteStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.db.Exec("DELETE FROM daily_standups WHERE id = $1", id)
+	res, err := h.db.Exec("DELETE FROM daily_standups WHERE id = $1", id)
 	if err != nil {
 		http.Error(w, "Failed to delete standup", http.StatusInternalServerError)
 		return
 	}
 
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		http.Error(w, "Failed to determine delete result", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Standup not found", http.StatusNotFound)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Standup deleted successfully"})
 }
