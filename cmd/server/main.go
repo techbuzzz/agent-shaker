@@ -249,6 +249,11 @@ func main() {
 func runMigrations(db *database.DB) error {
 	log.Println("Running database migrations...")
 
+	// Compile regex pattern once for efficiency
+	// Only process numbered migrations (e.g., 001_init.sql, 002_sample_data.sql)
+	// Skip helper scripts like bootstrap_existing_db.sql
+	migrationPattern := regexp.MustCompile(`^\d{3}_.*\.sql$`)
+
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -284,9 +289,6 @@ func runMigrations(db *database.DB) error {
 	rows.Close()
 
 	// Apply pending migrations in order
-	// Only process numbered migrations (e.g., 001_init.sql, 002_sample_data.sql)
-	// Skip helper scripts like bootstrap_existing_db.sql
-	migrationPattern := regexp.MustCompile(`^\d{3}_.*\.sql$`)
 	appliedCount := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
