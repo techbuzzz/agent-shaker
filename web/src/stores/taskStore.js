@@ -145,6 +145,25 @@ export const useTaskStore = defineStore('tasks', () => {
     }
   }
 
+  const reassignTask = async (id, agentId) => {
+    error.value = null
+    try {
+      const updatedTask = await api.reassignTask(id, agentId)
+      const index = tasks.value.findIndex(t => t.id === id)
+      if (index !== -1) {
+        tasks.value[index] = updatedTask
+      }
+      if (currentTask.value?.id === id) {
+        currentTask.value = updatedTask
+      }
+      return updatedTask
+    } catch (err) {
+      error.value = err.message || 'Failed to reassign task'
+      console.error('Error reassigning task:', err)
+      throw err
+    }
+  }
+
   const clearError = () => {
     error.value = null
   }
@@ -162,6 +181,7 @@ export const useTaskStore = defineStore('tasks', () => {
     updateTask,
     updateTaskStatus,
     deleteTask,
+    reassignTask,
     clearError
   }
 })
