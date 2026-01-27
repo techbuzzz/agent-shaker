@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -249,6 +250,11 @@ func main() {
 func runMigrations(db *database.DB) error {
 	log.Println("Running database migrations...")
 
+	// Compile regex pattern once for efficiency
+	// Only process numbered migrations (e.g., 001_init.sql, 002_sample_data.sql)
+	// Skip helper scripts like bootstrap_existing_db.sql
+	migrationPattern := regexp.MustCompile(`^\d{3}_.*\.sql$`)
+
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -287,6 +293,12 @@ func runMigrations(db *database.DB) error {
 	appliedCount := 0
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip non-numbered migration files (e.g., bootstrap scripts)
+		if !migrationPattern.MatchString(entry.Name()) {
+			log.Printf("Skipping non-numbered migration file: %s", entry.Name())
 			continue
 		}
 
