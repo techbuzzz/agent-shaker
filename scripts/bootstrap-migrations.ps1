@@ -8,11 +8,12 @@ param(
 
 if (-not $DatabaseUrl) {
     $DatabaseUrl = "postgres://mcp:secret@localhost:5433/mcp_tracker?sslmode=disable"
-    $sanitizedDatabaseUrl = $DatabaseUrl
+    # Sanitize the URL before logging (mask password)
+    $sanitizedUrl = $DatabaseUrl
     if ($DatabaseUrl -match '^(postgres://[^:]+:)[^@]+(@.*)$') {
-        $sanitizedDatabaseUrl = $matches[1] + '****' + $matches[2]
+        $sanitizedUrl = $matches[1] + '****' + $matches[2]
     }
-    Write-Host "Using default DATABASE_URL: $sanitizedDatabaseUrl" -ForegroundColor Yellow
+    Write-Host "Using default DATABASE_URL: $sanitizedUrl" -ForegroundColor Yellow
 }
 
 Write-Host ""

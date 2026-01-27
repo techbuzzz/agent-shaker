@@ -1,7 +1,7 @@
 package main
 
 import (
-	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -250,10 +250,35 @@ func main() {
 func runMigrations(db *database.DB) error {
 	log.Println("Running database migrations...")
 
-	// Compile regex pattern once for efficiency
-	// Only process numbered migrations (e.g., 001_init.sql, 002_sample_data.sql)
-	// Skip helper scripts like bootstrap_existing_db.sql
-	migrationPattern := regexp.MustCompile(`^\d{3}_.*\.sql$`)
+	// Acquire advisory lock to prevent concurrent migrations
+	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
+	const migrationLockKey = 918273645
+	
+	// Try to acquire advisory lock (non-blocking)
+	var lockAcquired bool
+	err := db.QueryRow("SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
+	if err != nil {
+		return fmt.Errorf("failed to acquire migration lock: %w", err)
+	}
+	
+	if !lockAcquired {
+		log.Println("Another instance is running migrations, waiting...")
+		// Block until we can acquire the lock
+		_, err = db.Exec("SELECT pg_advisory_lock($1)", migrationLockKey)
+		if err != nil {
+			return fmt.Errorf("failed to wait for migration lock: %w", err)
+		}
+	}
+	
+	// Ensure we release the lock when done
+	defer func() {
+		_, err := db.Exec("SELECT pg_advisory_unlock($1)", migrationLockKey)
+		if err != nil {
+			log.Printf("Warning: failed to release migration lock: %v", err)
+		}
+	}()
+
+	log.Println("Migration lock acquired, proceeding...")
 
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
@@ -291,14 +316,21 @@ func runMigrations(db *database.DB) error {
 
 	// Apply pending migrations in order
 	appliedCount := 0
+	migrationPattern := regexp.MustCompile(`^\d`)
+	
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
 
-		// Skip non-numbered migration files (e.g., bootstrap scripts)
+		// Skip bootstrap and helper files (only process files starting with a digit)
 		if !migrationPattern.MatchString(entry.Name()) {
-			log.Printf("Skipping non-numbered migration file: %s", entry.Name())
+			log.Printf("Skipping non-migration file: %s", entry.Name())
+			continue
+		}
+
+		// Skip if already applied
+		if appliedMigrations[entry.Name()] {
 			continue
 		}
 

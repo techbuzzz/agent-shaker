@@ -321,6 +321,7 @@ import McpSetupModal from '../components/McpSetupModal.vue'
 import { formatDate, getUniqueTags } from '../utils/formatters'
 import { getAgentName, getTaskTitle, filterContexts } from '../utils/dataHelpers'
 import { useMcpSetup, downloadFile, downloadAllMcpFiles } from '../composables/useMcpSetup'
+import api from '../services/api'
 
 export default {
   name: 'ProjectDetail',
@@ -981,16 +982,30 @@ get_project_contexts() {
 
       isReassigningTask.value = true
       try {
-        await taskStore.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
+        const updatedTask = await api.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
+        
+        // Update the task store with the new task data
+        const taskIndex = taskStore.tasks.findIndex(t => t.id === updatedTask.id)
+        if (taskIndex !== -1) {
+          taskStore.tasks[taskIndex] = updatedTask
+        }
 
         showReassignTaskModal.value = false
         reassigningTask.value = null
         alert('Task reassigned successfully!')
+        
+        // Call the completion callback if provided
+        if (reassignmentData.onComplete) {
+          reassignmentData.onComplete()
+        }
       } catch (error) {
         console.error('Failed to reassign task:', error)
         alert('Failed to reassign task. Please try again.')
-      } finally {
-        isReassigningTask.value = false
+        
+        // Call the error callback if provided
+        if (reassignmentData.onError) {
+          reassignmentData.onError()
+        }
       }
     }
 

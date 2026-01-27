@@ -119,6 +119,9 @@ export default {
   updateTaskStatus(id, status) {
     return api.put(`/tasks/${id}/status`, { status })
   },
+  reassignTask(id, assignedTo) {
+    return api.put(`/tasks/${id}/reassign`, { assigned_to: assignedTo })
+  },
   deleteTask(id) {
     return api.delete(`/tasks/${id}`)
   },

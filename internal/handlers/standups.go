@@ -235,55 +235,31 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.db.Exec(`
+	// Use RETURNING to get the updated standup in a single query
+	var standup models.DailyStandup
+	err = h.db.QueryRow(`
 		UPDATE daily_standups
 		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, references = $6, updated_at = $7
 		WHERE id = $8
-	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.References, time.Now(), id)
+		RETURNING id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at
+	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.References, time.Now(), id).Scan(
+		&standup.ID, &standup.AgentID, &standup.ProjectID, &standup.StandupDate,
+		&standup.Did, &standup.Doing, &standup.Done, &standup.Blockers, &standup.Challenges,
+		&standup.References, &standup.CreatedAt, &standup.UpdatedAt,
+	)
 
 	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			http.Error(w, "Standup not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "Failed to update standup", http.StatusInternalServerError)
 		return
 	}
 
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		http.Error(w, "Failed to check update result", http.StatusInternalServerError)
-		return
-	}
-	if rowsAffected == 0 {
-		http.Error(w, "Standup not found", http.StatusNotFound)
-		return
-	}
-
-	// Get updated standup
-	var s models.StandupWithAgent
-	err = h.db.QueryRow(`
-		SELECT s.id, s.agent_id, s.project_id, s.standup_date, s.did, s.doing, s.done,
-		       s.blockers, s.challenges, s.references, s.created_at, s.updated_at,
-		       a.name as agent_name, a.role as agent_role, a.team as agent_team
-		FROM daily_standups s
-		INNER JOIN agents a ON s.agent_id = a.id
-		WHERE s.id = $1
-	`, id).Scan(
-		&s.ID, &s.AgentID, &s.ProjectID, &s.StandupDate, &s.Did, &s.Doing, &s.Done,
-		&s.Blockers, &s.Challenges, &s.References, &s.CreatedAt, &s.UpdatedAt,
-		&s.AgentName, &s.AgentRole, &s.AgentTeam,
-	)
-
-	if err == sql.ErrNoRows {
-		http.Error(w, "Standup not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve standup", http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast standup update via WebSocket
-	h.hub.BroadcastToProject(s.ProjectID, "standup_update", s)
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(standup)
 }
 
 // DeleteStandup deletes a standup entry
@@ -311,6 +287,7 @@ func (h *StandupHandler) DeleteStandup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Standup not found", http.StatusNotFound)
 		return
 	}
+
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Standup deleted successfully"})
 }
