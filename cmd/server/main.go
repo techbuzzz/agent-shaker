@@ -57,7 +57,7 @@ func main() {
 	contextHandler := handlers.NewContextHandler(db, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
 	dashboardHandler := handlers.NewDashboardHandler(db)
-	mcpHandler := mcp.NewMCPHandler(db)
+	mcpHandler := mcp.NewMCPHandler(db, hub)
 
 	// A2A Protocol Setup
 	baseURL := os.Getenv("BASE_URL")

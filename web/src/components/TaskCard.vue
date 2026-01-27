@@ -23,6 +23,7 @@
     <div class="flex justify-between items-center text-sm text-gray-500 pt-4 border-t border-gray-200">
       <span>Agent: {{ agentName }}</span>
       <span>{{ formattedDate }}</span>
+      </br>
       <small>Id: {{ task.id }}</small>
     </div>
     

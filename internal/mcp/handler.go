@@ -14,6 +14,8 @@ import (
 	a2aClient "github.com/techbuzzz/agent-shaker/internal/a2a/client"
 	a2aModels "github.com/techbuzzz/agent-shaker/internal/a2a/models"
 	"github.com/techbuzzz/agent-shaker/internal/database"
+	"github.com/techbuzzz/agent-shaker/internal/models"
+	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
 // JSON-RPC 2.0 structures
@@ -123,6 +125,7 @@ type ToolResultContent struct {
 // MCPHandler handles MCP protocol requests
 type MCPHandler struct {
 	db       *database.DB
+	hub      *websocket.Hub
 	sessions sync.Map
 }
 
@@ -140,9 +143,10 @@ type MCPContext struct {
 	AgentID   string
 }
 
-func NewMCPHandler(db *database.DB) *MCPHandler {
+func NewMCPHandler(db *database.DB, hub *websocket.Hub) *MCPHandler {
 	return &MCPHandler{
-		db: db,
+		db:  db,
+		hub: hub,
 	}
 }
 
@@ -1708,10 +1712,27 @@ func (h *MCPHandler) executeUpdateMyStatus(args map[string]interface{}, ctx MCPC
 		return `{"error": "Agent not found"}`, true
 	}
 
+	// Retrieve updated agent information
+	var agent models.Agent
+	err = h.db.QueryRow(`
+		SELECT id, project_id, name, role, team, status, last_seen, created_at
+		FROM agents
+		WHERE id = $1
+	`, ctx.AgentID).Scan(&agent.ID, &agent.ProjectID, &agent.Name, &agent.Role, &agent.Team, &agent.Status, &agent.LastSeen, &agent.CreatedAt)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "Failed to retrieve updated agent: %s"}`, err.Error()), true
+	}
+
+	// Broadcast agent update to project subscribers via WebSocket
+	if h.hub != nil {
+		h.hub.BroadcastToProject(agent.ProjectID, "agent_update", agent)
+	}
+
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":  true,
 		"agent_id": ctx.AgentID,
 		"status":   status,
+		"message":  "Agent status updated and broadcasted to project",
 	}, "", "  ")
 	return string(resultJSON), false
 }
