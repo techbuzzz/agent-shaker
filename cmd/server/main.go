@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -315,17 +316,15 @@ func runMigrations(db *database.DB) error {
 
 	// Apply pending migrations in order
 	appliedCount := 0
+	migrationPattern := regexp.MustCompile(`^\d`)
+	
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
 		}
 
-		// Skip bootstrap and helper files (not numbered migrations)
-		if !strings.HasPrefix(entry.Name(), "0") && !strings.HasPrefix(entry.Name(), "1") &&
-			!strings.HasPrefix(entry.Name(), "2") && !strings.HasPrefix(entry.Name(), "3") &&
-			!strings.HasPrefix(entry.Name(), "4") && !strings.HasPrefix(entry.Name(), "5") &&
-			!strings.HasPrefix(entry.Name(), "6") && !strings.HasPrefix(entry.Name(), "7") &&
-			!strings.HasPrefix(entry.Name(), "8") && !strings.HasPrefix(entry.Name(), "9") {
+		// Skip bootstrap and helper files (only process files starting with a digit)
+		if !migrationPattern.MatchString(entry.Name()) {
 			log.Printf("Skipping non-migration file: %s", entry.Name())
 			continue
 		}

@@ -235,42 +235,25 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.db.Exec(`
+	// Use RETURNING to get the updated standup in a single query
+	var standup models.DailyStandup
+	err = h.db.QueryRow(`
 		UPDATE daily_standups
 		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, references = $6, updated_at = $7
 		WHERE id = $8
-	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.References, time.Now(), id)
-
-	if err != nil {
-		http.Error(w, "Failed to update standup", http.StatusInternalServerError)
-		return
-	}
-
-	rowsAffected, err := res.RowsAffected()
-	if err != nil {
-		http.Error(w, "Failed to determine update result", http.StatusInternalServerError)
-		return
-	}
-
-	if rowsAffected == 0 {
-		http.Error(w, "Standup not found", http.StatusNotFound)
-		return
-	}
-
-	// Fetch the updated standup to return it
-	var standup models.DailyStandup
-	err = h.db.QueryRow(`
-		SELECT id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at
-		FROM daily_standups
-		WHERE id = $1
-	`, id).Scan(
+		RETURNING id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at
+	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.References, time.Now(), id).Scan(
 		&standup.ID, &standup.AgentID, &standup.ProjectID, &standup.StandupDate,
 		&standup.Did, &standup.Doing, &standup.Done, &standup.Blockers, &standup.Challenges,
 		&standup.References, &standup.CreatedAt, &standup.UpdatedAt,
 	)
 
 	if err != nil {
-		http.Error(w, "Failed to fetch updated standup", http.StatusInternalServerError)
+		if err.Error() == "sql: no rows in result set" {
+			http.Error(w, "Standup not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to update standup", http.StatusInternalServerError)
 		return
 	}
 

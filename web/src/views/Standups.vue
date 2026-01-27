@@ -334,8 +334,22 @@ export default {
 
     const formatDate = (dateString) => {
       // Treat as date-only value to avoid timezone shifts
-      const dateOnly = dateString.split('T')[0] // Extract YYYY-MM-DD
-      const [year, month, day] = dateOnly.split('-').map(Number)
+      if (!dateString) return ''
+      
+      const dateOnly = dateString.includes('T') ? dateString.split('T')[0] : dateString
+      const parts = dateOnly.split('-')
+      
+      if (parts.length !== 3) {
+        // Fallback to standard parsing if format is unexpected
+        return new Date(dateString).toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        })
+      }
+      
+      const [year, month, day] = parts.map(Number)
       const date = new Date(year, month - 1, day) // Use local timezone with specific date parts
       return date.toLocaleDateString('en-US', { 
         weekday: 'long', 
