@@ -235,7 +235,7 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.db.Exec(`
+	res, err := h.db.Exec(`
 		UPDATE daily_standups
 		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, references = $6, updated_at = $7
 		WHERE id = $8
@@ -246,8 +246,37 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		http.Error(w, "Failed to determine update result", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Standup not found", http.StatusNotFound)
+		return
+	}
+
+	// Fetch the updated standup to return it
+	var standup models.DailyStandup
+	err = h.db.QueryRow(`
+		SELECT id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at
+		FROM daily_standups
+		WHERE id = $1
+	`, id).Scan(
+		&standup.ID, &standup.AgentID, &standup.ProjectID, &standup.StandupDate,
+		&standup.Did, &standup.Doing, &standup.Done, &standup.Blockers, &standup.Challenges,
+		&standup.References, &standup.CreatedAt, &standup.UpdatedAt,
+	)
+
+	if err != nil {
+		http.Error(w, "Failed to fetch updated standup", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"message": "Standup updated successfully"})
+	json.NewEncoder(w).Encode(standup)
 }
 
 // DeleteStandup deletes a standup entry
@@ -259,9 +288,20 @@ func (h *StandupHandler) DeleteStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.db.Exec("DELETE FROM daily_standups WHERE id = $1", id)
+	res, err := h.db.Exec("DELETE FROM daily_standups WHERE id = $1", id)
 	if err != nil {
 		http.Error(w, "Failed to delete standup", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		http.Error(w, "Failed to determine delete result", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Standup not found", http.StatusNotFound)
 		return
 	}
 
