@@ -55,6 +55,7 @@ func main() {
 	agentHandler := handlers.NewAgentHandler(db, hub)
 	taskHandler := handlers.NewTaskHandler(db, hub)
 	contextHandler := handlers.NewContextHandler(db, hub)
+	standupHandler := handlers.NewStandupHandler(db, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
 	dashboardHandler := handlers.NewDashboardHandler(db)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
@@ -120,6 +121,17 @@ func main() {
 	api.HandleFunc("/contexts/{id}", contextHandler.GetContext).Methods("GET")
 	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
 	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
+
+	// Daily Standups
+	api.HandleFunc("/standups", standupHandler.CreateStandup).Methods("POST")
+	api.HandleFunc("/standups", standupHandler.ListStandups).Methods("GET")
+	api.HandleFunc("/standups/{id}", standupHandler.GetStandup).Methods("GET")
+	api.HandleFunc("/standups/{id}", standupHandler.UpdateStandup).Methods("PUT")
+	api.HandleFunc("/standups/{id}", standupHandler.DeleteStandup).Methods("DELETE")
+
+	// Agent Heartbeats
+	api.HandleFunc("/heartbeats", standupHandler.RecordHeartbeat).Methods("POST")
+	api.HandleFunc("/agents/{id}/heartbeats", standupHandler.GetAgentHeartbeats).Methods("GET")
 
 	// A2A Protocol routes
 	a2aserver.RegisterA2ARoutes(r, a2aHandler, streamingHandler, artifactHandler, agentCardHandler)
@@ -234,13 +246,100 @@ func main() {
 }
 
 func runMigrations(db *database.DB) error {
-	migrationSQL, err := os.ReadFile("migrations/001_init.sql")
+	log.Println("Running database migrations...")
+
+	// Create migrations tracking table if it doesn't exist
+	createTableSQL := `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version VARCHAR(255) PRIMARY KEY,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			checksum VARCHAR(64)
+		);
+	`
+	if _, err := db.Exec(createTableSQL); err != nil {
+		return err
+	}
+
+	// Read all migration files from migrations directory
+	entries, err := os.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec(string(migrationSQL))
-	return err
+	// Get already applied migrations
+	appliedMigrations := make(map[string]bool)
+	rows, err := db.Query("SELECT version FROM schema_migrations ORDER BY version")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			rows.Close()
+			return err
+		}
+		appliedMigrations[version] = true
+	}
+	rows.Close()
+
+	// Apply pending migrations in order
+	appliedCount := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip if already applied
+		if appliedMigrations[entry.Name()] {
+			continue
+		}
+
+		log.Printf("Applying migration: %s", entry.Name())
+
+		// Read migration file
+		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return err
+		}
+
+		// Start transaction for this migration
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		// Execute migration
+		if _, err := tx.Exec(string(migrationSQL)); err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		// Record migration as applied
+		_, err = tx.Exec(
+			"INSERT INTO schema_migrations (version) VALUES ($1)",
+			entry.Name(),
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		// Commit transaction
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+
+		appliedCount++
+		log.Printf("✓ Applied migration: %s", entry.Name())
+	}
+
+	if appliedCount == 0 {
+		log.Println("No pending migrations")
+	} else {
+		log.Printf("Successfully applied %d migration(s)", appliedCount)
+	}
+
+	return nil
 }
 
 func getPort() string {

@@ -46,9 +46,12 @@ func TestAgentCardEndpoint(t *testing.T) {
 		t.Errorf("Expected version '1.0.0', got %v", card["version"])
 	}
 
-	capabilities, ok := card["capabilities"].([]any)
-	if !ok || len(capabilities) == 0 {
-		t.Error("Expected non-empty capabilities array")
+	// New schema v1.0 has capabilities as an object with fields like a2aVersion
+	capabilities, ok := card["capabilities"].(map[string]any)
+	if !ok {
+		t.Error("Expected capabilities to be an object in new schema")
+	} else if a2aVersion, hasA2A := capabilities["a2aVersion"]; !hasA2A || a2aVersion != "1.0" {
+		t.Error("Expected capabilities to have a2aVersion field with value 1.0")
 	}
 
 	endpoints, ok := card["endpoints"].([]any)
