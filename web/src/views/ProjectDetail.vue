@@ -320,6 +320,7 @@ import McpSetupModal from '../components/McpSetupModal.vue'
 import { formatDate, getUniqueTags } from '../utils/formatters'
 import { getAgentName, getTaskTitle, filterContexts } from '../utils/dataHelpers'
 import { useMcpSetup, downloadFile, downloadAllMcpFiles } from '../composables/useMcpSetup'
+import api from '../services/api'
 
 export default {
   name: 'ProjectDetail',
@@ -978,22 +979,7 @@ get_project_contexts() {
       if (!reassigningTask.value) return
 
       try {
-        const response = await fetch(`/api/tasks/${reassignmentData.taskId}/reassign`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            assigned_to: reassignmentData.agentId
-          })
-        })
-
-        if (!response.ok) {
-          const error = await response.text()
-          throw new Error(error)
-        }
-
-        const updatedTask = await response.json()
+        const updatedTask = await api.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
         
         // Update the task store with the new task data
         const taskIndex = taskStore.tasks.findIndex(t => t.id === updatedTask.id)
