@@ -1004,9 +1004,19 @@ get_project_contexts() {
         showReassignTaskModal.value = false
         reassigningTask.value = null
         alert('Task reassigned successfully!')
+        
+        // Call the completion callback if provided
+        if (reassignmentData.onComplete) {
+          reassignmentData.onComplete()
+        }
       } catch (error) {
         console.error('Failed to reassign task:', error)
         alert('Failed to reassign task. Please try again.')
+        
+        // Call the error callback if provided
+        if (reassignmentData.onError) {
+          reassignmentData.onError()
+        }
       }
     }
 

@@ -113,6 +113,7 @@
                 @click="editStandup(standup)" 
                 class="text-blue-600 hover:text-blue-800 px-3 py-1 rounded text-sm font-medium"
                 title="Edit"
+                aria-label="Edit standup"
               >
                 ✏️
               </button>
@@ -120,6 +121,7 @@
                 @click="confirmDelete(standup.id)" 
                 class="text-red-600 hover:text-red-800 px-3 py-1 rounded text-sm font-medium"
                 title="Delete"
+                aria-label="Delete standup"
               >
                 🗑️
               </button>
@@ -280,6 +282,7 @@ export default {
 
     const handleRefresh = async () => {
       isRefreshing.value = true
+      error.value = null // Clear error before refresh
       try {
         await fetchStandups()
       } catch (err) {
@@ -330,7 +333,10 @@ export default {
     }
 
     const formatDate = (dateString) => {
-      const date = new Date(dateString)
+      // Treat as date-only value to avoid timezone shifts
+      const dateOnly = dateString.split('T')[0] // Extract YYYY-MM-DD
+      const [year, month, day] = dateOnly.split('-').map(Number)
+      const date = new Date(year, month - 1, day) // Use local timezone with specific date parts
       return date.toLocaleDateString('en-US', { 
         weekday: 'long', 
         year: 'numeric', 
