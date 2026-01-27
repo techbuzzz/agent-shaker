@@ -246,7 +246,11 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, "Failed to check update result", http.StatusInternalServerError)
+		return
+	}
 	if rowsAffected == 0 {
 		http.Error(w, "Standup not found", http.StatusNotFound)
 		return
