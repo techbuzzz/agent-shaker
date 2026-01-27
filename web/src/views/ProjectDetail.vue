@@ -978,28 +978,7 @@ get_project_contexts() {
       if (!reassigningTask.value) return
 
       try {
-        const response = await fetch(`/api/tasks/${reassignmentData.taskId}/reassign`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            assigned_to: reassignmentData.agentId
-          })
-        })
-
-        if (!response.ok) {
-          const error = await response.text()
-          throw new Error(error)
-        }
-
-        const updatedTask = await response.json()
-        
-        // Update the task store with the new task data
-        const taskIndex = taskStore.tasks.findIndex(t => t.id === updatedTask.id)
-        if (taskIndex !== -1) {
-          taskStore.tasks[taskIndex] = updatedTask
-        }
+        await taskStore.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
 
         showReassignTaskModal.value = false
         reassigningTask.value = null
