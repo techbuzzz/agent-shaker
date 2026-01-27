@@ -294,38 +294,40 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
+		// Try to claim this migration using INSERT ... ON CONFLICT
+		// This ensures only one instance will successfully claim and execute the migration
+		var claimedVersion string
+		err = db.QueryRow(
+			`INSERT INTO schema_migrations (version, applied_at) 
+			 VALUES ($1, CURRENT_TIMESTAMP) 
+			 ON CONFLICT (version) DO NOTHING 
+			 RETURNING version`,
+			entry.Name(),
+		).Scan(&claimedVersion)
+		
+		if err != nil {
+			// sql.ErrNoRows means ON CONFLICT happened - another instance already claimed this
+			// This is expected in concurrent scenarios, not an error
+			log.Printf("Migration %s already claimed by another instance, skipping", entry.Name())
+			continue
+		}
+
 		log.Printf("Applying migration: %s", entry.Name())
 
 		// Read migration file
 		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
 		if err != nil {
+			// Migration was claimed but can't be read - remove the claim
+			db.Exec("DELETE FROM schema_migrations WHERE version = $1", entry.Name())
 			return err
 		}
 
-		// Start transaction for this migration
-		tx, err := db.Begin()
-		if err != nil {
-			return err
-		}
-
-		// Execute migration
-		if _, err := tx.Exec(string(migrationSQL)); err != nil {
-			tx.Rollback()
-			return err
-		}
-
-		// Record migration as applied
-		_, err = tx.Exec(
-			"INSERT INTO schema_migrations (version) VALUES ($1)",
-			entry.Name(),
-		)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-
-		// Commit transaction
-		if err := tx.Commit(); err != nil {
+		// Execute migration DDL
+		// Note: We don't use a transaction here because we've already inserted the tracking row
+		// If the migration fails, the tracking row remains as a record that it was attempted
+		if _, err := db.Exec(string(migrationSQL)); err != nil {
+			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			// Leave the tracking row to prevent re-attempts; manual intervention required
 			return err
 		}
 
