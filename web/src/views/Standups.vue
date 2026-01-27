@@ -113,6 +113,7 @@
                 @click="editStandup(standup)" 
                 class="text-blue-600 hover:text-blue-800 px-3 py-1 rounded text-sm font-medium"
                 title="Edit"
+                aria-label="Edit standup"
               >
                 ✏️
               </button>
@@ -120,6 +121,7 @@
                 @click="confirmDelete(standup.id)" 
                 class="text-red-600 hover:text-red-800 px-3 py-1 rounded text-sm font-medium"
                 title="Delete"
+                aria-label="Delete standup"
               >
                 🗑️
               </button>
