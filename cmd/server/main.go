@@ -1,11 +1,13 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -297,6 +299,11 @@ func runMigrations(db *database.DB) error {
 	if err != nil {
 		return err
 	}
+
+	// Sort entries to ensure deterministic execution order
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
 
 	// Get already applied migrations
 	appliedMigrations := make(map[string]bool)
