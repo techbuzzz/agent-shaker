@@ -1006,6 +1006,8 @@ get_project_contexts() {
         if (reassignmentData.onError) {
           reassignmentData.onError()
         }
+      } finally {
+        isReassigningTask.value = false
       }
     }
 
