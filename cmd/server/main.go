@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -256,9 +257,18 @@ func runMigrations(db *database.DB) error {
 	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
 	const migrationLockKey = 918273645
 
+	// Get a dedicated connection to ensure advisory lock is acquired and released
+	// on the same session (PostgreSQL advisory locks are session-scoped)
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get dedicated connection: %w", err)
+	}
+	defer conn.Close()
+
 	// Try to acquire advisory lock (non-blocking)
 	var lockAcquired bool
-	err := db.QueryRow("SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
+	err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
 	if err != nil {
 		return fmt.Errorf("failed to acquire migration lock: %w", err)
 	}
@@ -266,7 +276,7 @@ func runMigrations(db *database.DB) error {
 	if !lockAcquired {
 		log.Println("Another instance is running migrations, waiting...")
 		// Block until we can acquire the lock
-		_, err = db.Exec("SELECT pg_advisory_lock($1)", migrationLockKey)
+		_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey)
 		if err != nil {
 			return fmt.Errorf("failed to wait for migration lock: %w", err)
 		}
@@ -274,7 +284,7 @@ func runMigrations(db *database.DB) error {
 
 	// Ensure we release the lock when done
 	defer func() {
-		_, err := db.Exec("SELECT pg_advisory_unlock($1)", migrationLockKey)
+		_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
 		if err != nil {
 			log.Printf("Warning: failed to release migration lock: %v", err)
 		}
