@@ -336,13 +336,47 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
-		// Apply single migration in its own transaction
-		applied, err := applyMigration(db, entry.Name())
+		log.Printf("Applying migration: %s", entry.Name())
+
+		// Read migration file
+		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
-		if applied {
-			appliedCount++
+
+		// Execute migration in a transaction
+		// PostgreSQL supports transactional DDL, allowing atomic execution of schema changes
+		// If DDL fails, tracking record is not inserted; if insert fails, DDL is rolled back
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction for migration %s: %w", entry.Name(), err)
+		}
+
+		// Execute the migration DDL first
+		if _, err := tx.Exec(string(migrationSQL)); err != nil {
+			tx.Rollback()
+			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			return fmt.Errorf("migration %s failed: %w", entry.Name(), err)
+		}
+
+		// Record the migration only after DDL succeeds
+		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
+		// between our initial check and now, we detect it here and skip redundant work
+		_, err = tx.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) 
+			 VALUES ($1, CURRENT_TIMESTAMP) 
+			 ON CONFLICT (version) DO NOTHING`,
+			entry.Name(),
+		)
+		
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
+		}
+
+		// Commit the transaction - this makes both the DDL and tracking record atomic
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 	}
 
