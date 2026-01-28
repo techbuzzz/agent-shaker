@@ -235,13 +235,184 @@ get_project_contexts() {
     return JSON.stringify(config, null, 2)
   })
 
+  const mcpVS2026Json = computed(() => {
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
+
+    if (!agentValue || !projectValue) return ''
+
+    // Build MCP URL with project and agent context
+    const baseUrl = urlValue.replace('/api', '')
+    const mcpUrl = `${baseUrl}?project_id=${projectValue.id}&agent_id=${agentValue.id}`
+
+    const config = {
+      "$schema": "https://aka.ms/mcp-server-schema",
+      "description": "Agent Shaker MCP Server Configuration for Visual Studio 2026",
+      "version": "1.0.0",
+      "language": "en-US",
+      "servers": {
+        "agent-shaker": {
+          "type": "http",
+          "url": mcpUrl,
+          "name": "Agent Shaker MCP Server",
+          "description": "Multi-agent coordination platform for collaborative development",
+          "capabilities": [
+            "resources",
+            "tools",
+            "prompts",
+            "context-sharing"
+          ],
+          "authentication": {
+            "type": "none"
+          },
+          "project": {
+            "id": projectValue.id,
+            "name": projectValue.name,
+            "description": projectValue.description || "",
+            "status": projectValue.status,
+            "type": "multi-agent",
+            "environment": "visual-studio-2026"
+          },
+          "agent": {
+            "id": agentValue.id,
+            "name": agentValue.name,
+            "role": agentValue.role,
+            "team": agentValue.team || "default",
+            "status": agentValue.status,
+            "type": "ai-developer",
+            "capabilities": [
+              agentValue.role === 'frontend' ? 'ui-development' : 'backend-development',
+              agentValue.role === 'frontend' ? 'component-design' : 'api-development',
+              "task-management",
+              "context-sharing",
+              "documentation"
+            ]
+          },
+          "resources": {
+            "baseUrl": urlValue,
+            "endpoints": {
+              "health": "/health",
+              "projects": "/projects",
+              "agents": "/agents",
+              "tasks": "/tasks",
+              "contexts": "/contexts",
+              "documentation": "/documentation",
+              "dashboard": "/dashboard",
+              "myTasks": `/agents/${agentValue.id}/tasks`,
+              "myAgent": `/agents/${agentValue.id}`,
+              "projectAgents": `/projects/${projectValue.id}/agents`,
+              "projectTasks": `/projects/${projectValue.id}/tasks`,
+              "projectContexts": `/projects/${projectValue.id}/contexts`
+            }
+          },
+          "tools": [
+            {
+              "name": "get_my_identity",
+              "description": "Get your agent identity and assigned project from MCP connection",
+              "category": "identity"
+            },
+            {
+              "name": "get_my_project",
+              "description": "Get details of your assigned project",
+              "category": "project"
+            },
+            {
+              "name": "get_my_tasks",
+              "description": "Get tasks assigned to this agent",
+              "category": "task-management",
+              "endpoint": `/agents/${agentValue.id}/tasks`,
+              "method": "GET"
+            },
+            {
+              "name": "claim_task",
+              "description": "Claim a task and set it to in_progress",
+              "category": "task-management"
+            },
+            {
+              "name": "complete_task",
+              "description": "Mark a task as done",
+              "category": "task-management"
+            },
+            {
+              "name": "update_task_status",
+              "description": "Update the status of a task",
+              "category": "task-management",
+              "endpoint": "/tasks/{task_id}/status",
+              "method": "PUT"
+            },
+            {
+              "name": "create_task",
+              "description": "Create a new task in the project",
+              "category": "task-management",
+              "endpoint": "/tasks",
+              "method": "POST"
+            },
+            {
+              "name": "get_project_contexts",
+              "description": "Get all contexts/documentation for the project",
+              "category": "documentation",
+              "endpoint": `/projects/${projectValue.id}/contexts`,
+              "method": "GET"
+            },
+            {
+              "name": "add_context",
+              "description": "Add context or documentation to the project",
+              "category": "documentation",
+              "endpoint": "/contexts",
+              "method": "POST"
+            },
+            {
+              "name": "get_project_agents",
+              "description": "Get all agents working on the project",
+              "category": "collaboration",
+              "endpoint": `/projects/${projectValue.id}/agents`,
+              "method": "GET"
+            },
+            {
+              "name": "get_dashboard_stats",
+              "description": "Get project statistics and overview",
+              "category": "monitoring",
+              "endpoint": "/dashboard",
+              "method": "GET"
+            }
+          ],
+          "behavior": {
+            "autoReconnect": true,
+            "maxRetries": 3,
+            "timeout": 30000,
+            "healthCheckInterval": 60000
+          },
+          "security": {
+            "cors": {
+              "enabled": true,
+              "allowOrigins": ["http://localhost:5173", "http://localhost:3000", "http://localhost:8080"]
+            },
+            "rateLimiting": {
+              "enabled": false,
+              "requestsPerMinute": 60
+            }
+          },
+          "logging": {
+            "level": "info",
+            "format": "json",
+            "includeTimestamp": true
+          }
+        }
+      }
+    }
+
+    return JSON.stringify(config, null, 2)
+  })
+
   // Bundle all MCP configs together
   const mcpConfig = computed(() => ({
     mcpSettingsJson: mcpSettingsJson.value,
     mcpCopilotInstructions: mcpCopilotInstructions.value,
     mcpPowerShellScript: mcpPowerShellScript.value,
     mcpBashScript: mcpBashScript.value,
-    mcpVSCodeJson: mcpVSCodeJson.value
+    mcpVSCodeJson: mcpVSCodeJson.value,
+    mcpVS2026Json: mcpVS2026Json.value
   }))
 
   return {
@@ -250,9 +421,11 @@ get_project_contexts() {
     mcpPowerShellScript,
     mcpBashScript,
     mcpVSCodeJson,
+    mcpVS2026Json,
     mcpConfig,
     downloadFile,
-    downloadAllMcpFiles
+    downloadAllMcpFiles,
+    copyMcpFilesToProject
   }
 }
 
@@ -285,6 +458,7 @@ export const downloadAllMcpFiles = async (mcpConfig, agentName) => {
   
   zip.file('.vscode/settings.json', mcpConfig.mcpSettingsJson)
   zip.file('.vscode/mcp.json', mcpConfig.mcpVSCodeJson)
+  zip.file('.mcp.json', mcpConfig.mcpVS2026Json)
   zip.file('.github/copilot-instructions.md', mcpConfig.mcpCopilotInstructions)
   zip.file('scripts/mcp-agent.ps1', mcpConfig.mcpPowerShellScript)
   zip.file('scripts/mcp-agent.sh', mcpConfig.mcpBashScript)
@@ -293,19 +467,85 @@ export const downloadAllMcpFiles = async (mcpConfig, agentName) => {
 
 ## Contents
 - .vscode/settings.json - VS Code environment variables
-- .vscode/mcp.json - Enhanced MCP server configuration
+- .vscode/mcp.json - VS Code MCP server configuration
+- .mcp.json - Visual Studio 2026 MCP server configuration (root directory)
 - .github/copilot-instructions.md - GitHub Copilot agent instructions
 - scripts/mcp-agent.ps1 - PowerShell helper script
 - scripts/mcp-agent.sh - Bash helper script
 
 ## Setup Instructions
+
+### For Visual Studio 2026:
 1. Extract this zip to your project's root directory
-2. Restart VS Code to apply environment variables
-3. Start using Copilot with your agent identity!
+2. The `.mcp.json` file will be automatically recognized
+3. Restart Visual Studio 2026 to apply MCP configuration
+4. Start using Copilot with your agent identity!
+
+### For VS Code:
+1. Extract to project root
+2. The `.vscode/settings.json` and `.vscode/mcp.json` will be applied
+3. Restart VS Code
+4. Terminal environment variables will be automatically set
+
+### For Command Line:
+1. Windows: Run \`scripts/mcp-agent.ps1\`
+2. macOS/Linux: Run \`scripts/mcp-agent.sh\`
 `
   zip.file('MCP_SETUP_README.md', readmeContent)
   
   const content = await zip.generateAsync({ type: 'blob' })
   const agentSlug = agentName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
   downloadFile(`mcp-setup-${agentSlug}.zip`, content, 'application/zip')
+}
+
+/**
+ * Copy MCP files directly to project directory via API
+ * @param {Object} mcpConfig - MCP configuration object
+ * @param {string} projectId - Project ID for the directory
+ * @returns {Promise<Object>} Status of file creation
+ */
+export const copyMcpFilesToProject = async (mcpConfig, projectId) => {
+  try {
+    // Post request to API to create files in project directory
+    const response = await fetch('/api/projects/' + projectId + '/mcp-files', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        files: {
+          '.mcp.json': mcpConfig.mcpVS2026Json,
+          '.vscode/settings.json': mcpConfig.mcpSettingsJson,
+          '.vscode/mcp.json': mcpConfig.mcpVSCodeJson,
+          '.github/copilot-instructions.md': mcpConfig.mcpCopilotInstructions,
+          'scripts/mcp-agent.ps1': mcpConfig.mcpPowerShellScript,
+          'scripts/mcp-agent.sh': mcpConfig.mcpBashScript
+        }
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to create MCP files: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    return {
+      success: true,
+      message: 'MCP configuration files created successfully in project directory',
+      files: result.files || [
+        '.mcp.json',
+        '.vscode/settings.json',
+        '.vscode/mcp.json',
+        '.github/copilot-instructions.md',
+        'scripts/mcp-agent.ps1',
+        'scripts/mcp-agent.sh'
+      ]
+    }
+  } catch (error) {
+    return {
+      success: false,
+      message: error.message,
+      error: error
+    }
+  }
 }

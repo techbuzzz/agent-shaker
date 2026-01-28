@@ -437,7 +437,11 @@ export default {
       mcpPowerShellScript,
       mcpBashScript,
       mcpVSCodeJson,
-      mcpConfig
+      mcpVS2026Json,
+      mcpConfig,
+      downloadFile,
+      downloadAllMcpFiles,
+      copyMcpFilesToProject
     } = useMcpSetup(mcpSetupAgent, project, mcpApiUrl)
 
     onMounted(() => {
@@ -707,18 +711,6 @@ export default {
       showMcpSetupModal.value = true
     }
 
-    const downloadFile = (filename, content, mimeType = 'text/plain') => {
-      const blob = new Blob([content], { type: mimeType })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    }
-
     const downloadMcpFile = (fileType) => {
       const config = mcpConfig.value
       switch (fileType) {
@@ -740,58 +732,8 @@ export default {
       }
     }
 
-    const downloadAllMcpFiles = async () => {
-      // Using JSZip for creating zip files
-      const { default: JSZip } = await import('jszip')
-      const zip = new JSZip()
-      
-      const config = mcpConfig.value
-      
-      // Add files to zip with proper folder structure
-      zip.file('.vscode/settings.json', config.mcpSettingsJson)
-      zip.file('.vscode/mcp.json', config.mcpVSCodeJson)
-      zip.file('.github/copilot-instructions.md', config.mcpCopilotInstructions)
-      zip.file('scripts/mcp-agent.ps1', config.mcpPowerShellScript)
-      zip.file('scripts/mcp-agent.sh', config.mcpBashScript)
-      
-      // Add a README
-      const readmeContent = `# MCP Setup Files for ${mcpSetupAgent.value.name}
-
-## Contents
-- \`.vscode/settings.json\` - VS Code environment variables
-- \`.vscode/mcp.json\` - **Enhanced MCP server configuration** (includes agent, project, tools, and resource definitions)
-- \`.github/copilot-instructions.md\` - GitHub Copilot agent instructions
-- \`scripts/mcp-agent.ps1\` - PowerShell helper script
-- \`scripts/mcp-agent.sh\` - Bash helper script
-
-## Setup Instructions
-1. Extract this zip to your project's root directory
-2. Restart VS Code to apply environment variables
-3. The mcp.json file provides comprehensive MCP server integration with VS Code
-4. Start using Copilot with your agent identity!
-
-## Agent Details
-- **Name**: ${mcpSetupAgent.value.name}
-- **ID**: ${mcpSetupAgent.value.id}
-- **Role**: ${mcpSetupAgent.value.role}
-- **Project**: ${project.value.name}
-- **API URL**: ${mcpApiUrl.value}
-
-## MCP Configuration Highlights
-The mcp.json file includes:
-- Project detection patterns and metadata
-- Agent capabilities and behavior settings
-- All available API endpoints and tools
-- WebSocket support for real-time updates
-- Health monitoring and logging configuration
-- VS Code terminal environment integration
-`
-      zip.file('MCP_SETUP_README.md', readmeContent)
-      
-      // Generate and download zip
-      const content = await zip.generateAsync({ type: 'blob' })
-      const agentSlug = mcpSetupAgent.value.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-      downloadFile(`mcp-setup-${agentSlug}.zip`, content, 'application/zip')
+    const handleDownloadAllMcpFiles = async () => {
+      await downloadAllMcpFiles(mcpConfig.value, mcpSetupAgent.value.name)
     }
 
     // Project action handlers
@@ -949,7 +891,7 @@ The mcp.json file includes:
       formatDate,
       openMcpSetup,
       downloadMcpFile,
-      downloadAllMcpFiles,
+      handleDownloadAllMcpFiles,
       handleProjectAction,
       confirmDeleteProject,
       handleDeleteProject
