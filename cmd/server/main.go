@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 	"github.com/rs/cors"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
@@ -348,9 +349,16 @@ func runMigrations(db *database.DB) error {
 			return err
 		}
 
+		// Ensure transaction is rolled back on any error
+		committed := false
+		defer func() {
+			if !committed {
+				tx.Rollback()
+			}
+		}()
+
 		// Execute migration within transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
-			tx.Rollback()
 			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
 			return err
 		}
@@ -361,7 +369,13 @@ func runMigrations(db *database.DB) error {
 			entry.Name(),
 		)
 		if err != nil {
-			tx.Rollback()
+			// Check if this is a unique constraint violation (another instance already applied it)
+			// This can happen in rare race conditions despite the advisory lock
+			if sqlErr, ok := err.(*pq.Error); ok && sqlErr.Code == "23505" {
+				log.Printf("Migration %s already applied by another instance, skipping", entry.Name())
+				committed = true // Don't rollback, let transaction end naturally
+				return nil
+			}
 			return err
 		}
 
@@ -369,6 +383,7 @@ func runMigrations(db *database.DB) error {
 		if err := tx.Commit(); err != nil {
 			return err
 		}
+		committed = true
 
 		appliedCount++
 		log.Printf("✓ Applied migration: %s", entry.Name())
