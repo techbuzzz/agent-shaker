@@ -722,7 +722,7 @@ export default {
             downloadFile('mcp.json', config.mcpVSCodeJson, 'application/json')
             break
           case '.mcp':
-            downloadFile('.mcp.json', config.mcpVSCodeJson, 'application/json')
+            downloadFile('.mcp.json', config.mcpVS2026Json, 'application/json')
             break
           case 'copilot':
             downloadFile('copilot-instructions.md', config.mcpCopilotInstructions, 'text/markdown')
