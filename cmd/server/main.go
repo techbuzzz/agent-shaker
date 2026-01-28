@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -256,14 +255,14 @@ func runMigrations(db *database.DB) error {
 	// Acquire advisory lock to prevent concurrent migrations
 	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
 	const migrationLockKey = 918273645
-	
+
 	// Try to acquire advisory lock (non-blocking)
 	var lockAcquired bool
 	err := db.QueryRow("SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
 	if err != nil {
 		return fmt.Errorf("failed to acquire migration lock: %w", err)
 	}
-	
+
 	if !lockAcquired {
 		log.Println("Another instance is running migrations, waiting...")
 		// Block until we can acquire the lock
@@ -272,7 +271,7 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("failed to wait for migration lock: %w", err)
 		}
 	}
-	
+
 	// Ensure we release the lock when done
 	defer func() {
 		_, err := db.Exec("SELECT pg_advisory_unlock($1)", migrationLockKey)
@@ -325,7 +324,7 @@ func runMigrations(db *database.DB) error {
 	// Apply pending migrations in order
 	appliedCount := 0
 	migrationPattern := regexp.MustCompile(`^\d`)
-	
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
 			continue
@@ -366,11 +365,13 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
 		}
 
-		// Only after successful execution, record the migration as applied
-		// The advisory lock and pre-check ensure this INSERT should always succeed
+		// Record the migration as applied within same transaction
+		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
+		// between our initial check and now, we detect it here and skip redundant work
 		_, err = tx.Exec(
 			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP)`,
+			 VALUES ($1, CURRENT_TIMESTAMP) 
+			 ON CONFLICT (version) DO NOTHING`,
 			entry.Name(),
 		)
 		if err != nil {
@@ -380,30 +381,13 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
 
-		// Commit the transaction - migration and record are both applied atomically
+		// Commit the transaction - migration DDL and tracking record are both applied atomically
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 
-		// Record the migration only after DDL succeeds
-		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
-		// between our initial check and now, we detect it here and skip redundant work
-		_, err = tx.Exec(
-			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP) 
-			 ON CONFLICT (version) DO NOTHING`,
-			entry.Name(),
-		)
-		
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
-		}
-
-		// Commit the transaction - this makes both the DDL and tracking record atomic
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
-		}
+		appliedCount++
+		log.Printf("✓ Applied migration: %s", entry.Name())
 	}
 
 	if appliedCount == 0 {

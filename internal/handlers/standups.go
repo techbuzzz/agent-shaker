@@ -60,23 +60,23 @@ func (h *StandupHandler) CreateStandup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	standup := models.DailyStandup{
-		ID:          uuid.New(),
-		AgentID:     req.AgentID,
-		ProjectID:   req.ProjectID,
-		StandupDate: standupDate,
-		Did:         req.Did,
-		Doing:       req.Doing,
-		Done:        req.Done,
-		Blockers:    req.Blockers,
-		Challenges:  req.Challenges,
-		References:  req.References,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             uuid.New(),
+		AgentID:        req.AgentID,
+		ProjectID:      req.ProjectID,
+		StandupDate:    standupDate,
+		Did:            req.Did,
+		Doing:          req.Doing,
+		Done:           req.Done,
+		Blockers:       req.Blockers,
+		Challenges:     req.Challenges,
+		ReferenceLinks: req.ReferenceLinks,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}
 
 	// Insert or update (upsert) using ON CONFLICT
 	row := h.db.QueryRow(`
-		INSERT INTO daily_standups (id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at)
+		INSERT INTO daily_standups (id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (agent_id, standup_date)
 		DO UPDATE SET
@@ -85,12 +85,12 @@ func (h *StandupHandler) CreateStandup(w http.ResponseWriter, r *http.Request) {
 			done = EXCLUDED.done,
 			blockers = EXCLUDED.blockers,
 			challenges = EXCLUDED.challenges,
-			references = EXCLUDED.references,
+			reference_links = EXCLUDED.reference_links,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, created_at, updated_at
 	`, standup.ID, standup.AgentID, standup.ProjectID, standup.StandupDate,
 		standup.Did, standup.Doing, standup.Done, standup.Blockers,
-		standup.Challenges, standup.References, standup.CreatedAt, standup.UpdatedAt)
+		standup.Challenges, standup.ReferenceLinks, standup.CreatedAt, standup.UpdatedAt)
 
 	if err := row.Scan(&standup.ID, &standup.CreatedAt, &standup.UpdatedAt); err != nil {
 		http.Error(w, "Failed to create standup: "+err.Error(), http.StatusInternalServerError)
@@ -113,7 +113,7 @@ func (h *StandupHandler) ListStandups(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT s.id, s.agent_id, s.project_id, s.standup_date, s.did, s.doing, s.done, 
-		       s.blockers, s.challenges, s.references, s.created_at, s.updated_at,
+		       s.blockers, s.challenges, s.reference_links, s.created_at, s.updated_at,
 		       a.name as agent_name, a.role as agent_role, a.team as agent_team
 		FROM daily_standups s
 		INNER JOIN agents a ON s.agent_id = a.id
@@ -165,7 +165,7 @@ func (h *StandupHandler) ListStandups(w http.ResponseWriter, r *http.Request) {
 		var s models.StandupWithAgent
 		err := rows.Scan(
 			&s.ID, &s.AgentID, &s.ProjectID, &s.StandupDate, &s.Did, &s.Doing, &s.Done,
-			&s.Blockers, &s.Challenges, &s.References, &s.CreatedAt, &s.UpdatedAt,
+			&s.Blockers, &s.Challenges, &s.ReferenceLinks, &s.CreatedAt, &s.UpdatedAt,
 			&s.AgentName, &s.AgentRole, &s.AgentTeam,
 		)
 		if err != nil {
@@ -196,14 +196,14 @@ func (h *StandupHandler) GetStandup(w http.ResponseWriter, r *http.Request) {
 	var s models.StandupWithAgent
 	err = h.db.QueryRow(`
 		SELECT s.id, s.agent_id, s.project_id, s.standup_date, s.did, s.doing, s.done,
-		       s.blockers, s.challenges, s.references, s.created_at, s.updated_at,
+		       s.blockers, s.challenges, s.reference_links, s.created_at, s.updated_at,
 		       a.name as agent_name, a.role as agent_role, a.team as agent_team
 		FROM daily_standups s
 		INNER JOIN agents a ON s.agent_id = a.id
 		WHERE s.id = $1
 	`, id).Scan(
 		&s.ID, &s.AgentID, &s.ProjectID, &s.StandupDate, &s.Did, &s.Doing, &s.Done,
-		&s.Blockers, &s.Challenges, &s.References, &s.CreatedAt, &s.UpdatedAt,
+		&s.Blockers, &s.Challenges, &s.ReferenceLinks, &s.CreatedAt, &s.UpdatedAt,
 		&s.AgentName, &s.AgentRole, &s.AgentTeam,
 	)
 
@@ -239,13 +239,13 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 	var standup models.DailyStandup
 	err = h.db.QueryRow(`
 		UPDATE daily_standups
-		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, references = $6, updated_at = $7
+		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, reference_links = $6, updated_at = $7
 		WHERE id = $8
-		RETURNING id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, references, created_at, updated_at
-	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.References, time.Now(), id).Scan(
+		RETURNING id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at
+	`, req.Did, req.Doing, req.Done, req.Blockers, req.Challenges, req.ReferenceLinks, time.Now(), id).Scan(
 		&standup.ID, &standup.AgentID, &standup.ProjectID, &standup.StandupDate,
 		&standup.Did, &standup.Doing, &standup.Done, &standup.Blockers, &standup.Challenges,
-		&standup.References, &standup.CreatedAt, &standup.UpdatedAt,
+		&standup.ReferenceLinks, &standup.CreatedAt, &standup.UpdatedAt,
 	)
 
 	if err != nil {

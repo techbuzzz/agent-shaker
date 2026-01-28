@@ -1,4 +1,4 @@
--- Create daily_standups table
+﻿-- Create daily_standups table
 CREATE TABLE IF NOT EXISTS daily_standups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS daily_standups (
     done TEXT NOT NULL,
     blockers TEXT,
     challenges TEXT,
-    references TEXT,
+    reference_links TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unique_agent_date UNIQUE (agent_id, standup_date)

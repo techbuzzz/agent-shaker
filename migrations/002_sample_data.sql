@@ -51,12 +51,3 @@ INSERT INTO contexts (id, project_id, agent_id, task_id, title, content, tags, c
 ('880e8400-e29b-41d4-a716-446655440003', '550e8400-e29b-41d4-a716-446655440002', '660e8400-e29b-41d4-a716-446655440004', '770e8400-e29b-41d4-a716-446655440004', 'Flutter Navigation Setup', '# Navigation Implementation\n\nUsing `go_router` package for declarative routing.\n\n## Routes\n- / - Home\n- /profile - User Profile\n- /settings - App Settings', ARRAY['flutter', 'navigation', 'mobile'], NOW() - INTERVAL '5 days', NOW() - INTERVAL '5 days'),
 ('880e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440003', '660e8400-e29b-41d4-a716-446655440007', '770e8400-e29b-41d4-a716-446655440007', 'Chart.js Integration Guide', '# Using Chart.js with React\n\n```javascript\nimport { Line } from ''react-chartjs-2'';\n\nconst MyChart = () => (\n  <Line data={data} options={options} />\n);\n```', ARRAY['charts', 'react', 'visualization'], NOW() - INTERVAL '10 days', NOW() - INTERVAL '10 days')
 ON CONFLICT (id) DO NOTHING;
-
--- Verify the data
-SELECT 'Projects created:' as info, COUNT(*) as count FROM projects
-UNION ALL
-SELECT 'Agents created:', COUNT(*) FROM agents
-UNION ALL
-SELECT 'Tasks created:', COUNT(*) FROM tasks
-UNION ALL
-SELECT 'Contexts created:', COUNT(*) FROM contexts;
