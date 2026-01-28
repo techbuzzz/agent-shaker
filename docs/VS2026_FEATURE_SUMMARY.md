@@ -9,10 +9,10 @@
 
 Enhanced Composable ✅
 └─ mcpVS2026Json (NEW)
-   ├─ Full schema-aware configuration
-   ├─ 10+ integrated tools
-   ├─ Complete API endpoint mapping
-   └─ Production-ready settings
+   ├─ Minimal, focused configuration
+   ├─ Server type and URL with context
+   ├─ Dynamic tool/resource discovery
+   └─ Production-ready, extensible
 
 Deployment Options ✅
 ├─ Option A: Download ZIP
@@ -58,31 +58,16 @@ const {
 ### 2. Visual Studio 2026 Configuration
 ```json
 {
-  "$schema": "https://aka.ms/mcp-server-schema",
-  "version": "1.0.0",
   "servers": {
     "agent-shaker": {
       "type": "http",
-      "url": "http://localhost:8080?project_id=X&agent_id=Y",
-      "capabilities": [
-        "resources",
-        "tools", 
-        "prompts",
-        "context-sharing"
-      ],
-      "tools": [
-        { "name": "get_my_tasks", ... },
-        { "name": "update_task_status", ... },
-        { "name": "create_task", ... },
-        // 7 more tools...
-      ],
-      "resources": { ... },
-      "security": { ... },
-      "logging": { ... }
+      "url": "http://localhost:8080?project_id=X&agent_id=Y"
     }
   }
 }
 ```
+
+**Note**: This minimal configuration connects to the MCP server. Tools, resources, and capabilities are discovered dynamically through the MCP protocol. You can extend this with additional fields like `$schema`, `capabilities`, `tools`, `resources`, `security`, and `logging` if needed.
 
 ### 3. Two Deployment Methods
 
@@ -124,12 +109,13 @@ Project Root
 └── .mcp.json ← Automatically detected by VS 2026
     ├── No manual configuration needed
     ├── Loads on startup
-    └── Establishes MCP connection
+    ├── Establishes MCP connection
+    └── Tools/resources discovered dynamically
 ```
 
-### Comprehensive Tool Support
+### Server-Side Tool Discovery
 ```
-10 Built-in Tools:
+MCP Server provides tools dynamically:
 ✓ get_my_identity      - Get agent info
 ✓ get_my_project       - Get project details
 ✓ get_my_tasks         - List assigned tasks
@@ -141,11 +127,14 @@ Project Root
 ✓ add_context          - Add documentation
 ✓ get_project_agents   - See team members
 ✓ get_dashboard_stats  - View project metrics
+
+Note: Tools are exposed by the server through the MCP protocol,
+not defined in the client configuration file.
 ```
 
 ### Complete API Integration
 ```
-Endpoints Mapped:
+Endpoints Available Through MCP:
 /health              - Health check
 /projects            - Project listing
 /agents              - Agent management
@@ -154,6 +143,9 @@ Endpoints Mapped:
 /dashboard           - Metrics & stats
 /agents/{id}/tasks   - Agent's tasks
 /projects/{id}/...   - Project resources
+
+Note: Endpoints are accessed through the MCP server connection,
+not defined in the client configuration.
 ```
 
 ## 📋 Implementation Checklist
@@ -164,6 +156,7 @@ Endpoints Mapped:
 - [x] Implemented `copyMcpFilesToProject()` function
 - [x] Updated ZIP download to include `.mcp.json`
 - [x] Comprehensive error handling
+- [x] Minimal, focused configuration structure
 
 ### Backend (To Do)
 - [ ] Create endpoint: `POST /api/projects/{projectId}/mcp-files`
@@ -223,15 +216,15 @@ func CreateMcpFiles(w http.ResponseWriter, r *http.Request) {
 
 ### Composable Size
 - **Original**: 325 lines
-- **Enhanced**: 552 lines
-- **Increase**: +227 lines (+70%)
-- **New Features**: 2 major additions
+- **Enhanced**: 662 lines
+- **Increase**: +337 lines (+104%)
+- **New Features**: 2 major additions (mcpVS2026Json, copyMcpFilesToProject)
 - **Zero Breaking Changes**: ✅
 
 ### Generated Configuration Size
-- **mcpVSCodeJson**: ~1.2 KB (simplified)
-- **mcpVS2026Json**: ~4.5 KB (full-featured)
-- **Total Package**: ~20 KB (with all files and ZIP)
+- **mcpVSCodeJson**: ~200 bytes (minimal)
+- **mcpVS2026Json**: ~150 bytes (minimal)
+- **Total Package**: ~15 KB (with all files and ZIP)
 
 ### Performance
 - **Configuration Generation**: < 1ms
@@ -349,9 +342,9 @@ const applyConfig = async () => {
 
 ### 🏢 For Organizations
 - 📦 Complete setup package
-- 🔐 Security configured
-- 📊 Monitoring enabled
-- 🔄 Auto-recovery built-in
+- 🔐 Clean, minimal configuration
+- 📊 Dynamic capability discovery
+- 🔄 Standards-compliant MCP protocol
 
 ## 🚀 Next Steps
 
@@ -389,7 +382,7 @@ const applyConfig = async () => {
 Your MCP configuration system is now ready for Visual Studio 2026! 
 
 ✅ **Composable**: Fully enhanced with VS 2026 support  
-✅ **Configuration**: Complete with schema and all tools  
+✅ **Configuration**: Minimal, extensible MCP config  
 ✅ **Deployment**: Two flexible options (download/copy)  
 ✅ **Documentation**: Comprehensive guides provided  
 ✅ **Ready to Deploy**: Just needs backend implementation  
