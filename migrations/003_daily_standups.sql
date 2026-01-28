@@ -1,4 +1,4 @@
-﻿-- Create daily_standups table
+-- Create daily_standups table
 CREATE TABLE IF NOT EXISTS daily_standups (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
