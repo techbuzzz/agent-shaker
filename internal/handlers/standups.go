@@ -249,7 +249,7 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		if err.Error() == "sql: no rows in result set" {
+		if err == sql.ErrNoRows {
 			http.Error(w, "Standup not found", http.StatusNotFound)
 			return
 		}
