@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -334,15 +335,32 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
-		// Skip if already applied
-		if appliedMigrations[entry.Name()] {
-			continue
+		log.Printf("Applying migration: %s", entry.Name())
+
+		// Read migration file
+		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
 
-		// Try to claim this migration using INSERT ... ON CONFLICT
-		// This ensures only one instance will successfully claim and execute the migration
+		// Execute migration in a transaction
+		// This ensures atomicity: either both the migration DDL and tracking record succeed, or both are rolled back
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to begin transaction for migration %s: %w", entry.Name(), err)
+		}
+
+		// Execute the migration DDL first
+		if _, err := tx.Exec(string(migrationSQL)); err != nil {
+			tx.Rollback()
+			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			return fmt.Errorf("migration %s failed: %w", entry.Name(), err)
+		}
+
+		// Only record the migration if DDL succeeded
+		// Use INSERT ... ON CONFLICT to handle concurrent scenarios
 		var claimedVersion string
-		err = db.QueryRow(
+		err = tx.QueryRow(
 			`INSERT INTO schema_migrations (version, applied_at) 
 			 VALUES ($1, CURRENT_TIMESTAMP) 
 			 ON CONFLICT (version) DO NOTHING 
@@ -351,34 +369,19 @@ func runMigrations(db *database.DB) error {
 		).Scan(&claimedVersion)
 		
 		if err == sql.ErrNoRows {
-			// ON CONFLICT happened - another instance already claimed this migration
-			// This is expected in concurrent scenarios, not an error
-			log.Printf("Migration %s already claimed by another instance, skipping", entry.Name())
+			// ON CONFLICT happened - another instance already applied this migration
+			// Rollback our changes (which should be idempotent anyway)
+			tx.Rollback()
+			log.Printf("Migration %s already applied by another instance, skipping", entry.Name())
 			continue
 		} else if err != nil {
-			// Unexpected database error
-			return err
+			tx.Rollback()
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
 
-		log.Printf("Applying migration: %s", entry.Name())
-
-		// Read migration file
-		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
-		if err != nil {
-			// Migration was claimed but can't be read - attempt to remove the claim
-			if _, delErr := db.Exec("DELETE FROM schema_migrations WHERE version = $1", entry.Name()); delErr != nil {
-				log.Printf("Warning: failed to remove claim for %s after read error: %v", entry.Name(), delErr)
-			}
-			return err
-		}
-
-		// Execute migration DDL
-		// Note: We don't use a transaction here because we've already inserted the tracking row
-		// If the migration fails, the tracking row remains as a record that it was attempted
-		if _, err := db.Exec(string(migrationSQL)); err != nil {
-			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
-			// Leave the tracking row to prevent re-attempts; manual intervention required
-			return err
+		// Commit the transaction - this makes both the DDL and tracking record atomic
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 
 		appliedCount++
