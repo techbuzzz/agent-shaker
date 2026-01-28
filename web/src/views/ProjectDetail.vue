@@ -996,6 +996,11 @@ get_project_contexts() {
       } catch (error) {
         console.error('Failed to reassign task:', error)
         alert('Failed to reassign task. Please try again.')
+        
+        // Call the error callback if provided
+        if (reassignmentData.onError) {
+          reassignmentData.onError()
+        }
       } finally {
         isReassigningTask.value = false
       }
