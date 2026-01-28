@@ -1,4 +1,4 @@
-import { computed, isRef, unref } from 'vue'
+import { computed, unref } from 'vue'
 
 /**
  * Composable for MCP setup configuration generation
