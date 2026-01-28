@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 	"github.com/rs/cors"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
@@ -334,55 +335,14 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
-		// Skip if already applied
-		if appliedMigrations[entry.Name()] {
-			continue
-		}
-
-		// Try to claim this migration using INSERT ... ON CONFLICT
-		// This ensures only one instance will successfully claim and execute the migration
-		var claimedVersion string
-		err = db.QueryRow(
-			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP) 
-			 ON CONFLICT (version) DO NOTHING 
-			 RETURNING version`,
-			entry.Name(),
-		).Scan(&claimedVersion)
-		
-		if err == sql.ErrNoRows {
-			// ON CONFLICT happened - another instance already claimed this migration
-			// This is expected in concurrent scenarios, not an error
-			log.Printf("Migration %s already claimed by another instance, skipping", entry.Name())
-			continue
-		} else if err != nil {
-			// Unexpected database error
-			return err
-		}
-
-		log.Printf("Applying migration: %s", entry.Name())
-
-		// Read migration file
-		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
+		// Apply single migration in its own transaction
+		applied, err := applyMigration(db, entry.Name())
 		if err != nil {
-			// Migration was claimed but can't be read - attempt to remove the claim
-			if _, delErr := db.Exec("DELETE FROM schema_migrations WHERE version = $1", entry.Name()); delErr != nil {
-				log.Printf("Warning: failed to remove claim for %s after read error: %v", entry.Name(), delErr)
-			}
 			return err
 		}
-
-		// Execute migration DDL
-		// Note: We don't use a transaction here because we've already inserted the tracking row
-		// If the migration fails, the tracking row remains as a record that it was attempted
-		if _, err := db.Exec(string(migrationSQL)); err != nil {
-			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
-			// Leave the tracking row to prevent re-attempts; manual intervention required
-			return err
+		if applied {
+			appliedCount++
 		}
-
-		appliedCount++
-		log.Printf("✓ Applied migration: %s", entry.Name())
 	}
 
 	if appliedCount == 0 {
@@ -392,6 +352,62 @@ func runMigrations(db *database.DB) error {
 	}
 
 	return nil
+}
+
+// applyMigration applies a single migration within a transaction
+func applyMigration(db *database.DB, filename string) (bool, error) {
+	log.Printf("Applying migration: %s", filename)
+
+	// Read migration file
+	migrationSQL, err := os.ReadFile("migrations/" + filename)
+	if err != nil {
+		return false, err
+	}
+
+	// Begin transaction for migration execution
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+
+	// Ensure transaction is rolled back on any error
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	// Execute migration within transaction
+	if _, err := tx.Exec(string(migrationSQL)); err != nil {
+		log.Printf("✗ Failed to apply migration %s: %v", filename, err)
+		return false, err
+	}
+
+	// Record migration as applied within same transaction
+	_, err = tx.Exec(
+		"INSERT INTO schema_migrations (version) VALUES ($1)",
+		filename,
+	)
+	if err != nil {
+		// Check if this is a unique constraint violation (another instance already applied it)
+		// This can happen in rare race conditions despite the advisory lock
+		if sqlErr, ok := err.(*pq.Error); ok && sqlErr.Code == "23505" {
+			log.Printf("Migration %s already applied by another instance, skipping", filename)
+			// No need to rollback or commit - just let the transaction end
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Commit transaction - both migration and tracking succeed or fail together
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	committed = true
+
+	log.Printf("✓ Applied migration: %s", filename)
+	return true, nil
 }
 
 func getPort() string {
