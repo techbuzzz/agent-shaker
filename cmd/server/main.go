@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -352,30 +351,24 @@ func runMigrations(db *database.DB) error {
 
 		// Execute migration DDL within the transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after migration error: %v", rbErr)
+			}
 			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
 			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
 		}
 
 		// Only after successful execution, record the migration as applied
-		// Use INSERT with ON CONFLICT to handle concurrent scenarios
-		var claimedVersion string
-		err = tx.QueryRow(
+		// The advisory lock and pre-check ensure this INSERT should always succeed
+		_, err = tx.Exec(
 			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP) 
-			 ON CONFLICT (version) DO NOTHING 
-			 RETURNING version`,
+			 VALUES ($1, CURRENT_TIMESTAMP)`,
 			entry.Name(),
-		).Scan(&claimedVersion)
-
-		if err == sql.ErrNoRows {
-			// Another instance already applied this migration concurrently
-			// Roll back our changes and skip
-			tx.Rollback()
-			log.Printf("Migration %s already applied by another instance, rolling back", entry.Name())
-			continue
-		} else if err != nil {
-			tx.Rollback()
+		)
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after insert error: %v", rbErr)
+			}
 			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
 
