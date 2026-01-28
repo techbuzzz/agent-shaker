@@ -350,6 +350,19 @@ export default {
       }
       
       const [year, month, day] = parts.map(Number)
+      
+      // Validate that year, month, and day are finite numbers within expected ranges
+      if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||
+          year < 1000 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) {
+        // Fallback to standard parsing if values are invalid
+        return new Date(dateString).toLocaleDateString('en-US', { 
+          weekday: 'long', 
+          year: 'numeric', 
+          month: 'long', 
+          day: 'numeric' 
+        })
+      }
+      
       const date = new Date(year, month - 1, day) // Use local timezone with specific date parts
       return date.toLocaleDateString('en-US', { 
         weekday: 'long', 
