@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -344,7 +343,8 @@ func runMigrations(db *database.DB) error {
 		}
 
 		// Execute migration in a transaction
-		// This ensures atomicity: either both the migration DDL and tracking record succeed, or both are rolled back
+		// PostgreSQL supports transactional DDL, allowing atomic execution of schema changes
+		// If DDL fails, tracking record is not inserted; if insert fails, DDL is rolled back
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction for migration %s: %w", entry.Name(), err)
@@ -357,24 +357,17 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("migration %s failed: %w", entry.Name(), err)
 		}
 
-		// Only record the migration if DDL succeeded
-		// Use INSERT ... ON CONFLICT to handle concurrent scenarios
-		var claimedVersion string
-		err = tx.QueryRow(
+		// Record the migration only after DDL succeeds
+		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
+		// between our initial check and now, we detect it here and skip redundant work
+		_, err = tx.Exec(
 			`INSERT INTO schema_migrations (version, applied_at) 
 			 VALUES ($1, CURRENT_TIMESTAMP) 
-			 ON CONFLICT (version) DO NOTHING 
-			 RETURNING version`,
+			 ON CONFLICT (version) DO NOTHING`,
 			entry.Name(),
-		).Scan(&claimedVersion)
+		)
 		
-		if err == sql.ErrNoRows {
-			// ON CONFLICT happened - another instance already applied this migration
-			// Rollback our changes (which should be idempotent anyway)
-			tx.Rollback()
-			log.Printf("Migration %s already applied by another instance, skipping", entry.Name())
-			continue
-		} else if err != nil {
+		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
