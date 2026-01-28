@@ -428,7 +428,7 @@ export default {
 
     // MCP Setup configuration using composable
     const mcpApiUrl = computed(() => {
-      return `${window.location.protocol}//${window.location.host}/api`
+      return `${window.location.protocol}//${window.location.host}:8080`
     })
 
     const {
@@ -442,7 +442,7 @@ export default {
       downloadFile,
       downloadAllMcpFiles,
       copyMcpFilesToProject
-    } = useMcpSetup(mcpSetupAgent, project, mcpApiUrl)
+    } = useMcpSetup(mcpSetupAgent, project, mcpApiUrl, agents)
 
     onMounted(() => {
       const projectId = route.params.id
@@ -712,28 +712,41 @@ export default {
     }
 
     const downloadMcpFile = (fileType) => {
-      const config = mcpConfig.value
-      switch (fileType) {
-        case 'settings':
-          downloadFile('settings.json', config.mcpSettingsJson, 'application/json')
-          break
-        case 'mcp':
-          downloadFile('mcp.json', config.mcpVSCodeJson, 'application/json')
-          break
-        case 'copilot':
-          downloadFile('copilot-instructions.md', config.mcpCopilotInstructions, 'text/markdown')
-          break
-        case 'powershell':
-          downloadFile('mcp-agent.ps1', config.mcpPowerShellScript, 'text/plain')
-          break
-        case 'bash':
-          downloadFile('mcp-agent.sh', config.mcpBashScript, 'text/plain')
-          break
+      try {
+        const config = mcpConfig.value
+        switch (fileType) {
+          case 'settings':
+            downloadFile('settings.json', config.mcpSettingsJson, 'application/json')
+            break
+          case 'mcp':
+            downloadFile('mcp.json', config.mcpVSCodeJson, 'application/json')
+            break
+          case '.mcp':
+            downloadFile('.mcp.json', config.mcpVSCodeJson, 'application/json')
+            break
+          case 'copilot':
+            downloadFile('copilot-instructions.md', config.mcpCopilotInstructions, 'text/markdown')
+            break
+          case 'powershell':
+            downloadFile('mcp-agent.ps1', config.mcpPowerShellScript, 'text/plain')
+            break
+          case 'bash':
+            downloadFile('mcp-agent.sh', config.mcpBashScript, 'text/plain')
+            break
+        }
+      } catch (error) {
+        console.error('Failed to download file:', error)
+        alert(`Failed to download file: ${error.message}`)
       }
     }
 
     const handleDownloadAllMcpFiles = async () => {
-      await downloadAllMcpFiles(mcpConfig.value, mcpSetupAgent.value.name)
+      try {
+        await downloadAllMcpFiles(mcpConfig.value, mcpSetupAgent.value.name)
+      } catch (error) {
+        console.error('Failed to download MCP files:', error)
+        alert(`Failed to download MCP files: ${error.message}`)
+      }
     }
 
     // Project action handlers

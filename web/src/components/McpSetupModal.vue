@@ -38,21 +38,38 @@
           <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-48"><code>{{ mcpConfig.mcpSettingsJson }}</code></pre>
         </div>
 
-        <!-- MCP Configuration -->
+        <!-- MCP Configuration for VS Code -->
         <div class="border border-blue-200 bg-blue-50/30 rounded-lg overflow-hidden">
           <div class="bg-blue-100 px-4 py-3 flex justify-between items-center border-b border-blue-200">
             <div>
               <h4 class="font-semibold text-blue-900 flex items-center gap-2">
                 <span>🔗</span> .vscode/mcp.json
-                <span class="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">Enhanced</span>
+                <span class="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full">VS Code</span>
               </h4>
-              <p class="text-xs text-blue-700">Comprehensive MCP server configuration for VS Code</p>
+              <p class="text-xs text-blue-700">MCP server configuration for VS Code</p>
             </div>
             <button @click="$emit('download-file', 'mcp')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
               <span>📥</span> Download
             </button>
           </div>
           <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-64"><code>{{ mcpConfig.mcpVSCodeJson }}</code></pre>
+        </div>
+
+        <!-- Visual Studio 2026 Configuration -->
+        <div class="border border-purple-200 bg-purple-50/30 rounded-lg overflow-hidden">
+          <div class="bg-purple-100 px-4 py-3 flex justify-between items-center border-b border-purple-200">
+            <div>
+              <h4 class="font-semibold text-purple-900 flex items-center gap-2">
+                <span>🔗</span> .mcp.json
+                <span class="text-xs bg-purple-600 text-white px-2 py-0.5 rounded-full">Visual Studio 2026</span>
+              </h4>
+              <p class="text-xs text-purple-700">Complete MCP server configuration - place in project root directory</p>
+            </div>
+            <button @click="$emit('download-file', '.mcp')" class="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1">
+              <span>📥</span> Download
+            </button>
+          </div>
+          <pre class="p-4 bg-gray-900 text-green-400 text-sm overflow-x-auto max-h-64"><code>{{ mcpConfig.mcpVS2026Json }}</code></pre>
         </div>
 
         <!-- GitHub Copilot Instructions -->
