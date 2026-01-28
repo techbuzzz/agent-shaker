@@ -341,12 +341,18 @@ export default {
       
       if (parts.length !== 3) {
         // Fallback to standard parsing if format is unexpected
-        return new Date(dateString).toLocaleDateString('en-US', { 
-          weekday: 'long', 
-          year: 'numeric', 
-          month: 'long', 
-          day: 'numeric' 
-        })
+        try {
+          const date = new Date(dateString)
+          if (isNaN(date.getTime())) return 'Invalid date'
+          return date.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric' 
+          })
+        } catch (e) {
+          return 'Invalid date'
+        }
       }
       
       const [year, month, day] = parts.map(Number)
@@ -355,15 +361,30 @@ export default {
       if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day) ||
           year < 1000 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) {
         // Fallback to standard parsing if values are invalid
-        return new Date(dateString).toLocaleDateString('en-US', { 
-          weekday: 'long', 
-          year: 'numeric', 
-          month: 'long', 
-          day: 'numeric' 
-        })
+        try {
+          const date = new Date(dateString)
+          if (isNaN(date.getTime())) return 'Invalid date'
+          return date.toLocaleDateString('en-US', { 
+            weekday: 'long', 
+            year: 'numeric', 
+            month: 'long', 
+            day: 'numeric' 
+          })
+        } catch (e) {
+          return 'Invalid date'
+        }
       }
       
-      const date = new Date(year, month - 1, day) // Use local timezone with specific date parts
+      // Construct date and validate it matches the input values
+      const date = new Date(year, month - 1, day)
+      if (isNaN(date.getTime()) || 
+          date.getFullYear() !== year || 
+          date.getMonth() !== month - 1 || 
+          date.getDate() !== day) {
+        // Date rolled over (e.g., Feb 31 -> Mar 3), so it's invalid
+        return 'Invalid date'
+      }
+      
       return date.toLocaleDateString('en-US', { 
         weekday: 'long', 
         year: 'numeric', 
