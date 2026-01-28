@@ -320,7 +320,7 @@ import ConfirmModal from '../components/ConfirmModal.vue'
 import McpSetupModal from '../components/McpSetupModal.vue'
 import { formatDate, getUniqueTags } from '../utils/formatters'
 import { getAgentName, getTaskTitle, filterContexts } from '../utils/dataHelpers'
-import { useMcpSetup, downloadFile, downloadAllMcpFiles } from '../composables/useMcpSetup'
+import { useMcpSetup } from '../composables/useMcpSetup'
 import api from '../services/api'
 
 export default {
