@@ -7,10 +7,10 @@ Enhanced MCP setup composable with dedicated Visual Studio 2026 support, includi
 ## Features
 
 ### 1. **VS 2026 Dedicated Configuration** (`mcpVS2026Json`)
-- Full-featured MCP server configuration optimized for Visual Studio 2026
-- Includes schema reference for VS 2026 compatibility
-- Comprehensive tool definitions and endpoints
-- Enhanced security and logging configuration
+- MCP server configuration optimized for Visual Studio 2026
+- Minimal, focused configuration with server type and URL
+- Includes project and agent context in URL parameters
+- Ready for extension with additional capabilities as needed
 
 ### 2. **Root Directory `.mcp.json`**
 - Auto-generated `.mcp.json` file for project root
@@ -36,22 +36,16 @@ Generates configuration for:
 ### `.mcp.json` (Visual Studio 2026 - Root Directory)
 ```json
 {
-  "$schema": "https://aka.ms/mcp-server-schema",
-  "version": "1.0.0",
   "servers": {
     "agent-shaker": {
       "type": "http",
-      "url": "http://localhost:8080?project_id=...&agent_id=...",
-      "name": "Agent Shaker MCP Server",
-      "capabilities": ["resources", "tools", "prompts", "context-sharing"],
-      "tools": [...],
-      "resources": {...},
-      "security": {...},
-      "logging": {...}
+      "url": "http://localhost:8080?project_id=...&agent_id=..."
     }
   }
 }
 ```
+
+**Note**: This minimal configuration provides the essential server connection details. The server itself exposes tools, resources, and capabilities dynamically through the MCP protocol once connected. You can extend this configuration with additional fields like `$schema`, `capabilities`, `tools`, etc., if your Visual Studio 2026 setup requires explicit definitions.
 
 ### Additional Files
 - `.vscode/settings.json` - VS Code environment variables

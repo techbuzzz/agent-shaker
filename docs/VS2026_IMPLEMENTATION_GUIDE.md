@@ -14,7 +14,7 @@ const mcpApiUrl = computed(() => {
 })
 
 const {
-  mcpVS2026Json,      // New: Full VS 2026 configuration
+  mcpVS2026Json,      // New: VS 2026 MCP configuration
   mcpConfig,          // Bundle of all configs
   downloadAllMcpFiles,
   copyMcpFilesToProject // New: Direct copy to project
@@ -76,18 +76,15 @@ project-root/
 ## What Gets Generated
 
 ### `.mcp.json` (VS 2026)
-- Full MCP server configuration
-- Schema reference for validation
-- 10+ tool definitions
-- API endpoint mappings
-- Security and logging configuration
-- Auto-reconnect settings
-- Health check configuration
+- Minimal MCP server configuration
+- Server type and URL with project/agent context
+- Tools and capabilities exposed dynamically by server
+- Extensible structure for future enhancements
 
 ### `.vscode/mcp.json` (VS Code)
-- Simplified VS Code format
+- Minimal VS Code format
 - Server URL with project/agent context
-- Same tools and capabilities
+- Tools discovered dynamically through MCP protocol
 
 ### `.vscode/settings.json`
 - Environment variables for terminal
@@ -109,11 +106,11 @@ Choose between:
 - **ZIP Download**: For local setup or sharing
 - **Direct Copy**: One-click project integration
 
-### 🛡️ Secure Configuration
-- No authentication required for demo
-- CORS enabled for localhost
-- Rate limiting (disabled for dev, enabled for production)
-- Logging with timestamps
+### 🛡️ Clean Configuration
+- No hardcoded tools or capabilities in config
+- Dynamic discovery through MCP protocol
+- Minimal configuration for easy maintenance
+- Extensible structure for custom needs
 
 ### 📦 Complete Setup
 All necessary files included:
@@ -268,9 +265,9 @@ After setup, verify everything works:
    - Try Copilot prompts
 
 2. **Customize Configuration**
-   - Edit tool definitions
-   - Add custom endpoints
-   - Adjust logging levels
+   - Extend with additional fields if needed
+   - Add explicit tool definitions (optional)
+   - Configure custom capabilities (optional)
 
 3. **Share with Team**
    - Download ZIP and share

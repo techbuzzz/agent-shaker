@@ -3,20 +3,17 @@
 ## ✅ What Was Added
 
 ### 1. **Enhanced useMcpSetup.js Composable**
-- **New Property**: `mcpVS2026Json` - Full Visual Studio 2026 configuration
+- **New Property**: `mcpVS2026Json` - Visual Studio 2026 MCP configuration
 - **New Function**: `copyMcpFilesToProject()` - Direct file creation API
 - **Updated Bundle**: `mcpConfig` now includes VS 2026 configuration
-- **Total Size**: 552 lines (enhanced from 325 lines)
+- **Total Size**: 662 lines (enhanced from 325 lines)
 
 ### 2. **VS 2026 Configuration Features**
-✨ Full MCP server configuration with:
-- Schema reference for validation (`$schema`: `https://aka.ms/mcp-server-schema`)
-- 10+ tool definitions (tasks, context, agents, dashboard)
-- Complete resource endpoints mapping
-- Security configuration (CORS, rate limiting)
-- Logging configuration (info level, JSON format, timestamps)
-- Auto-reconnect behavior (3 retries, 30s timeout)
-- Health check monitoring (60s interval)
+✨ Minimal MCP server configuration with:
+- Server type and URL with project/agent context
+- Ready for VS 2026 auto-detection
+- Extensible structure for adding capabilities, tools, and resources
+- Server dynamically exposes tools and capabilities through MCP protocol
 
 ### 3. **File Generation System**
 Generates 6 configuration files:
@@ -48,11 +45,11 @@ scripts/mcp-agent.sh           (Bash helpers)
 - No manual configuration required
 - Works on startup and after restart
 
-### Comprehensive Configuration
-- Full tool definitions with descriptions and endpoints
-- API endpoint mappings for all operations
-- Security settings for production readiness
-- Logging and monitoring configuration
+### Minimal Configuration
+- Essential server connection details (type and URL)
+- Project and agent context passed via URL parameters
+- Tools, resources, and capabilities exposed dynamically by the server
+- Extensible structure for future enhancements
 
 ### Developer Experience
 - Simple API: `copyMcpFilesToProject(config, projectId)`
@@ -97,24 +94,16 @@ scripts/mcp-agent.sh           (Bash helpers)
 ### Configuration Structure
 ```json
 {
-  "$schema": "https://aka.ms/mcp-server-schema",
-  "version": "1.0.0",
   "servers": {
     "agent-shaker": {
       "type": "http",
-      "url": "...",
-      "capabilities": ["resources", "tools", "prompts", "context-sharing"],
-      "project": { ... },
-      "agent": { ... },
-      "resources": { ... },
-      "tools": [ ... 10 items ],
-      "behavior": { ... },
-      "security": { ... },
-      "logging": { ... }
+      "url": "http://localhost:8080?project_id=...&agent_id=..."
     }
   }
 }
 ```
+
+**Note**: This minimal configuration provides essential server connection details. The server dynamically exposes tools, resources, and capabilities through the MCP protocol once connected. The configuration can be extended with additional fields such as `$schema`, `version`, `capabilities`, `tools`, `resources`, `security`, and `logging` if your setup requires explicit definitions.
 
 ## 🚀 Usage
 
@@ -170,10 +159,10 @@ Response:
 - ✅ Multiple deployment options
 
 ### Production Readiness
-- ✅ Security configuration included
-- ✅ Logging and monitoring built-in
-- ✅ Auto-reconnect and health checks
-- ✅ Schema validation support
+- ✅ Clean, minimal configuration
+- ✅ Extensible structure for future features
+- ✅ Server-side capability negotiation
+- ✅ Dynamic tool and resource discovery
 
 ## 📚 Documentation Files
 
@@ -205,9 +194,9 @@ Response:
 
 ### For DevOps/Admin
 - 📦 Complete file generation
-- 🔐 Security configuration included
-- 📊 Logging and monitoring
-- 🔄 Auto-reconnect capability
+- 🔐 Clean configuration structure
+- 📊 Server handles logging and monitoring
+- 🔄 Connection managed by IDE
 
 ## 🔄 Integration Path
 
@@ -293,7 +282,7 @@ await downloadAllMcpFiles(mcpConfig, 'agent-name')
 ## ✅ Status
 
 - **Composable**: ✅ Complete and tested
-- **VS 2026 Config**: ✅ Full schema support
+- **VS 2026 Config**: ✅ Minimal, extensible configuration
 - **Direct Copy API**: ✅ Ready for implementation
 - **Documentation**: ✅ Comprehensive guides created
 - **Error Handling**: ✅ Implemented
