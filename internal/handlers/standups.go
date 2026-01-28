@@ -253,7 +253,7 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Standup not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, "Failed to update standup", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to update standup: %v", err), http.StatusInternalServerError)
 		return
 	}
 
