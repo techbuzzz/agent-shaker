@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS daily_standups (
     done TEXT NOT NULL,
     blockers TEXT,
     challenges TEXT,
-    references TEXT,
+    reference_links TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unique_agent_date UNIQUE (agent_id, standup_date)

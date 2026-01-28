@@ -222,6 +222,7 @@
       :show="showReassignTaskModal"
       :task="reassigningTask"
       :agents="agents"
+      :is-submitting="isReassigningTask"
       @close="showReassignTaskModal = false"
       @reassign="handleReassignTask"
     />
@@ -319,7 +320,8 @@ import ConfirmModal from '../components/ConfirmModal.vue'
 import McpSetupModal from '../components/McpSetupModal.vue'
 import { formatDate, getUniqueTags } from '../utils/formatters'
 import { getAgentName, getTaskTitle, filterContexts } from '../utils/dataHelpers'
-import { useMcpSetup, downloadFile, downloadAllMcpFiles } from '../composables/useMcpSetup'
+import { useMcpSetup } from '../composables/useMcpSetup'
+import api from '../services/api'
 
 export default {
   name: 'ProjectDetail',
@@ -346,6 +348,7 @@ export default {
     const showAddAgentModal = ref(false)
     const showAddTaskModal = ref(false)
     const showReassignTaskModal = ref(false)
+    const isReassigningTask = ref(false)
     const showAddContextModal = ref(false)
     const showViewContextModal = ref(false)
     const showDeleteConfirm = ref(false)
@@ -423,466 +426,23 @@ export default {
       return filtered
     })
 
-    // MCP Setup computed properties
+    // MCP Setup configuration using composable
     const mcpApiUrl = computed(() => {
-      return `${window.location.protocol}//${window.location.host}/api`
+      return `${window.location.protocol}//${window.location.hostname}:8080`
     })
 
-    const mcpSettingsJson = computed(() => {
-      if (!mcpSetupAgent.value || !project.value) return ''
-      return JSON.stringify({
-        "terminal.integrated.env.windows": {
-          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
-          "MCP_AGENT_ID": mcpSetupAgent.value.id,
-          "MCP_PROJECT_ID": project.value.id,
-          "MCP_PROJECT_NAME": project.value.name,
-          "MCP_API_URL": mcpApiUrl.value
-        },
-        "terminal.integrated.env.linux": {
-          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
-          "MCP_AGENT_ID": mcpSetupAgent.value.id,
-          "MCP_PROJECT_ID": project.value.id,
-          "MCP_PROJECT_NAME": project.value.name,
-          "MCP_API_URL": mcpApiUrl.value
-        },
-        "terminal.integrated.env.osx": {
-          "MCP_AGENT_NAME": mcpSetupAgent.value.name,
-          "MCP_AGENT_ID": mcpSetupAgent.value.id,
-          "MCP_PROJECT_ID": project.value.id,
-          "MCP_PROJECT_NAME": project.value.name,
-          "MCP_API_URL": mcpApiUrl.value
-        }
-      }, null, 2)
-    })
-
-    const mcpCopilotInstructions = computed(() => {
-      if (!mcpSetupAgent.value || !project.value) return ''
-      return `# Agent Identity and MCP Integration
-
-## Your Identity
-- **Agent Name**: ${mcpSetupAgent.value.name}
-- **Agent ID**: ${mcpSetupAgent.value.id}
-- **Role**: ${mcpSetupAgent.value.role}
-- **Team**: ${mcpSetupAgent.value.team || 'Not specified'}
-- **Project**: ${project.value.name}
-- **Project ID**: ${project.value.id}
-
-## MCP API Configuration
-- **API URL**: ${mcpApiUrl.value}
-
-## Your Responsibilities
-As the **${mcpSetupAgent.value.role}** agent, you should:
-${mcpSetupAgent.value.role === 'frontend' ? `
-- Focus on UI/UX implementation
-- Work with Vue.js, React, or other frontend frameworks
-- Implement responsive designs and accessibility
-- Handle client-side state management
-` : `
-- Focus on API development and backend logic
-- Work with databases and data models
-- Implement business logic and validations
-- Handle server-side security and authentication
-`}
-
-## Task Management
-When working on tasks, use these API endpoints:
-
-### Get Your Tasks
-\`\`\`bash
-curl "${mcpApiUrl.value}/agents/${mcpSetupAgent.value.id}/tasks"
-\`\`\`
-
-### Update Task Status
-\`\`\`bash
-curl -X PUT "${mcpApiUrl.value}/tasks/{task_id}/status" \\
-  -H "Content-Type: application/json" \\
-  -d '{"status": "in_progress"}'
-\`\`\`
-
-Status options: \`pending\`, \`in_progress\`, \`done\`, \`blocked\`
-
-### Add Context/Documentation
-\`\`\`bash
-curl -X POST "${mcpApiUrl.value}/contexts" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "project_id": "${project.value.id}",
-    "agent_id": "${mcpSetupAgent.value.id}",
-    "title": "Implementation Notes",
-    "content": "Your documentation here...",
-    "tags": ["documentation", "${mcpSetupAgent.value.role}"]
-  }'
-\`\`\`
-
-## Collaboration Guidelines
-1. Always check for existing tasks before starting new work
-2. Update task status when you begin and complete work
-3. Document important decisions and implementation details
-4. Check other agents' contexts to avoid conflicts
-`
-    })
-
-    const mcpPowerShellScript = computed(() => {
-      if (!mcpSetupAgent.value || !project.value) return ''
-      return `# MCP Agent Helper Script for PowerShell
-# Agent: ${mcpSetupAgent.value.name}
-# Project: ${project.value.name}
-
-$MCP_API_URL = "${mcpApiUrl.value}"
-$MCP_AGENT_ID = "${mcpSetupAgent.value.id}"
-$MCP_PROJECT_ID = "${project.value.id}"
-
-function Get-MyTasks {
-    Invoke-RestMethod -Uri "$MCP_API_URL/agents/$MCP_AGENT_ID/tasks" -Method GET
-}
-
-function Update-TaskStatus {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$TaskId,
-        [Parameter(Mandatory=$true)]
-        [ValidateSet("pending", "in_progress", "done", "blocked")]
-        [string]$Status
-    )
-    
-    $body = @{ status = $Status } | ConvertTo-Json
-    Invoke-RestMethod -Uri "$MCP_API_URL/tasks/$TaskId/status" -Method PUT -Body $body -ContentType "application/json"
-}
-
-function Add-Context {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Title,
-        [Parameter(Mandatory=$true)]
-        [string]$Content,
-        [string[]]$Tags = @()
-    )
-    
-    $body = @{
-        project_id = $MCP_PROJECT_ID
-        agent_id = $MCP_AGENT_ID
-        title = $Title
-        content = $Content
-        tags = $Tags
-    } | ConvertTo-Json
-    
-    Invoke-RestMethod -Uri "$MCP_API_URL/contexts" -Method POST -Body $body -ContentType "application/json"
-}
-
-function Get-ProjectContexts {
-    Invoke-RestMethod -Uri "$MCP_API_URL/projects/$MCP_PROJECT_ID/contexts" -Method GET
-}
-
-# Usage examples:
-# Get-MyTasks
-# Update-TaskStatus -TaskId "task-uuid" -Status "in_progress"
-# Add-Context -Title "API Design" -Content "Documentation content..." -Tags @("api", "design")
-`
-    })
-
-    const mcpBashScript = computed(() => {
-      if (!mcpSetupAgent.value || !project.value) return ''
-      return `#!/bin/bash
-# MCP Agent Helper Script for Bash
-# Agent: ${mcpSetupAgent.value.name}
-# Project: ${project.value.name}
-
-MCP_API_URL="${mcpApiUrl.value}"
-MCP_AGENT_ID="${mcpSetupAgent.value.id}"
-MCP_PROJECT_ID="${project.value.id}"
-
-# Get tasks assigned to this agent
-get_my_tasks() {
-    curl -s "$MCP_API_URL/agents/$MCP_AGENT_ID/tasks" | jq .
-}
-
-# Update task status
-# Usage: update_task_status <task_id> <status>
-# Status: pending, in_progress, done, blocked
-update_task_status() {
-    local task_id=$1
-    local status=$2
-    curl -s -X PUT "$MCP_API_URL/tasks/$task_id/status" \\
-        -H "Content-Type: application/json" \\
-        -d "{\\"status\\": \\"$status\\"}" | jq .
-}
-
-# Add context/documentation
-# Usage: add_context "Title" "Content" "tag1,tag2"
-add_context() {
-    local title=$1
-    local content=$2
-    local tags=$3
-    
-    curl -s -X POST "$MCP_API_URL/contexts" \\
-        -H "Content-Type: application/json" \\
-        -d "{
-            \\"project_id\\": \\"$MCP_PROJECT_ID\\",
-            \\"agent_id\\": \\"$MCP_AGENT_ID\\",
-            \\"title\\": \\"$title\\",
-            \\"content\\": \\"$content\\",
-            \\"tags\\": [\\"$tags\\"]
-        }" | jq .
-}
-
-# Get project contexts
-get_project_contexts() {
-    curl -s "$MCP_API_URL/projects/$MCP_PROJECT_ID/contexts" | jq .
-}
-
-# Usage examples:
-# get_my_tasks
-# update_task_status "task-uuid" "in_progress"
-# add_context "API Design" "Documentation content..." "api,design"
-`
-    })
-
-    const mcpVSCodeJson = computed(() => {
-      if (!mcpSetupAgent.value || !project.value) return ''
-      
-      // Build MCP URL with project and agent context
-      const baseUrl = mcpApiUrl.value.replace('/api', '')
-      const mcpUrl = `${baseUrl}?project_id=${project.value.id}&agent_id=${mcpSetupAgent.value.id}`
-      
-      const config = {
-        "mcpServers": {
-          "agent-shaker": {
-            "url": mcpUrl,
-            "type": "http",
-            "metadata": {
-              "name": "Agent Shaker MCP Server",
-              "version": "1.0.0",
-              "description": "Multi-agent coordination platform for collaborative development",
-              "capabilities": [
-                "resources",
-                "tools",
-                "prompts",
-                "context-sharing"
-              ]
-            },
-            "project": {
-              "id": project.value.id,
-              "name": project.value.name,
-              "description": project.value.description || "",
-              "status": project.value.status,
-              "type": "multi-agent",
-              "root": "${workspaceFolder}",
-              "detect": {
-                "patterns": [
-                  "**/*.go",
-                  "**/*.vue",
-                  "**/*.js",
-                  "go.mod",
-                  "package.json"
-                ],
-                "excludePatterns": [
-                  "node_modules",
-                  "vendor",
-                  ".git",
-                  "dist",
-                  "build"
-                ]
-              }
-            },
-            "agent": {
-              "id": mcpSetupAgent.value.id,
-              "name": mcpSetupAgent.value.name,
-              "role": mcpSetupAgent.value.role,
-              "team": mcpSetupAgent.value.team || "default",
-              "status": mcpSetupAgent.value.status,
-              "type": "ai-developer",
-              "capabilities": [
-                mcpSetupAgent.value.role === 'frontend' ? 'ui-development' : 'backend-development',
-                mcpSetupAgent.value.role === 'frontend' ? 'component-design' : 'api-development',
-                "task-management",
-                "context-sharing",
-                "documentation"
-              ],
-              "context": {
-                "projectId": project.value.id,
-                "projectName": project.value.name,
-                "agentRole": mcpSetupAgent.value.role,
-                "apiBaseUrl": mcpApiUrl.value
-              },
-              "behavior": {
-                "autoReconnect": true,
-                "maxRetries": 3,
-                "timeout": 30000,
-                "healthCheckInterval": 60000
-              }
-            },
-            "resources": {
-              "baseUrl": mcpApiUrl.value,
-              "websocket": mcpApiUrl.value.replace(/^http/, 'ws').replace('/api', '/ws'),
-              "endpoints": {
-                "health": "/health",
-                "projects": "/projects",
-                "agents": "/agents",
-                "tasks": "/tasks",
-                "contexts": "/contexts",
-                "documentation": "/documentation",
-                "dashboard": "/dashboard",
-                "myTasks": `/agents/${mcpSetupAgent.value.id}/tasks`,
-                "myAgent": `/agents/${mcpSetupAgent.value.id}`,
-                "projectAgents": `/projects/${project.value.id}/agents`,
-                "projectTasks": `/projects/${project.value.id}/tasks`,
-                "projectContexts": `/projects/${project.value.id}/contexts`
-              }
-            },
-            "tools": [
-              {
-                "name": "get_my_identity",
-                "description": "Get your agent identity and assigned project from MCP connection",
-                "category": "identity"
-              },
-              {
-                "name": "get_my_project",
-                "description": "Get details of your assigned project",
-                "category": "project"
-              },
-              {
-                "name": "get_my_tasks",
-                "description": "Get tasks assigned to this agent",
-                "category": "task-management",
-                "endpoint": `/agents/${mcpSetupAgent.value.id}/tasks`,
-                "method": "GET"
-              },
-              {
-                "name": "claim_task",
-                "description": "Claim a task and set it to in_progress",
-                "category": "task-management"
-              },
-              {
-                "name": "complete_task",
-                "description": "Mark a task as done",
-                "category": "task-management"
-              },
-              {
-                "name": "update_my_status",
-                "description": "Update your agent status (idle, working, blocked, offline)",
-                "category": "status"
-              },
-              {
-                "name": "update_task_status",
-                "description": "Update the status of a task",
-                "category": "task-management",
-                "endpoint": "/tasks/{task_id}/status",
-                "method": "PUT",
-                "parameters": {
-                  "task_id": "string",
-                  "status": "enum[pending,in_progress,done,blocked]"
-                }
-              },
-              {
-                "name": "create_task",
-                "description": "Create a new task in the project",
-                "category": "task-management",
-                "endpoint": "/tasks",
-                "method": "POST",
-                "parameters": {
-                  "project_id": "string",
-                  "title": "string",
-                  "description": "string",
-                  "priority": "enum[low,medium,high]",
-                  "assigned_to": "string (optional)"
-                }
-              },
-              {
-                "name": "get_project_contexts",
-                "description": "Get all contexts/documentation for the project",
-                "category": "documentation",
-                "endpoint": `/projects/${project.value.id}/contexts`,
-                "method": "GET"
-              },
-              {
-                "name": "add_context",
-                "description": "Add context or documentation to the project",
-                "category": "documentation",
-                "endpoint": "/contexts",
-                "method": "POST",
-                "parameters": {
-                  "project_id": "string",
-                  "agent_id": "string",
-                  "title": "string",
-                  "content": "string",
-                  "tags": "array[string]"
-                }
-              },
-              {
-                "name": "get_project_agents",
-                "description": "Get all agents working on the project",
-                "category": "collaboration",
-                "endpoint": `/projects/${project.value.id}/agents`,
-                "method": "GET"
-              },
-              {
-                "name": "get_dashboard_stats",
-                "description": "Get project statistics and overview",
-                "category": "monitoring",
-                "endpoint": "/dashboard",
-                "method": "GET"
-              }
-            ],
-            "security": {
-              "authentication": "none",
-              "cors": {
-                "enabled": true,
-                "allowOrigins": ["http://localhost:5173", "http://localhost:3000"]
-              }
-            },
-            "monitoring": {
-              "healthCheck": {
-                "enabled": true,
-                "interval": 30000,
-                "endpoint": "/health"
-              },
-              "logging": {
-                "level": "info",
-                "format": "json",
-                "includeTimestamp": true
-              }
-            },
-            "development": {
-              "hotReload": true,
-              "debugMode": false,
-              "mockData": false
-            }
-          }
-        },
-        "globalSettings": {
-          "autoStart": true,
-          "autoReconnect": true,
-          "connectionTimeout": 5000,
-          "defaultPort": 8080
-        },
-        "vscodeIntegration": {
-          "terminal": {
-            "env": {
-              "MCP_AGENT_NAME": mcpSetupAgent.value.name,
-              "MCP_AGENT_ID": mcpSetupAgent.value.id,
-              "MCP_PROJECT_ID": project.value.id,
-              "MCP_PROJECT_NAME": project.value.name,
-              "MCP_API_URL": mcpApiUrl.value
-            }
-          },
-          "tasks": {
-            "autoDetect": true,
-            "problemMatcher": ["$eslint-stylish", "$tsc"]
-          }
-        }
-      }
-      
-      return JSON.stringify(config, null, 2)
-    })
-
-    // Bundle all MCP configs together for the modal
-    const mcpConfig = computed(() => ({
-      mcpSettingsJson: mcpSettingsJson.value,
-      mcpVSCodeJson: mcpVSCodeJson.value,
-      mcpCopilotInstructions: mcpCopilotInstructions.value,
-      mcpPowerShellScript: mcpPowerShellScript.value,
-      mcpBashScript: mcpBashScript.value
-    }))
+    const {
+      mcpSettingsJson,
+      mcpCopilotInstructions,
+      mcpPowerShellScript,
+      mcpBashScript,
+      mcpVSCodeJson,
+      mcpVS2026Json,
+      mcpConfig,
+      downloadFile,
+      downloadAllMcpFiles,
+      copyMcpFilesToProject
+    } = useMcpSetup(mcpSetupAgent, project, mcpApiUrl, agents)
 
     onMounted(() => {
       const projectId = route.params.id
@@ -977,23 +537,9 @@ get_project_contexts() {
     const handleReassignTask = async (reassignmentData) => {
       if (!reassigningTask.value) return
 
+      isReassigningTask.value = true
       try {
-        const response = await fetch(`/api/tasks/${reassignmentData.taskId}/reassign`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            assigned_to: reassignmentData.agentId
-          })
-        })
-
-        if (!response.ok) {
-          const error = await response.text()
-          throw new Error(error)
-        }
-
-        const updatedTask = await response.json()
+        const updatedTask = await api.reassignTask(reassignmentData.taskId, reassignmentData.agentId)
         
         // Update the task store with the new task data
         const taskIndex = taskStore.tasks.findIndex(t => t.id === updatedTask.id)
@@ -1007,6 +553,13 @@ get_project_contexts() {
       } catch (error) {
         console.error('Failed to reassign task:', error)
         alert('Failed to reassign task. Please try again.')
+        
+        // Call the error callback if provided
+        if (reassignmentData.onError) {
+          reassignmentData.onError()
+        }
+      } finally {
+        isReassigningTask.value = false
       }
     }
 
@@ -1158,91 +711,42 @@ get_project_contexts() {
       showMcpSetupModal.value = true
     }
 
-    const downloadFile = (filename, content, mimeType = 'text/plain') => {
-      const blob = new Blob([content], { type: mimeType })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    }
-
     const downloadMcpFile = (fileType) => {
-      const config = mcpConfig.value
-      switch (fileType) {
-        case 'settings':
-          downloadFile('settings.json', config.mcpSettingsJson, 'application/json')
-          break
-        case 'mcp':
-          downloadFile('mcp.json', config.mcpVSCodeJson, 'application/json')
-          break
-        case 'copilot':
-          downloadFile('copilot-instructions.md', config.mcpCopilotInstructions, 'text/markdown')
-          break
-        case 'powershell':
-          downloadFile('mcp-agent.ps1', config.mcpPowerShellScript, 'text/plain')
-          break
-        case 'bash':
-          downloadFile('mcp-agent.sh', config.mcpBashScript, 'text/plain')
-          break
+      try {
+        const config = mcpConfig.value
+        switch (fileType) {
+          case 'settings':
+            downloadFile('settings.json', config.mcpSettingsJson, 'application/json')
+            break
+          case 'mcp':
+            downloadFile('mcp.json', config.mcpVSCodeJson, 'application/json')
+            break
+          case '.mcp':
+            downloadFile('.mcp.json', config.mcpVS2026Json, 'application/json')
+            break
+          case 'copilot':
+            downloadFile('copilot-instructions.md', config.mcpCopilotInstructions, 'text/markdown')
+            break
+          case 'powershell':
+            downloadFile('mcp-agent.ps1', config.mcpPowerShellScript, 'text/plain')
+            break
+          case 'bash':
+            downloadFile('mcp-agent.sh', config.mcpBashScript, 'text/plain')
+            break
+        }
+      } catch (error) {
+        console.error('Failed to download file:', error)
+        alert(`Failed to download file: ${error.message}`)
       }
     }
 
-    const downloadAllMcpFiles = async () => {
-      // Using JSZip for creating zip files
-      const { default: JSZip } = await import('jszip')
-      const zip = new JSZip()
-      
-      const config = mcpConfig.value
-      
-      // Add files to zip with proper folder structure
-      zip.file('.vscode/settings.json', config.mcpSettingsJson)
-      zip.file('.vscode/mcp.json', config.mcpVSCodeJson)
-      zip.file('.github/copilot-instructions.md', config.mcpCopilotInstructions)
-      zip.file('scripts/mcp-agent.ps1', config.mcpPowerShellScript)
-      zip.file('scripts/mcp-agent.sh', config.mcpBashScript)
-      
-      // Add a README
-      const readmeContent = `# MCP Setup Files for ${mcpSetupAgent.value.name}
-
-## Contents
-- \`.vscode/settings.json\` - VS Code environment variables
-- \`.vscode/mcp.json\` - **Enhanced MCP server configuration** (includes agent, project, tools, and resource definitions)
-- \`.github/copilot-instructions.md\` - GitHub Copilot agent instructions
-- \`scripts/mcp-agent.ps1\` - PowerShell helper script
-- \`scripts/mcp-agent.sh\` - Bash helper script
-
-## Setup Instructions
-1. Extract this zip to your project's root directory
-2. Restart VS Code to apply environment variables
-3. The mcp.json file provides comprehensive MCP server integration with VS Code
-4. Start using Copilot with your agent identity!
-
-## Agent Details
-- **Name**: ${mcpSetupAgent.value.name}
-- **ID**: ${mcpSetupAgent.value.id}
-- **Role**: ${mcpSetupAgent.value.role}
-- **Project**: ${project.value.name}
-- **API URL**: ${mcpApiUrl.value}
-
-## MCP Configuration Highlights
-The mcp.json file includes:
-- Project detection patterns and metadata
-- Agent capabilities and behavior settings
-- All available API endpoints and tools
-- WebSocket support for real-time updates
-- Health monitoring and logging configuration
-- VS Code terminal environment integration
-`
-      zip.file('MCP_SETUP_README.md', readmeContent)
-      
-      // Generate and download zip
-      const content = await zip.generateAsync({ type: 'blob' })
-      const agentSlug = mcpSetupAgent.value.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-      downloadFile(`mcp-setup-${agentSlug}.zip`, content, 'application/zip')
+    const handleDownloadAllMcpFiles = async () => {
+      try {
+        await downloadAllMcpFiles(mcpConfig.value, mcpSetupAgent.value.name)
+      } catch (error) {
+        console.error('Failed to download MCP files:', error)
+        alert(`Failed to download MCP files: ${error.message}`)
+      }
     }
 
     // Project action handlers
@@ -1348,6 +852,7 @@ The mcp.json file includes:
       showAddAgentModal,
       showAddTaskModal,
       showReassignTaskModal,
+      isReassigningTask,
       showAddContextModal,
       showViewContextModal,
       showDeleteConfirm,
@@ -1399,7 +904,7 @@ The mcp.json file includes:
       formatDate,
       openMcpSetup,
       downloadMcpFile,
-      downloadAllMcpFiles,
+      handleDownloadAllMcpFiles,
       handleProjectAction,
       confirmDeleteProject,
       handleDeleteProject

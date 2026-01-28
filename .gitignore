@@ -8,6 +8,7 @@
 *.so
 *.dylib
 mcp-server
+server
 
 # Test binary, built with `go test -c`
 *.test
@@ -38,3 +39,4 @@ postgres_data/
 *.swo
 *~
 /.vs
+server

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -248,6 +252,45 @@ func main() {
 func runMigrations(db *database.DB) error {
 	log.Println("Running database migrations...")
 
+	// Acquire advisory lock to prevent concurrent migrations
+	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
+	const migrationLockKey = 918273645
+
+	// Get a dedicated connection to ensure advisory lock is acquired and released
+	// on the same session (PostgreSQL advisory locks are session-scoped)
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get dedicated connection: %w", err)
+	}
+	defer conn.Close()
+
+	// Try to acquire advisory lock (non-blocking)
+	var lockAcquired bool
+	err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockKey).Scan(&lockAcquired)
+	if err != nil {
+		return fmt.Errorf("failed to acquire migration lock: %w", err)
+	}
+
+	if !lockAcquired {
+		log.Println("Another instance is running migrations, waiting...")
+		// Block until we can acquire the lock
+		_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey)
+		if err != nil {
+			return fmt.Errorf("failed to wait for migration lock: %w", err)
+		}
+	}
+
+	// Ensure we release the lock when done
+	defer func() {
+		_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
+		if err != nil {
+			log.Printf("Warning: failed to release migration lock: %v", err)
+		}
+	}()
+
+	log.Println("Migration lock acquired, proceeding...")
+
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -265,6 +308,11 @@ func runMigrations(db *database.DB) error {
 	if err != nil {
 		return err
 	}
+
+	// Sort entries to ensure deterministic execution order
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
 
 	// Get already applied migrations
 	appliedMigrations := make(map[string]bool)
@@ -284,8 +332,16 @@ func runMigrations(db *database.DB) error {
 
 	// Apply pending migrations in order
 	appliedCount := 0
+	migrationPattern := regexp.MustCompile(`^\d`)
+
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Skip bootstrap and helper files (only process files starting with a digit)
+		if !migrationPattern.MatchString(entry.Name()) {
+			log.Printf("Skipping non-migration file: %s", entry.Name())
 			continue
 		}
 
@@ -299,34 +355,44 @@ func runMigrations(db *database.DB) error {
 		// Read migration file
 		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
 
-		// Start transaction for this migration
+		// Begin transaction for this migration
+		// This ensures atomicity: either the migration and its record both succeed, or both fail
 		tx, err := db.Begin()
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to begin transaction for migration %s: %w", entry.Name(), err)
 		}
 
-		// Execute migration
+		// Execute migration DDL within the transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
-			tx.Rollback()
-			return err
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after migration error: %v", rbErr)
+			}
+			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
 		}
 
-		// Record migration as applied
+		// Record the migration as applied within same transaction
+		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
+		// between our initial check and now, we detect it here and skip redundant work
 		_, err = tx.Exec(
-			"INSERT INTO schema_migrations (version) VALUES ($1)",
+			`INSERT INTO schema_migrations (version, applied_at) 
+			 VALUES ($1, CURRENT_TIMESTAMP) 
+			 ON CONFLICT (version) DO NOTHING`,
 			entry.Name(),
 		)
 		if err != nil {
-			tx.Rollback()
-			return err
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after insert error: %v", rbErr)
+			}
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
 
-		// Commit transaction
+		// Commit the transaction - migration DDL and tracking record are both applied atomically
 		if err := tx.Commit(); err != nil {
-			return err
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 
 		appliedCount++

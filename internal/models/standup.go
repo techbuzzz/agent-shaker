@@ -8,41 +8,41 @@ import (
 
 // DailyStandup represents a daily standup entry from an agent
 type DailyStandup struct {
-	ID          uuid.UUID `json:"id" db:"id"`
-	AgentID     uuid.UUID `json:"agent_id" db:"agent_id"`
-	ProjectID   uuid.UUID `json:"project_id" db:"project_id"`
-	StandupDate time.Time `json:"standup_date" db:"standup_date"`
-	Did         string    `json:"did" db:"did"`               // What I did yesterday
-	Doing       string    `json:"doing" db:"doing"`           // What I'm doing today
-	Done        string    `json:"done" db:"done"`             // What I plan to complete
-	Blockers    string    `json:"blockers" db:"blockers"`     // Any blockers
-	Challenges  string    `json:"challenges" db:"challenges"` // Current challenges
-	References  string    `json:"references" db:"references"` // Links, docs, etc.
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+	ID             uuid.UUID `json:"id" db:"id"`
+	AgentID        uuid.UUID `json:"agent_id" db:"agent_id"`
+	ProjectID      uuid.UUID `json:"project_id" db:"project_id"`
+	StandupDate    time.Time `json:"standup_date" db:"standup_date"`
+	Did            string    `json:"did" db:"did"`                       // What I did yesterday
+	Doing          string    `json:"doing" db:"doing"`                   // What I'm doing today
+	Done           string    `json:"done" db:"done"`                     // What I plan to complete
+	Blockers       string    `json:"blockers" db:"blockers"`             // Any blockers
+	Challenges     string    `json:"challenges" db:"challenges"`         // Current challenges
+	ReferenceLinks string    `json:"references" db:"reference_links"`    // Links, docs, etc.
+	CreatedAt      time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // CreateStandupRequest represents a request to create a daily standup
 type CreateStandupRequest struct {
-	AgentID     uuid.UUID `json:"agent_id"`
-	ProjectID   uuid.UUID `json:"project_id"`
-	StandupDate string    `json:"standup_date"` // YYYY-MM-DD format
-	Did         string    `json:"did"`
-	Doing       string    `json:"doing"`
-	Done        string    `json:"done"`
-	Blockers    string    `json:"blockers"`
-	Challenges  string    `json:"challenges"`
-	References  string    `json:"references"`
+	AgentID        uuid.UUID `json:"agent_id"`
+	ProjectID      uuid.UUID `json:"project_id"`
+	StandupDate    string    `json:"standup_date"` // YYYY-MM-DD format
+	Did            string    `json:"did"`
+	Doing          string    `json:"doing"`
+	Done           string    `json:"done"`
+	Blockers       string    `json:"blockers"`
+	Challenges     string    `json:"challenges"`
+	ReferenceLinks string    `json:"references"`
 }
 
 // UpdateStandupRequest represents a request to update a daily standup
 type UpdateStandupRequest struct {
-	Did        string `json:"did"`
-	Doing      string `json:"doing"`
-	Done       string `json:"done"`
-	Blockers   string `json:"blockers"`
-	Challenges string `json:"challenges"`
-	References string `json:"references"`
+	Did            string `json:"did"`
+	Doing          string `json:"doing"`
+	Done           string `json:"done"`
+	Blockers       string `json:"blockers"`
+	Challenges     string `json:"challenges"`
+	ReferenceLinks string `json:"references"`
 }
 
 // StandupWithAgent extends DailyStandup with agent information

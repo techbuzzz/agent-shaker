@@ -1,9 +1,9 @@
 <template>
-  <div v-if="isOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+  <div v-if="isOpen" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
     <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
       <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
         <h2 class="text-2xl font-bold text-gray-900">{{ isEditing ? 'Update Daily Standup' : 'Submit Daily Standup' }}</h2>
-        <button @click="handleClose" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        <button @click="handleClose" class="text-gray-400 hover:text-gray-600 text-2xl" aria-label="Close standup modal">&times;</button>
       </div>
 
       <form @submit.prevent="handleSubmit" class="p-6 space-y-6">
