@@ -39,3 +39,4 @@ postgres_data/
 *.swo
 *~
 /.vs
+server

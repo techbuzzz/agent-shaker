@@ -350,19 +350,39 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("failed to read migration %s: %w", entry.Name(), err)
 		}
 
-		// Execute migration in a transaction
-		// PostgreSQL supports transactional DDL, allowing atomic execution of schema changes
-		// If DDL fails, tracking record is not inserted; if insert fails, DDL is rolled back
+		// Begin transaction for this migration
+		// This ensures atomicity: either the migration and its record both succeed, or both fail
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction for migration %s: %w", entry.Name(), err)
 		}
 
-		// Execute the migration DDL first
+		// Execute migration DDL within the transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
-			tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after migration error: %v", rbErr)
+			}
 			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
-			return fmt.Errorf("migration %s failed: %w", entry.Name(), err)
+			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
+		}
+
+		// Only after successful execution, record the migration as applied
+		// The advisory lock and pre-check ensure this INSERT should always succeed
+		_, err = tx.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) 
+			 VALUES ($1, CURRENT_TIMESTAMP)`,
+			entry.Name(),
+		)
+		if err != nil {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Printf("Warning: failed to rollback transaction after insert error: %v", rbErr)
+			}
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
+		}
+
+		// Commit the transaction - migration and record are both applied atomically
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 
 		// Record the migration only after DDL succeeds
