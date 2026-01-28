@@ -1,58 +1,73 @@
-import { computed } from 'vue'
+import { computed, isRef, unref } from 'vue'
 
 /**
  * Composable for MCP setup configuration generation
- * @param {Object} agent - Agent object
- * @param {Object} project - Project object
- * @param {string} apiUrl - API base URL
- * @returns {Object} MCP configuration objects
+ * Handles both ref and direct values for agent, project, and apiUrl
+ * @param {Object|Ref} agent - Agent object or ref
+ * @param {Object|Ref} project - Project object or ref
+ * @param {string|Ref} apiUrl - API base URL or ref
+ * @returns {Object} MCP configuration objects and utilities
  */
 export const useMcpSetup = (agent, project, apiUrl) => {
+  // Helper to handle both refs and direct values
+  const getAgentValue = computed(() => unref(agent))
+  const getProjectValue = computed(() => unref(project))
+  const getApiUrl = computed(() => unref(apiUrl))
   const mcpSettingsJson = computed(() => {
-    if (!agent.value || !project.value) return ''
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
+
+    if (!agentValue || !projectValue) return ''
+
     return JSON.stringify({
       "terminal.integrated.env.windows": {
-        "MCP_AGENT_NAME": agent.value.name,
-        "MCP_AGENT_ID": agent.value.id,
-        "MCP_PROJECT_ID": project.value.id,
-        "MCP_PROJECT_NAME": project.value.name,
-        "MCP_API_URL": apiUrl
+        "MCP_AGENT_NAME": agentValue.name,
+        "MCP_AGENT_ID": agentValue.id,
+        "MCP_PROJECT_ID": projectValue.id,
+        "MCP_PROJECT_NAME": projectValue.name,
+        "MCP_API_URL": urlValue
       },
       "terminal.integrated.env.linux": {
-        "MCP_AGENT_NAME": agent.value.name,
-        "MCP_AGENT_ID": agent.value.id,
-        "MCP_PROJECT_ID": project.value.id,
-        "MCP_PROJECT_NAME": project.value.name,
-        "MCP_API_URL": apiUrl
+        "MCP_AGENT_NAME": agentValue.name,
+        "MCP_AGENT_ID": agentValue.id,
+        "MCP_PROJECT_ID": projectValue.id,
+        "MCP_PROJECT_NAME": projectValue.name,
+        "MCP_API_URL": urlValue
       },
       "terminal.integrated.env.osx": {
-        "MCP_AGENT_NAME": agent.value.name,
-        "MCP_AGENT_ID": agent.value.id,
-        "MCP_PROJECT_ID": project.value.id,
-        "MCP_PROJECT_NAME": project.value.name,
-        "MCP_API_URL": apiUrl
+        "MCP_AGENT_NAME": agentValue.name,
+        "MCP_AGENT_ID": agentValue.id,
+        "MCP_PROJECT_ID": projectValue.id,
+        "MCP_PROJECT_NAME": projectValue.name,
+        "MCP_API_URL": urlValue
       }
     }, null, 2)
   })
 
   const mcpCopilotInstructions = computed(() => {
-    if (!agent.value || !project.value) return ''
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
+
+    if (!agentValue || !projectValue) return ''
+
     return `# Agent Identity and MCP Integration
 
 ## Your Identity
-- **Agent Name**: ${agent.value.name}
-- **Agent ID**: ${agent.value.id}
-- **Role**: ${agent.value.role}
-- **Team**: ${agent.value.team || 'Not specified'}
-- **Project**: ${project.value.name}
-- **Project ID**: ${project.value.id}
+- **Agent Name**: ${agentValue.name}
+- **Agent ID**: ${agentValue.id}
+- **Role**: ${agentValue.role}
+- **Team**: ${agentValue.team || 'Not specified'}
+- **Project**: ${projectValue.name}
+- **Project ID**: ${projectValue.id}
 
 ## MCP API Configuration
-- **API URL**: ${apiUrl}
+- **API URL**: ${urlValue}
 
 ## Your Responsibilities
-As the **${agent.value.role}** agent, you should:
-${agent.value.role === 'frontend' ? `
+As the **${agentValue.role}** agent, you should:
+${agentValue.role === 'frontend' ? `
 - Focus on UI/UX implementation
 - Work with Vue.js, React, or other frontend frameworks
 - Implement responsive designs and accessibility
@@ -64,36 +79,6 @@ ${agent.value.role === 'frontend' ? `
 - Handle server-side security and authentication
 `}
 
-## Task Management
-When working on tasks, use these API endpoints:
-
-### Get Your Tasks
-\`\`\`bash
-curl "${apiUrl}/agents/${agent.value.id}/tasks"
-\`\`\`
-
-### Update Task Status
-\`\`\`bash
-curl -X PUT "${apiUrl}/tasks/{task_id}/status" \\
-  -H "Content-Type: application/json" \\
-  -d '{"status": "in_progress"}'
-\`\`\`
-
-Status options: \`pending\`, \`in_progress\`, \`done\`, \`blocked\`
-
-### Add Context/Documentation
-\`\`\`bash
-curl -X POST "${apiUrl}/contexts" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "project_id": "${project.value.id}",
-    "agent_id": "${agent.value.id}",
-    "title": "Implementation Notes",
-    "content": "Your documentation here...",
-    "tags": ["documentation", "${agent.value.role}"]
-  }'
-\`\`\`
-
 ## Collaboration Guidelines
 1. Always check for existing tasks before starting new work
 2. Update task status when you begin and complete work
@@ -103,14 +88,19 @@ curl -X POST "${apiUrl}/contexts" \\
   })
 
   const mcpPowerShellScript = computed(() => {
-    if (!agent.value || !project.value) return ''
-    return `# MCP Agent Helper Script for PowerShell
-# Agent: ${agent.value.name}
-# Project: ${project.value.name}
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
 
-$MCP_API_URL = "${apiUrl}"
-$MCP_AGENT_ID = "${agent.value.id}"
-$MCP_PROJECT_ID = "${project.value.id}"
+    if (!agentValue || !projectValue) return ''
+
+    return `# MCP Agent Helper Script for PowerShell
+# Agent: ${agentValue.name}
+# Project: ${projectValue.name}
+
+$MCP_API_URL = "${urlValue}"
+$MCP_AGENT_ID = "${agentValue.id}"
+$MCP_PROJECT_ID = "${projectValue.id}"
 
 function Get-MyTasks {
     Invoke-RestMethod -Uri "$MCP_API_URL/agents/$MCP_AGENT_ID/tasks" -Method GET
@@ -161,15 +151,20 @@ function Get-ProjectContexts {
   })
 
   const mcpBashScript = computed(() => {
-    if (!agent.value || !project.value) return ''
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
+
+    if (!agentValue || !projectValue) return ''
+
     return `#!/bin/bash
 # MCP Agent Helper Script for Bash
-# Agent: ${agent.value.name}
-# Project: ${project.value.name}
+# Agent: ${agentValue.name}
+# Project: ${projectValue.name}
 
-MCP_API_URL="${apiUrl}"
-MCP_AGENT_ID="${agent.value.id}"
-MCP_PROJECT_ID="${project.value.id}"
+MCP_API_URL="${urlValue}"
+MCP_AGENT_ID="${agentValue.id}"
+MCP_PROJECT_ID="${projectValue.id}"
 
 # Get tasks assigned to this agent
 get_my_tasks() {
@@ -218,54 +213,46 @@ get_project_contexts() {
   })
 
   const mcpVSCodeJson = computed(() => {
-    if (!agent.value || !project.value) return ''
-    
-    const baseUrl = apiUrl.replace('/api', '')
-    const mcpUrl = `${baseUrl}?project_id=${project.value.id}&agent_id=${agent.value.id}`
-    
+    const agentValue = getAgentValue.value
+    const projectValue = getProjectValue.value
+    const urlValue = getApiUrl.value
+
+    if (!agentValue || !projectValue) return ''
+
+    // Build MCP URL with project and agent context
+    const baseUrl = urlValue.replace('/api', '')
+    const mcpUrl = `${baseUrl}?project_id=${projectValue.id}&agent_id=${agentValue.id}`
+
     const config = {
-      "mcpServers": {
+      "servers": {
         "agent-shaker": {
-          "url": mcpUrl,
           "type": "http",
-          "metadata": {
-            "name": "Agent Shaker MCP Server",
-            "version": "1.0.0",
-            "description": "Multi-agent coordination platform for collaborative development",
-            "capabilities": [
-              "resources",
-              "tools",
-              "prompts",
-              "context-sharing"
-            ]
-          },
-          "project": {
-            "id": project.value.id,
-            "name": project.value.name,
-            "description": project.value.description || "",
-            "status": project.value.status,
-            "type": "multi-agent"
-          },
-          "agent": {
-            "id": agent.value.id,
-            "name": agent.value.name,
-            "role": agent.value.role,
-            "team": agent.value.team || "default",
-            "status": agent.value.status
-          }
+          "url": mcpUrl 
         }
       }
     }
-    
+
     return JSON.stringify(config, null, 2)
   })
+
+  // Bundle all MCP configs together
+  const mcpConfig = computed(() => ({
+    mcpSettingsJson: mcpSettingsJson.value,
+    mcpCopilotInstructions: mcpCopilotInstructions.value,
+    mcpPowerShellScript: mcpPowerShellScript.value,
+    mcpBashScript: mcpBashScript.value,
+    mcpVSCodeJson: mcpVSCodeJson.value
+  }))
 
   return {
     mcpSettingsJson,
     mcpCopilotInstructions,
     mcpPowerShellScript,
     mcpBashScript,
-    mcpVSCodeJson
+    mcpVSCodeJson,
+    mcpConfig,
+    downloadFile,
+    downloadAllMcpFiles
   }
 }
 
