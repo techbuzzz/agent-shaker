@@ -1,14 +1,17 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/gorilla/mux"
+	"github.com/lib/pq"
 	"github.com/rs/cors"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
@@ -298,6 +301,11 @@ func runMigrations(db *database.DB) error {
 		return err
 	}
 
+	// Sort entries to ensure deterministic execution order
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
 	// Get already applied migrations
 	appliedMigrations := make(map[string]bool)
 	rows, err := db.Query("SELECT version FROM schema_migrations ORDER BY version")
@@ -377,8 +385,25 @@ func runMigrations(db *database.DB) error {
 			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
 		}
 
-		appliedCount++
-		log.Printf("✓ Applied migration: %s", entry.Name())
+		// Record the migration only after DDL succeeds
+		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
+		// between our initial check and now, we detect it here and skip redundant work
+		_, err = tx.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) 
+			 VALUES ($1, CURRENT_TIMESTAMP) 
+			 ON CONFLICT (version) DO NOTHING`,
+			entry.Name(),
+		)
+		
+		if err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
+		}
+
+		// Commit the transaction - this makes both the DDL and tracking record atomic
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit migration %s: %w", entry.Name(), err)
+		}
 	}
 
 	if appliedCount == 0 {
@@ -388,6 +413,62 @@ func runMigrations(db *database.DB) error {
 	}
 
 	return nil
+}
+
+// applyMigration applies a single migration within a transaction
+func applyMigration(db *database.DB, filename string) (bool, error) {
+	log.Printf("Applying migration: %s", filename)
+
+	// Read migration file
+	migrationSQL, err := os.ReadFile("migrations/" + filename)
+	if err != nil {
+		return false, err
+	}
+
+	// Begin transaction for migration execution
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+
+	// Ensure transaction is rolled back on any error
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	// Execute migration within transaction
+	if _, err := tx.Exec(string(migrationSQL)); err != nil {
+		log.Printf("✗ Failed to apply migration %s: %v", filename, err)
+		return false, err
+	}
+
+	// Record migration as applied within same transaction
+	_, err = tx.Exec(
+		"INSERT INTO schema_migrations (version) VALUES ($1)",
+		filename,
+	)
+	if err != nil {
+		// Check if this is a unique constraint violation (another instance already applied it)
+		// This can happen in rare race conditions despite the advisory lock
+		if sqlErr, ok := err.(*pq.Error); ok && sqlErr.Code == "23505" {
+			log.Printf("Migration %s already applied by another instance, skipping", filename)
+			// No need to rollback or commit - just let the transaction end
+			return false, nil
+		}
+		return false, err
+	}
+
+	// Commit transaction - both migration and tracking succeed or fail together
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	committed = true
+
+	log.Printf("✓ Applied migration: %s", filename)
+	return true, nil
 }
 
 func getPort() string {
