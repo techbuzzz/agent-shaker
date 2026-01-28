@@ -125,9 +125,6 @@ export default {
   deleteTask(id) {
     return api.delete(`/tasks/${id}`)
   },
-  reassignTask(id, agentId) {
-    return api.put(`/tasks/${id}/reassign`, { assigned_to: agentId })
-  },
 
   // Context/Documentation
   createDocumentation(data) {
