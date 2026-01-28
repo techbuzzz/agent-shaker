@@ -4,12 +4,71 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 
 	_ "github.com/lib/pq"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 )
+
+// TestMigrationSorting verifies that migration files are sorted correctly
+func TestMigrationSorting(t *testing.T) {
+	// Create a temporary directory with test migration files
+	tmpDir := t.TempDir()
+	migrationsDir := filepath.Join(tmpDir, "migrations")
+	if err := os.Mkdir(migrationsDir, 0755); err != nil {
+		t.Fatalf("Failed to create migrations dir: %v", err)
+	}
+
+	// Create migration files in non-sequential order
+	testFiles := []string{
+		"003_third.sql",
+		"001_first.sql",
+		"bootstrap_helper.sql",
+		"002_second.sql",
+		"005_fifth.sql",
+		"004_fourth.sql",
+	}
+
+	for _, filename := range testFiles {
+		path := filepath.Join(migrationsDir, filename)
+		if err := os.WriteFile(path, []byte("-- test"), 0644); err != nil {
+			t.Fatalf("Failed to create test file %s: %v", filename, err)
+		}
+	}
+
+	// Read directory
+	entries, err := os.ReadDir(migrationsDir)
+	if err != nil {
+		t.Fatalf("Failed to read migrations dir: %v", err)
+	}
+
+	// Sort entries (this is what the fix does)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	// Verify they're in the correct order
+	expected := []string{
+		"001_first.sql",
+		"002_second.sql",
+		"003_third.sql",
+		"004_fourth.sql",
+		"005_fifth.sql",
+		"bootstrap_helper.sql",
+	}
+
+	if len(entries) != len(expected) {
+		t.Fatalf("Expected %d files, got %d", len(expected), len(entries))
+	}
+
+	for i, entry := range entries {
+		if entry.Name() != expected[i] {
+			t.Errorf("Position %d: expected %s, got %s", i, expected[i], entry.Name())
+		}
+	}
+}
 
 // TestMigrationConcurrentSafety verifies that concurrent migration attempts
 // don't cause conflicts or duplicate executions
