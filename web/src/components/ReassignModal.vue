@@ -89,17 +89,9 @@ export default {
         return
       }
 
-      isSubmitting.value = true
       emit('reassign', {
         taskId: props.task.id,
-        agentId: selectedAgentId.value,
-        onComplete: () => {
-          isSubmitting.value = false
-          selectedAgentId.value = ''
-        },
-        onError: () => {
-          isSubmitting.value = false
-        }
+        agentId: selectedAgentId.value
       })
     }
 
