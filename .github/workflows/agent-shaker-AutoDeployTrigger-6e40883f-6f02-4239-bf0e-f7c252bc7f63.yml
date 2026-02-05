@@ -30,7 +30,7 @@ jobs:
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          dockerfilePath: Dockerfile.fullstack
+          dockerfilePath: Dockerfile
           registryUrl: ca23f382740bacr.azurecr.io
           registryUsername: ${{ secrets.AGENTSHAKER_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.AGENTSHAKER_REGISTRY_PASSWORD }}
