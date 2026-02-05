@@ -164,6 +164,26 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
+	// Serve static files from web/dist (if exists)
+	distDir := "./web/dist"
+	if _, err := os.Stat(distDir); err == nil {
+		log.Println("Serving frontend from ./web/dist")
+		fs := http.FileServer(http.Dir(distDir))
+		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// Try to serve the requested file
+			path := distDir + req.URL.Path
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				// File doesn't exist, serve index.html for SPA routing
+				http.ServeFile(w, req, distDir+"/index.html")
+				return
+			}
+			// File exists, serve it
+			fs.ServeHTTP(w, req)
+		}))
+	} else {
+		log.Println("Frontend not found at ./web/dist - serving backend only")
+	}
+
 	// Setup CORS for API routes only
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
