@@ -143,7 +143,39 @@ func main() {
 	// WebSocket
 	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
 
-	// MCP Protocol endpoint (root level for VS Code)
+	// Serve static files from web/dist (if exists) - BEFORE catch-all routes
+	distDir := "./web/dist"
+	if _, err := os.Stat(distDir); err == nil {
+		log.Println("Serving frontend from ./web/dist")
+		fs := http.FileServer(http.Dir(distDir))
+		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// Skip static serving for API/MCP routes
+			if strings.HasPrefix(req.URL.Path, "/api") ||
+				strings.HasPrefix(req.URL.Path, "/mcp") ||
+				strings.HasPrefix(req.URL.Path, "/ws") ||
+				strings.HasPrefix(req.URL.Path, "/a2a") ||
+				strings.HasPrefix(req.URL.Path, "/.well-known") ||
+				req.URL.Path == "/health" {
+				// Let other handlers handle it
+				http.NotFound(w, req)
+				return
+			}
+
+			// Try to serve the requested file
+			path := distDir + req.URL.Path
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				// File doesn't exist, serve index.html for SPA routing
+				http.ServeFile(w, req, distDir+"/index.html")
+				return
+			}
+			// File exists, serve it
+			fs.ServeHTTP(w, req)
+		}))
+	} else {
+		log.Println("Frontend not found at ./web/dist - serving backend only")
+	}
+
+	// MCP Protocol endpoint (root level for VS Code) - AFTER static files
 	r.HandleFunc("/", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
 	r.HandleFunc("/mcp", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
 	r.HandleFunc("/mcp/message", mcpHandler.HandleMCP).Methods("POST", "OPTIONS")
