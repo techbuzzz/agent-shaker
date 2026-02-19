@@ -149,18 +149,6 @@ func main() {
 		log.Println("Serving frontend from ./web/dist")
 		fs := http.FileServer(http.Dir(distDir))
 		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			// Skip static serving for API/MCP routes
-			if strings.HasPrefix(req.URL.Path, "/api") ||
-				strings.HasPrefix(req.URL.Path, "/mcp") ||
-				strings.HasPrefix(req.URL.Path, "/ws") ||
-				strings.HasPrefix(req.URL.Path, "/a2a") ||
-				strings.HasPrefix(req.URL.Path, "/.well-known") ||
-				req.URL.Path == "/health" {
-				// Let other handlers handle it
-				http.NotFound(w, req)
-				return
-			}
-
 			// Try to serve the requested file
 			path := distDir + req.URL.Path
 			if _, err := os.Stat(path); os.IsNotExist(err) {
