@@ -14,7 +14,7 @@ COPY web/ ./
 RUN npm run build
 
 # Verify build output
-RUN ls -la /app/dist || echo "ERROR: dist not found!"
+RUN test -d /app/dist || (echo "ERROR: dist not found!" && exit 1)
 
 # Stage 2: Build Backend (Go)
 FROM golang:1.24-alpine AS backend-builder
