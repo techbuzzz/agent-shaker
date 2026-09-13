@@ -1,37 +1,41 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/techbuzzz/agent-shaker/internal/database"
+
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
+// ProjectHandler manages CRUD for the projects resource.
 type ProjectHandler struct {
-	db  *database.DB
-	hub *websocket.Hub
+	store *queries.ProjectsStore
+	hub   *websocket.Hub
 }
 
-func NewProjectHandler(db *database.DB, hub *websocket.Hub) *ProjectHandler {
-	return &ProjectHandler{db: db, hub: hub}
+// NewProjectHandler returns a handler backed by the supplied store.
+func NewProjectHandler(store *queries.ProjectsStore, hub *websocket.Hub) *ProjectHandler {
+	return &ProjectHandler{store: store, hub: hub}
 }
 
+// CreateProject decodes, validates, and inserts a new project.
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	var req models.CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-
-	// Validate request
 	if err := validator.ValidateCreateProjectRequest(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
 		return
 	}
 
@@ -43,216 +47,136 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
-
-	_, err := h.db.Exec(`
-		INSERT INTO projects (id, name, description, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, project.ID, project.Name, project.Description, project.Status, project.CreatedAt, project.UpdatedAt)
-	if err != nil {
-		http.Error(w, "Failed to create project", http.StatusInternalServerError)
+	if err := h.store.CreateProject(r.Context(), &project); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(project)
+	httpx.WriteJSON(w, http.StatusCreated, project)
 }
 
+// ListProjects returns every project as a JSON array (empty array, never
+// null).
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.Query(`
-		SELECT id, name, description, status, created_at, updated_at
-		FROM projects
-		ORDER BY created_at DESC
-	`)
+	projects, err := h.store.ListProjects(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to retrieve projects", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
-	defer rows.Close()
-
-	var projects []models.Project
-	for rows.Next() {
-		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.Status, &p.CreatedAt, &p.UpdatedAt); err != nil {
-			http.Error(w, "Failed to scan project", http.StatusInternalServerError)
-			return
-		}
-		projects = append(projects, p)
-	}
-
-	// Return empty array instead of null
 	if projects == nil {
 		projects = []models.Project{}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(projects)
+	httpx.WriteJSON(w, http.StatusOK, projects)
 }
 
+// GetProject returns one project by id.
 func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid project ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
 		return
 	}
-
-	var project models.Project
-	err = h.db.QueryRow(`
-		SELECT id, name, description, status, created_at, updated_at
-		FROM projects
-		WHERE id = $1
-	`, id).Scan(&project.ID, &project.Name, &project.Description, &project.Status, &project.CreatedAt, &project.UpdatedAt)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Project not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve project", http.StatusInternalServerError)
+	project, err := h.store.GetProject(r.Context(), id)
+	if err != nil {
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("project not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(project)
+	httpx.WriteJSON(w, http.StatusOK, project)
 }
 
+// UpdateProjectStatus validates a status value and updates the row.
 func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid project ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
 		return
 	}
-
 	var req struct {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-
-	// Validate status
-	validStatuses := map[string]bool{
-		"active":    true,
-		"completed": true,
-		"archived":  true,
-	}
-	if !validStatuses[req.Status] {
-		http.Error(w, "Invalid status. Must be: active, completed, or archived", http.StatusBadRequest)
+	if !validProjectStatus(req.Status) {
+		httpx.WriteError(w, r, fmt.Errorf("invalid status; expected active, completed or archived"))
 		return
 	}
-
-	// Update project status
-	result, err := h.db.Exec(`
-		UPDATE projects 
-		SET status = $1, updated_at = $2
-		WHERE id = $3
-	`, req.Status, time.Now(), id)
+	if err := h.store.UpdateProjectStatus(r.Context(), id, req.Status); err != nil {
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("project not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
+		return
+	}
+	project, err := h.store.GetProject(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to update project status", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		http.Error(w, "Project not found", http.StatusNotFound)
-		return
-	}
-
-	// Fetch updated project
-	var project models.Project
-	err = h.db.QueryRow(`
-		SELECT id, name, description, status, created_at, updated_at
-		FROM projects
-		WHERE id = $1
-	`, id).Scan(&project.ID, &project.Name, &project.Description, &project.Status, &project.CreatedAt, &project.UpdatedAt)
-	if err != nil {
-		http.Error(w, "Failed to retrieve updated project", http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast project update via WebSocket
+	// Broadcast the status change over the WebSocket fan-out so connected
+	// dashboards see the update without a poll.
 	h.hub.BroadcastToProject(id, "project_status_update", project)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(project)
+	httpx.WriteJSON(w, http.StatusOK, project)
 }
 
+// DeleteProject removes a project and its related rows in one transaction.
+// The transaction lives in this handler (not the query store) because it
+// touches three tables (contexts, tasks, agents, projects) — keeping the
+// orchestration here avoids leaking a half-deleted state.
 func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
-	idStr := vars["id"]
-
-	id, err := uuid.Parse(idStr)
+	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid project ID", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
 		return
 	}
 
-	// Begin transaction to delete project and related data
-	tx, err := h.db.Begin()
+	// Delegate the multi-table delete to the projects query store. The
+	// store takes a Querier; we hand it a *sql.Tx here so the whole delete
+	// is atomic.
+	tx, err := h.store.BeginTx(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
 	defer tx.Rollback()
 
-	// Check if project exists
-	var exists bool
-	err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM projects WHERE id = $1)", id).Scan(&exists)
-	if err != nil {
-		http.Error(w, "Failed to check project existence", http.StatusInternalServerError)
+	if err := h.store.DeleteProjectCascade(r.Context(), tx, id); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-	if !exists {
-		http.Error(w, "Project not found", http.StatusNotFound)
-		return
-	}
-
-	// Delete related contexts first (they reference tasks)
-	_, err = tx.Exec("DELETE FROM contexts WHERE task_id IN (SELECT id FROM tasks WHERE project_id = $1)", id)
-	if err != nil {
-		http.Error(w, "Failed to delete related contexts", http.StatusInternalServerError)
-		return
-	}
-
-	// Delete related tasks
-	_, err = tx.Exec("DELETE FROM tasks WHERE project_id = $1", id)
-	if err != nil {
-		http.Error(w, "Failed to delete related tasks", http.StatusInternalServerError)
-		return
-	}
-
-	// Delete related agents
-	_, err = tx.Exec("DELETE FROM agents WHERE project_id = $1", id)
-	if err != nil {
-		http.Error(w, "Failed to delete related agents", http.StatusInternalServerError)
-		return
-	}
-
-	// Finally, delete the project
-	result, err := tx.Exec("DELETE FROM projects WHERE id = $1", id)
-	if err != nil {
-		http.Error(w, "Failed to delete project", http.StatusInternalServerError)
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		http.Error(w, "Project not found", http.StatusNotFound)
-		return
-	}
-
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Broadcast project deletion via WebSocket
-	h.hub.BroadcastToProject(id, "project_deleted", map[string]interface{}{
+	h.hub.BroadcastToProject(id, "project_deleted", map[string]any{
 		"project_id": id,
 		"deleted_at": time.Now(),
 	})
-
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// validProjectStatus returns true when s is one of the documented status
+// values. Centralised so validation and the typed query enum stay aligned.
+func validProjectStatus(s string) bool {
+	switch strings.ToLower(s) {
+	case "active", "completed", "archived":
+		return true
+	default:
+		return false
+	}
+}
+
+// isNotFound matches the sentinel strings produced by the query helpers
+// when a row is missing. Kept local because the helpers do not yet return a
+// typed sentinel (that follow-up is part of the broader M4 work).
+func isNotFound(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "not found"))
 }

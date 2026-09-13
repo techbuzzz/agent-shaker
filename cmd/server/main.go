@@ -16,6 +16,7 @@ import (
 
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
@@ -25,11 +26,28 @@ import (
 )
 
 func main() {
-	// Structured logging is the default for everything in this binary.
-	slog.SetDefault(observability.NewLogger())
-
 	// Root context for startup. The server lifecycle owns its own context.
 	ctx := context.Background()
+
+	// Tracing must be initialised BEFORE the logger so the otelslog bridge
+	// is available when NewLogger is constructed (otherwise log lines would
+	// lack trace_id correlation). InitTracing is a no-op when
+	// OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", "0.1.0")
+	if err != nil {
+		slog.Error("tracing init failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracingShutdown(shutdownCtx); err != nil {
+			slog.Error("tracing shutdown error", "error", err)
+		}
+	}()
+
+	// Structured logging is the default for everything in this binary.
+	slog.SetDefault(observability.NewLogger())
 
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -70,8 +88,11 @@ func main() {
 	hub := websocket.NewHub()
 	go hub.Run()
 
-	// Create handlers
-	projectHandler := handlers.NewProjectHandler(db, hub)
+	// Create handlers. Handlers own a typed query store; the project handler
+	// is migrated to use it (M2.3 pilot). The remaining handlers continue to
+	// use *database.DB directly until they are migrated in subsequent PRs.
+	projectStore := queries.NewProjectsStore(db)
+	projectHandler := handlers.NewProjectHandler(projectStore, hub)
 	agentHandler := handlers.NewAgentHandler(db, hub)
 	taskHandler := handlers.NewTaskHandler(db, hub)
 	contextHandler := handlers.NewContextHandler(db, hub)
@@ -86,12 +107,34 @@ func main() {
 		baseURL = "http://localhost:" + getPort()
 	}
 
-	// Create A2A task store and manager
-	tasksDir := os.Getenv("TASKS_DIR")
-	if tasksDir == "" {
-		tasksDir = "./data/tasks"
+	// Create A2A task store. Default to MemoryStore for back-compat; opt into
+	// the Postgres-backed store via TASK_STORE=postgres (requires DATABASE_URL
+	// and that migrations 001..004 have been applied).
+	var taskStore task.Store
+	switch os.Getenv("TASK_STORE") {
+	case "", "memory":
+		tasksDir := os.Getenv("TASKS_DIR")
+		if tasksDir == "" {
+			tasksDir = "./data/tasks"
+		}
+		taskStore = task.NewMemoryStore(tasksDir)
+		slog.Info("task store", "type", "memory", "dir", tasksDir)
+	case "postgres":
+		if db == nil {
+			slog.Error("TASK_STORE=postgres requires a working database connection")
+			os.Exit(1)
+		}
+		pgxPool, err := database.NewPool(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			slog.Error("failed to open pgxpool for task store", "error", err)
+			os.Exit(1)
+		}
+		taskStore = task.NewPostgresStore(pgxPool)
+		slog.Info("task store", "type", "postgres")
+	default:
+		slog.Error("unknown TASK_STORE value; expected memory or postgres", "value", os.Getenv("TASK_STORE"))
+		os.Exit(1)
 	}
-	taskStore := task.NewMemoryStore(tasksDir)
 	taskManager := task.NewManager(taskStore, nil, baseURL)
 
 	// Create A2A context storage (bridges existing contexts to A2A artifacts)

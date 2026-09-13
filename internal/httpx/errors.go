@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
@@ -75,4 +76,16 @@ func classify(err error) (code, msg string, httpStatus int) {
 	// diagnose from logs, but never leak it to unauthenticated callers in
 	// production. (Auth is out of scope; this matches current behaviour.)
 	return "internal", err.Error(), http.StatusInternalServerError
+}
+
+// WriteJSON writes payload as JSON with the supplied status code. Encode
+// errors are logged at error level (they typically mean the client has
+// already disconnected) rather than returned, since the response has
+// already been partially written.
+func WriteJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		slog.Error("encode response", "error", err, "status", status)
+	}
 }

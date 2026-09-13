@@ -3,6 +3,7 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/techbuzzz/agent-shaker/internal/models"
 )
 
@@ -277,25 +281,35 @@ func (h *Hub) Unregister(client *Client) {
 	}
 }
 
-// HandleWebSocket handles WebSocket connections
+// HandleWebSocket handles WebSocket connections. When OpenTelemetry tracing
+// is enabled, the handshake opens a span ("websocket.handle") that the
+// hub pumps link to via their own spans (added in a follow-up).
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := h.upgrader.Upgrade(w, r, nil)
+	tracer := otel.Tracer("agent-shaker/websocket")
+	ctx, span := tracer.Start(r.Context(), "websocket.handle")
+	defer span.End()
+
+	conn, err := h.upgrader.Upgrade(w, r.WithContext(ctx), nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		slog.ErrorContext(ctx, "websocket upgrade error", "error", err)
 		return
 	}
 
 	projectIDStr := r.URL.Query().Get("project_id")
 	if projectIDStr == "" {
-		projectIDStr = "00000000-0000-0000-0000-000000000000" // default uuid
+		projectIDStr = "00000000-0000-0000-0000-000000000000"
 	}
 
 	projectID, err := uuid.Parse(projectIDStr)
 	if err != nil {
-		log.Printf("Invalid project_id: %v", err)
+		slog.ErrorContext(ctx, "invalid project_id", "error", err, "raw", projectIDStr)
 		conn.Close()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("ws.project_id", projectID.String()),
+		attribute.String("ws.client_id", ""),
+	)
 
 	client := &Client{
 		ID:        uuid.New().String(),
@@ -304,6 +318,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Send:      make(chan []byte, 256),
 		hub:       h,
 	}
+	span.SetAttributes(attribute.String("ws.client_id", client.ID))
 
 	h.Register(client)
 
