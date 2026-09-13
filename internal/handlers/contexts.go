@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/lib/pq"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/models"
@@ -124,7 +123,7 @@ func (h *ContextHandler) ListContexts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContextHandler) GetContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid context ID format", http.StatusBadRequest)
@@ -150,7 +149,7 @@ func (h *ContextHandler) GetContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContextHandler) UpdateContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid context ID format", http.StatusBadRequest)
@@ -215,7 +214,7 @@ func (h *ContextHandler) UpdateContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ContextHandler) DeleteContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid context ID format", http.StatusBadRequest)

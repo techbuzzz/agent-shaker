@@ -8,15 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/gorilla/mux"
-	"github.com/rs/cors"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
@@ -31,29 +28,41 @@ func main() {
 	// Structured logging is the default for everything in this binary.
 	slog.SetDefault(observability.NewLogger())
 
+	// Root context for startup. The server lifecycle owns its own context.
+	ctx := context.Background()
+
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		databaseURL = "postgres://mcp:secret@localhost:5433/mcp_tracker?sslmode=disable"
 	}
 
-	// Connect to database
-	db, err := database.NewDB(databaseURL)
+	// Production safety guard: refuse to boot when sslmode=disable would
+	// silently send credentials and data over an unencrypted connection.
+	if os.Getenv("ENV") == "production" && strings.Contains(databaseURL, "sslmode=disable") {
+		slog.Error("refusing to start in production with sslmode=disable")
+		os.Exit(2)
+	}
+
+	// Connect to database. Pool tuning happens inside NewDB; see
+	// internal/database/database.go for defaults.
+	db, err := database.NewDB(ctx, databaseURL)
 	if err != nil {
 		slog.Warn("database connection failed, starting without database", "error", err)
 		db = nil
 	} else {
 		defer db.Close()
 
-		// Configure connection pool
-		db.SetMaxOpenConns(25)
-		db.SetMaxIdleConns(5)
-
 		slog.Info("database connected")
 
-		// Run migrations
-		if err := runMigrations(db); err != nil {
-			slog.Warn("migrations failed, continuing without", "error", err)
+		// Run migrations on startup unless the operator has disabled it (CI
+		// runs the dedicated cmd/migrate binary instead).
+		if os.Getenv("RUN_MIGRATIONS_ON_START") != "false" {
+			if err := runMigrations(db); err != nil {
+				slog.Warn("migrations failed, continuing without", "error", err)
+			}
+		} else {
+			slog.Info("RUN_MIGRATIONS_ON_START=false; skipping in-process migrations")
 		}
 	}
 
@@ -94,185 +103,50 @@ func main() {
 	streamingHandler := a2aserver.NewStreamingHandler(taskManager)
 	artifactHandler := a2aserver.NewArtifactHandler(contextStorage, baseURL)
 
-	// Setup router
-	r := mux.NewRouter()
-
-	// API routes
-	api := r.PathPrefix("/api").Subrouter()
-
-	// Dashboard
-	api.HandleFunc("/dashboard", dashboardHandler.GetDashboardStats).Methods("GET")
-
-	// Projects
-	api.HandleFunc("/projects", projectHandler.CreateProject).Methods("POST")
-	api.HandleFunc("/projects", projectHandler.ListProjects).Methods("GET")
-	api.HandleFunc("/projects/{id}", projectHandler.GetProject).Methods("GET")
-	api.HandleFunc("/projects/{id}", projectHandler.DeleteProject).Methods("DELETE")
-	api.HandleFunc("/projects/{id}/status", projectHandler.UpdateProjectStatus).Methods("PUT")
-
-	// Agents
-	api.HandleFunc("/agents", agentHandler.CreateAgent).Methods("POST")
-	api.HandleFunc("/agents", agentHandler.ListAgents).Methods("GET")
-	api.HandleFunc("/agents/{id}", agentHandler.GetAgent).Methods("GET")
-	api.HandleFunc("/agents/{id}", agentHandler.DeleteAgent).Methods("DELETE")
-	api.HandleFunc("/agents/{id}/status", agentHandler.UpdateAgentStatus).Methods("PUT")
-
-	// Tasks
-	api.HandleFunc("/tasks", taskHandler.CreateTask).Methods("POST")
-	api.HandleFunc("/tasks", taskHandler.ListTasks).Methods("GET")
-	api.HandleFunc("/tasks/{id}", taskHandler.GetTask).Methods("GET")
-	api.HandleFunc("/tasks/{id}", taskHandler.UpdateTask).Methods("PUT")
-	api.HandleFunc("/tasks/{id}", taskHandler.DeleteTask).Methods("DELETE")
-	api.HandleFunc("/tasks/{id}/status", taskHandler.UpdateTaskStatus).Methods("PUT")
-	api.HandleFunc("/tasks/{id}/reassign", taskHandler.ReassignTask).Methods("PUT")
-
-	// Contexts
-	api.HandleFunc("/contexts", contextHandler.CreateContext).Methods("POST")
-	api.HandleFunc("/contexts", contextHandler.ListContexts).Methods("GET")
-	api.HandleFunc("/contexts/{id}", contextHandler.GetContext).Methods("GET")
-	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
-	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
-
-	// Daily Standups
-	api.HandleFunc("/standups", standupHandler.CreateStandup).Methods("POST")
-	api.HandleFunc("/standups", standupHandler.ListStandups).Methods("GET")
-	api.HandleFunc("/standups/{id}", standupHandler.GetStandup).Methods("GET")
-	api.HandleFunc("/standups/{id}", standupHandler.UpdateStandup).Methods("PUT")
-	api.HandleFunc("/standups/{id}", standupHandler.DeleteStandup).Methods("DELETE")
-
-	// Agent Heartbeats
-	api.HandleFunc("/heartbeats", standupHandler.RecordHeartbeat).Methods("POST")
-	api.HandleFunc("/agents/{id}/heartbeats", standupHandler.GetAgentHeartbeats).Methods("GET")
-
-	// A2A Protocol routes
-	a2aserver.RegisterA2ARoutes(r, a2aHandler, streamingHandler, artifactHandler, agentCardHandler)
-
-	// WebSocket
-	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
-
-	// Serve static files from web/dist (if exists) - BEFORE catch-all routes.
-	// http.FileServer sanitizes paths internally (rejects "..") so we don't need
-	// to call os.Stat with a concatenated path; that pattern was vulnerable to
-	// path traversal in earlier revisions.
-	distDir := "./web/dist"
-	if info, err := os.Stat(distDir); err == nil && info.IsDir() {
-		slog.Info("serving frontend from ./web/dist")
-		fileServer := http.FileServer(http.Dir(distDir))
-		indexPath := filepath.Join(distDir, "index.html")
-		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			// Resolve against distDir, then let FileServer handle path cleaning.
-			clean := filepath.Clean(req.URL.Path)
-			full := filepath.Join(distDir, clean)
-			if rel, err := filepath.Rel(distDir, full); err == nil && !strings.HasPrefix(rel, "..") {
-				if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
-					fileServer.ServeHTTP(w, req)
-					return
-				}
-			}
-			http.ServeFile(w, req, indexPath)
-		}))
-	} else {
-		slog.Info("frontend not found at ./web/dist - serving backend only")
-	}
-
-	// MCP Protocol endpoint (root level for VS Code) - AFTER static files
-	r.HandleFunc("/", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
-	r.HandleFunc("/mcp", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
-	r.HandleFunc("/mcp/message", mcpHandler.HandleMCP).Methods("POST", "OPTIONS")
-
-	// Observability and health endpoints. These are intentionally outside the
-	// CORS middleware so probes can hit them without an Origin header.
+	// Build the route table and middleware chain. See cmd/server/routes.go
+	// for the actual route registrations.
 	obs := observability.New()
-	r.Handle("/metrics", obs.Handler()).Methods("GET", "OPTIONS")
-	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	}).Methods("GET", "OPTIONS")
-	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if db == nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"status":"unavailable","reason":"no database"}`))
-			return
-		}
-		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := db.PingContext(pingCtx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = fmt.Fprintf(w, `{"status":"unavailable","reason":"db ping: %s"}`, err.Error())
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	}).Methods("GET", "OPTIONS")
-
-	// Legacy /health endpoint kept for backwards compatibility; mirrors /healthz.
-	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	}).Methods("GET", "OPTIONS")
-
-	// Setup CORS for API routes only
-	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
-		AllowCredentials: true,
+	rateMW, rateShutdown := middleware.RateLimit(middleware.RateLimitConfig{
+		Limit: middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
+		Burst: middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
+		Skip:  middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
 	})
+	defer rateShutdown(context.Background())
 
-	// Create a custom handler that routes WebSocket without middleware.
-	// Every request gets RequestID + Prometheus instrumentation + Recovery as
-	// the outermost middleware; per-route middleware (CORS, size limit,
-	// access log) is composed inside the closure below.
-	chain := func(h http.Handler) http.Handler {
-		return middleware.RequestID(obs.Instrument(middleware.Recovery(h)))
+	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
+	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
+
+	deps := routeDeps{
+		db:                db,
+		hub:               hub,
+		projectHandler:    projectHandler,
+		agentHandler:      agentHandler,
+		taskHandler:       taskHandler,
+		contextHandler:    contextHandler,
+		standupHandler:    standupHandler,
+		wsHandler:         wsHandler,
+		dashboardHandler:  dashboardHandler,
+		mcpHandler:        mcpHandler,
+		agentCardHandler:  agentCardHandler,
+		a2aHandler:        a2aHandler,
+		streamingHandler:  streamingHandler,
+		artifactHandler:   artifactHandler,
+		obs:               obs,
+		maxBodyBytes:      parseMaxBodyBytes(),
+		corsOrigins:       corsOrigins,
+		corsAllowCreds:    corsAllowCreds,
+		isTLS:             false,
+		rateLimitShutdown: rateShutdown,
 	}
 
-	handler := chain(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// WebSocket requests bypass all middleware
-		if req.URL.Path == "/ws" {
-			wsHandler.HandleWebSocket(w, req)
-			return
-		}
-
-		// A2A Protocol routes - handle with CORS
-		if req.URL.Path == "/.well-known/agent-card.json" ||
-			strings.HasPrefix(req.URL.Path, "/a2a/") {
-			middleware.Logger(c.Handler(r)).ServeHTTP(w, req)
-			return
-		}
-
-		// MCP Protocol requests (root, /mcp, /mcp/message) - handle with CORS
-		if req.URL.Path == "/" || req.URL.Path == "/mcp" || len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/mcp" {
-			middleware.Logger(c.Handler(http.HandlerFunc(mcpHandler.HandleMCP))).ServeHTTP(w, req)
-			return
-		}
-
-		// API routes get full middleware
-		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
-			middleware.Logger(
-				middleware.RequestSizeLimit(10*1024*1024)(
-					c.Handler(api),
-				),
-			).ServeHTTP(w, req)
-			return
-		}
-
-		// Legacy /health endpoint keeps CORS-wrapped access log
-		if req.URL.Path == "/health" {
-			middleware.Logger(c.Handler(r)).ServeHTTP(w, req)
-			return
-		}
-
-		// Other routes get minimal middleware
-		middleware.Logger(r).ServeHTTP(w, req)
-	}))
+	rootHandler, err := newServeMux(deps)
+	if err != nil {
+		slog.Error("failed to build routes", "error", err)
+		os.Exit(1)
+	}
+	// Wrap the router with the rate limiter so it sits between RequestID
+	// (outermost) and the per-route CORS handlers.
+	handler := middleware.Apply(rootHandler, rateMW)
 
 	// Start server
 	port := os.Getenv("PORT")

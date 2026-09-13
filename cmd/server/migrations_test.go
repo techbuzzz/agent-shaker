@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 )
 
@@ -113,7 +114,7 @@ func TestMigrationConcurrentSafety(t *testing.T) {
 			defer wg.Done()
 
 			// Each goroutine creates its own DB connection
-			db, err := database.NewDB(dbURL)
+			db, err := database.NewDB(context.Background(), dbURL)
 			if err != nil {
 				errors <- err
 				return
@@ -136,7 +137,7 @@ func TestMigrationConcurrentSafety(t *testing.T) {
 	}
 
 	// Verify migration was applied exactly once
-	db, err := database.NewDB(dbURL)
+	db, err := database.NewDB(context.Background(), dbURL)
 	if err != nil {
 		t.Fatalf("Failed to connect to verify: %v", err)
 	}

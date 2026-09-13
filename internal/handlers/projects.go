@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
@@ -91,7 +90,7 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid project ID format", http.StatusBadRequest)
@@ -117,7 +116,7 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid project ID format", http.StatusBadRequest)
@@ -180,7 +179,7 @@ func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	idStr := vars["id"]
 
 	id, err := uuid.Parse(idStr)

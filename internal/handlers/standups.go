@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
@@ -186,7 +185,7 @@ func (h *StandupHandler) ListStandups(w http.ResponseWriter, r *http.Request) {
 
 // GetStandup retrieves a specific standup by ID
 func (h *StandupHandler) GetStandup(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid standup ID", http.StatusBadRequest)
@@ -222,7 +221,7 @@ func (h *StandupHandler) GetStandup(w http.ResponseWriter, r *http.Request) {
 
 // UpdateStandup updates a standup entry
 func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid standup ID", http.StatusBadRequest)
@@ -264,7 +263,7 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 
 // DeleteStandup deletes a standup entry
 func (h *StandupHandler) DeleteStandup(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid standup ID", http.StatusBadRequest)
@@ -343,7 +342,7 @@ func (h *StandupHandler) RecordHeartbeat(w http.ResponseWriter, r *http.Request)
 
 // GetAgentHeartbeats retrieves heartbeats for a specific agent
 func (h *StandupHandler) GetAgentHeartbeats(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	agentID, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid agent ID", http.StatusBadRequest)

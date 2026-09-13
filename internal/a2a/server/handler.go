@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
 	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/task"
@@ -70,7 +69,7 @@ func (h *A2AHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
+	vars := a2aVars(r)
 	taskID := vars["taskId"]
 	if taskID == "" {
 		h.writeError(w, "Task ID is required", http.StatusBadRequest)
@@ -143,7 +142,7 @@ func (h *A2AHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
+	vars := a2aVars(r)
 	taskID := vars["taskId"]
 	if taskID == "" {
 		h.writeError(w, "Task ID is required", http.StatusBadRequest)
@@ -186,28 +185,36 @@ func (h *A2AHandler) writeError(w http.ResponseWriter, message string, statusCod
 	json.NewEncoder(w).Encode(errorResp)
 }
 
-// RegisterA2ARoutes registers all A2A routes on the router
-func RegisterA2ARoutes(r *mux.Router, handler *A2AHandler, streamingHandler *StreamingHandler, artifactHandler *ArtifactHandler, agentCardHandler *AgentCardHandler) {
-	// Agent card endpoint (well-known)
-	r.HandleFunc("/.well-known/agent-card.json", agentCardHandler.ServeHTTP).Methods("GET", "OPTIONS")
+// RegisterA2ARoutes registers all A2A routes on the supplied stdlib mux.
+//
+// This is the stdlib `net/http` enhanced ServeMux version (Go 1.22+). The
+// legacy signature used gorilla/mux and is no longer supported.
+func RegisterA2ARoutes(mux *http.ServeMux, handler *A2AHandler, streamingHandler *StreamingHandler, artifactHandler *ArtifactHandler, agentCardHandler *AgentCardHandler) {
+	// Agent card endpoint (well-known).
+	mux.HandleFunc("GET /.well-known/agent-card.json", agentCardHandler.ServeHTTP)
+	mux.HandleFunc("OPTIONS /.well-known/agent-card.json", agentCardHandler.ServeHTTP)
 
-	// A2A API v1 routes
-	a2a := r.PathPrefix("/a2a/v1").Subrouter()
+	// Task endpoints.
+	mux.HandleFunc("POST /a2a/v1/message", handler.SendMessage)
+	mux.HandleFunc("OPTIONS /a2a/v1/message", handler.SendMessage)
+	mux.HandleFunc("GET /a2a/v1/tasks", handler.ListTasks)
+	mux.HandleFunc("OPTIONS /a2a/v1/tasks", handler.ListTasks)
+	mux.HandleFunc("GET /a2a/v1/tasks/{taskId}", handler.GetTask)
+	mux.HandleFunc("OPTIONS /a2a/v1/tasks/{taskId}", handler.GetTask)
+	mux.HandleFunc("DELETE /a2a/v1/tasks/{taskId}", handler.CancelTask)
+	mux.HandleFunc("OPTIONS /a2a/v1/tasks/{taskId}", handler.CancelTask)
 
-	// Task endpoints
-	a2a.HandleFunc("/message", handler.SendMessage).Methods("POST", "OPTIONS")
-	a2a.HandleFunc("/tasks", handler.ListTasks).Methods("GET", "OPTIONS")
-	a2a.HandleFunc("/tasks/{taskId}", handler.GetTask).Methods("GET", "OPTIONS")
-	a2a.HandleFunc("/tasks/{taskId}", handler.CancelTask).Methods("DELETE", "OPTIONS")
-
-	// Streaming endpoint
+	// Streaming endpoint.
 	if streamingHandler != nil {
-		a2a.HandleFunc("/message:stream", streamingHandler.StreamMessage).Methods("POST", "OPTIONS")
+		mux.HandleFunc("POST /a2a/v1/message:stream", streamingHandler.StreamMessage)
+		mux.HandleFunc("OPTIONS /a2a/v1/message:stream", streamingHandler.StreamMessage)
 	}
 
-	// Artifact endpoints
+	// Artifact endpoints.
 	if artifactHandler != nil {
-		a2a.HandleFunc("/artifacts", artifactHandler.ListArtifacts).Methods("GET", "OPTIONS")
-		a2a.HandleFunc("/artifacts/{artifactId}", artifactHandler.GetArtifact).Methods("GET", "OPTIONS")
+		mux.HandleFunc("GET /a2a/v1/artifacts", artifactHandler.ListArtifacts)
+		mux.HandleFunc("OPTIONS /a2a/v1/artifacts", artifactHandler.ListArtifacts)
+		mux.HandleFunc("GET /a2a/v1/artifacts/{artifactId}", artifactHandler.GetArtifact)
+		mux.HandleFunc("OPTIONS /a2a/v1/artifacts/{artifactId}", artifactHandler.GetArtifact)
 	}
 }

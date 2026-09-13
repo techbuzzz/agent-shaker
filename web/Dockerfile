@@ -1,29 +1,27 @@
-# Dockerfile for Vue.js Frontend (Nginx)
-FROM node:18-alpine AS builder
+# syntax=docker/dockerfile:1.7
 
+# ---- build stage ----
+FROM node:20-alpine AS build
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Install deps
+COPY package.json package-lock.json* ./
+RUN npm ci --no-audit --no-fund
 
-# Install dependencies
-RUN npm install
-
-# Copy source files
+# Build the Nuxt app
 COPY . .
-
-# Build for production
 RUN npm run build
 
-# Production stage with nginx
-FROM nginx:alpine
+# ---- runtime stage ----
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
 
-# Copy built files to nginx
-COPY --from=builder /app/dist /usr/share/nginx/html
+# Copy built artifacts only
+COPY --from=build /app/.output ./.output
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/public ./public
 
-# Copy nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+EXPOSE 3000
+CMD ["node", ".output/server/index.mjs"]

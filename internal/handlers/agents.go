@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
@@ -119,7 +118,7 @@ func (h *AgentHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid agent ID format", http.StatusBadRequest)
@@ -145,7 +144,7 @@ func (h *AgentHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) UpdateAgentStatus(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
 		http.Error(w, "Invalid agent ID format", http.StatusBadRequest)
@@ -197,7 +196,7 @@ func (h *AgentHandler) UpdateAgentStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *AgentHandler) DeleteAgent(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	vars := muxVars(r)
 	idStr := vars["id"]
 
 	id, err := uuid.Parse(idStr)

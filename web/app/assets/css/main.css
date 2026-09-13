@@ -1,0 +1,159 @@
+/* Tailwind v4 + Nuxt UI primitives. */
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/* ---------- Brand tokens ---------- */
+:root {
+  --ui-shadow-soft: 0 1px 2px 0 rgb(15 23 42 / 0.04), 0 1px 3px 0 rgb(15 23 42 / 0.06);
+}
+
+/* ---------- Base ---------- */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+/* ---------- Focus ring polish ---------- */
+*:focus-visible {
+  outline: 2px solid var(--ui-primary, theme('colors.indigo.500'));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------- Markdown surfaces ---------- */
+.markdown-body {
+  line-height: 1.7;
+  word-wrap: break-word;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+.markdown-body h1 { font-size: 1.6rem; }
+.markdown-body h2 { font-size: 1.35rem; }
+.markdown-body h3 { font-size: 1.15rem; }
+.markdown-body p { margin: 0.75em 0; }
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+  margin: 0.75em 0;
+}
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body code {
+  background-color: rgb(241 245 249);
+  padding: 0.125em 0.35em;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+:where(.dark) .markdown-body code {
+  background-color: rgb(30 41 59);
+}
+.markdown-body pre {
+  background-color: rgb(15 23 42);
+  color: rgb(226 232 240);
+  padding: 1em;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-size: 0.875em;
+}
+.markdown-body pre code {
+  background-color: transparent;
+  color: inherit;
+  padding: 0;
+}
+.markdown-body blockquote {
+  border-left: 4px solid var(--ui-primary, theme('colors.indigo.500'));
+  padding-left: 1em;
+  margin: 1em 0;
+  color: rgb(71 85 105);
+  font-style: italic;
+}
+:where(.dark) .markdown-body blockquote {
+  color: rgb(148 163 184);
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgb(226 232 240);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+:where(.dark) .markdown-body th,
+:where(.dark) .markdown-body td {
+  border-color: rgb(51 65 85);
+}
+.markdown-body th {
+  background-color: rgb(248 250 252);
+  font-weight: 600;
+}
+:where(.dark) .markdown-body th {
+  background-color: rgb(30 41 59);
+}
+
+/* ---------- Scrollbar polish ---------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: rgb(203 213 225);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(148 163 184);
+  background-clip: padding-box;
+}
+:where(.dark)::-webkit-scrollbar-thumb {
+  background-color: rgb(71 85 105);
+}
+:where(.dark)::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(100 116 139);
+}
+
+/* ---------- Status dot (used in ConnectionStatus) ---------- */
+.status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+.status-dot--online  { background-color: rgb(16 185 129); }
+.status-dot--offline { background-color: rgb(148 163 184); }
+.status-dot--busy    { background-color: rgb(245 158 11); }
+
+/* ---------- Page transitions ---------- */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
