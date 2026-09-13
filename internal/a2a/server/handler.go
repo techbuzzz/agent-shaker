@@ -2,12 +2,14 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
+	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/task"
 )
 
@@ -77,7 +79,11 @@ func (h *A2AHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 
 	t, err := h.taskManager.GetTask(r.Context(), taskID)
 	if err != nil {
-		h.writeError(w, "Task not found", http.StatusNotFound)
+		if errors.Is(err, task.ErrTaskNotFound) {
+			h.writeError(w, "Task not found", http.StatusNotFound)
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
 
@@ -145,7 +151,14 @@ func (h *A2AHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.taskManager.CancelTask(r.Context(), taskID); err != nil {
-		h.writeError(w, "Failed to cancel task: "+err.Error(), http.StatusBadRequest)
+		switch {
+		case errors.Is(err, task.ErrTaskNotFound):
+			h.writeError(w, "Task not found", http.StatusNotFound)
+		case errors.Is(err, task.ErrTaskTerminal):
+			h.writeError(w, "Task is already in a terminal state", http.StatusConflict)
+		default:
+			httpx.WriteError(w, r, err)
+		}
 		return
 	}
 

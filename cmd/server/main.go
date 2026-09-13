@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -17,11 +22,15 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
+	"github.com/techbuzzz/agent-shaker/internal/observability"
 	"github.com/techbuzzz/agent-shaker/internal/task"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
 func main() {
+	// Structured logging is the default for everything in this binary.
+	slog.SetDefault(observability.NewLogger())
+
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -31,8 +40,7 @@ func main() {
 	// Connect to database
 	db, err := database.NewDB(databaseURL)
 	if err != nil {
-		log.Printf("Failed to connect to database: %v", err)
-		log.Println("Starting server without database for WebSocket testing...")
+		slog.Warn("database connection failed, starting without database", "error", err)
 		db = nil
 	} else {
 		defer db.Close()
@@ -41,12 +49,11 @@ func main() {
 		db.SetMaxOpenConns(25)
 		db.SetMaxIdleConns(5)
 
-		log.Println("Connected to database")
+		slog.Info("database connected")
 
 		// Run migrations
 		if err := runMigrations(db); err != nil {
-			log.Printf("Failed to run migrations: %v", err)
-			log.Println("Continuing without migrations...")
+			slog.Warn("migrations failed, continuing without", "error", err)
 		}
 	}
 
@@ -143,24 +150,29 @@ func main() {
 	// WebSocket
 	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
 
-	// Serve static files from web/dist (if exists) - BEFORE catch-all routes
+	// Serve static files from web/dist (if exists) - BEFORE catch-all routes.
+	// http.FileServer sanitizes paths internally (rejects "..") so we don't need
+	// to call os.Stat with a concatenated path; that pattern was vulnerable to
+	// path traversal in earlier revisions.
 	distDir := "./web/dist"
-	if _, err := os.Stat(distDir); err == nil {
-		log.Println("Serving frontend from ./web/dist")
-		fs := http.FileServer(http.Dir(distDir))
+	if info, err := os.Stat(distDir); err == nil && info.IsDir() {
+		slog.Info("serving frontend from ./web/dist")
+		fileServer := http.FileServer(http.Dir(distDir))
+		indexPath := filepath.Join(distDir, "index.html")
 		r.PathPrefix("/").Handler(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			// Try to serve the requested file
-			path := distDir + req.URL.Path
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				// File doesn't exist, serve index.html for SPA routing
-				http.ServeFile(w, req, distDir+"/index.html")
-				return
+			// Resolve against distDir, then let FileServer handle path cleaning.
+			clean := filepath.Clean(req.URL.Path)
+			full := filepath.Join(distDir, clean)
+			if rel, err := filepath.Rel(distDir, full); err == nil && !strings.HasPrefix(rel, "..") {
+				if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
+					fileServer.ServeHTTP(w, req)
+					return
+				}
 			}
-			// File exists, serve it
-			fs.ServeHTTP(w, req)
+			http.ServeFile(w, req, indexPath)
 		}))
 	} else {
-		log.Println("Frontend not found at ./web/dist - serving backend only")
+		slog.Info("frontend not found at ./web/dist - serving backend only")
 	}
 
 	// MCP Protocol endpoint (root level for VS Code) - AFTER static files
@@ -168,21 +180,43 @@ func main() {
 	r.HandleFunc("/mcp", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
 	r.HandleFunc("/mcp/message", mcpHandler.HandleMCP).Methods("POST", "OPTIONS")
 
-	// Health check
-	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers manually for health endpoint
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
+	// Observability and health endpoints. These are intentionally outside the
+	// CORS middleware so probes can hit them without an Origin header.
+	obs := observability.New()
+	r.Handle("/metrics", obs.Handler()).Methods("GET", "OPTIONS")
+	r.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}).Methods("GET", "OPTIONS")
+	r.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if db == nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"unavailable","reason":"no database"}`))
+			return
+		}
+		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.PingContext(pingCtx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, `{"status":"unavailable","reason":"db ping: %s"}`, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	}).Methods("GET", "OPTIONS")
 
+	// Legacy /health endpoint kept for backwards compatibility; mirrors /healthz.
+	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	})
+		_, _ = w.Write([]byte("OK"))
+	}).Methods("GET", "OPTIONS")
 
 	// Setup CORS for API routes only
 	c := cors.New(cors.Options{
@@ -192,8 +226,15 @@ func main() {
 		AllowCredentials: true,
 	})
 
-	// Create a custom handler that routes WebSocket without middleware
-	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// Create a custom handler that routes WebSocket without middleware.
+	// Every request gets RequestID + Prometheus instrumentation + Recovery as
+	// the outermost middleware; per-route middleware (CORS, size limit,
+	// access log) is composed inside the closure below.
+	chain := func(h http.Handler) http.Handler {
+		return middleware.RequestID(obs.Instrument(middleware.Recovery(h)))
+	}
+
+	handler := chain(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		// WebSocket requests bypass all middleware
 		if req.URL.Path == "/ws" {
 			wsHandler.HandleWebSocket(w, req)
@@ -203,49 +244,35 @@ func main() {
 		// A2A Protocol routes - handle with CORS
 		if req.URL.Path == "/.well-known/agent-card.json" ||
 			strings.HasPrefix(req.URL.Path, "/a2a/") {
-			middleware.Recovery(
-				middleware.Logger(
-					c.Handler(r),
-				),
-			).ServeHTTP(w, req)
+			middleware.Logger(c.Handler(r)).ServeHTTP(w, req)
 			return
 		}
 
 		// MCP Protocol requests (root, /mcp, /mcp/message) - handle with CORS
 		if req.URL.Path == "/" || req.URL.Path == "/mcp" || len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/mcp" {
-			c.Handler(http.HandlerFunc(mcpHandler.HandleMCP)).ServeHTTP(w, req)
+			middleware.Logger(c.Handler(http.HandlerFunc(mcpHandler.HandleMCP))).ServeHTTP(w, req)
 			return
 		}
 
 		// API routes get full middleware
 		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
-			middleware.Recovery(
-				middleware.Logger(
-					middleware.RequestSizeLimit(10*1024*1024)(
-						c.Handler(api),
-					),
+			middleware.Logger(
+				middleware.RequestSizeLimit(10*1024*1024)(
+					c.Handler(api),
 				),
 			).ServeHTTP(w, req)
 			return
 		}
 
-		// Health endpoint gets CORS
+		// Legacy /health endpoint keeps CORS-wrapped access log
 		if req.URL.Path == "/health" {
-			middleware.Recovery(
-				middleware.Logger(
-					c.Handler(r),
-				),
-			).ServeHTTP(w, req)
+			middleware.Logger(c.Handler(r)).ServeHTTP(w, req)
 			return
 		}
 
 		// Other routes get minimal middleware
-		middleware.Recovery(
-			middleware.Logger(
-				r,
-			),
-		).ServeHTTP(w, req)
-	})
+		middleware.Logger(r).ServeHTTP(w, req)
+	}))
 
 	// Start server
 	port := os.Getenv("PORT")
@@ -253,24 +280,76 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("Server starting on port %s", port)
-	log.Println("Agent Shaker - Multi-Protocol AI Agent Platform")
-	log.Println("Endpoints:")
-	log.Println("  A2A Discovery: http://localhost:" + port + "/.well-known/agent-card.json")
-	log.Println("  A2A API:       http://localhost:" + port + "/a2a/v1")
-	log.Println("  MCP:           http://localhost:" + port + "/ (Protocol endpoint)")
-	log.Println("  REST API:      http://localhost:" + port + "/api")
-	log.Println("  WebSocket:     ws://localhost:" + port + "/ws")
-	log.Println("  Health:        http://localhost:" + port + "/health")
-	log.Println("  GitHub:        https://github.com/techbuzzz/agent-shaker")
+	slog.Info("server starting", "port", port)
+	slog.Info("Agent Shaker - Multi-Protocol AI Agent Platform")
+	slog.Info("endpoints",
+		"a2a_discovery", "http://localhost:"+port+"/.well-known/agent-card.json",
+		"a2a_api", "http://localhost:"+port+"/a2a/v1",
+		"mcp", "http://localhost:"+port+"/",
+		"rest_api", "http://localhost:"+port+"/api",
+		"websocket", "ws://localhost:"+port+"/ws",
+		"health", "http://localhost:"+port+"/healthz",
+		"ready", "http://localhost:"+port+"/readyz",
+		"metrics", "http://localhost:"+port+"/metrics",
+		"github", "https://github.com/techbuzzz/agent-shaker",
+	)
 
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	if err := runServer(":"+port, handler, hub); err != nil {
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }
 
+// runServer starts an http.Server and blocks until a SIGINT/SIGTERM arrives,
+// then drains in-flight requests (graceful shutdown) and finally closes the
+// WebSocket hub so all client pumps exit cleanly.
+func runServer(addr string, h http.Handler, hub *websocket.Hub) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Cancel root context on SIGINT/SIGTERM so background goroutines can drain.
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("server listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case err, ok := <-errCh:
+		if ok && err != nil {
+			return err
+		}
+		return nil
+	case <-rootCtx.Done():
+		slog.Info("shutdown signal received, draining HTTP connections")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP shutdown error", "error", err)
+	}
+
+	slog.Info("closing WebSocket hub")
+	hub.Shutdown()
+	slog.Info("server stopped")
+	return nil
+}
+
 func runMigrations(db *database.DB) error {
-	log.Println("Running database migrations...")
+	slog.Info("running database migrations")
 
 	// Acquire advisory lock to prevent concurrent migrations
 	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
@@ -293,7 +372,7 @@ func runMigrations(db *database.DB) error {
 	}
 
 	if !lockAcquired {
-		log.Println("Another instance is running migrations, waiting...")
+		slog.Info("another instance is running migrations, waiting")
 		// Block until we can acquire the lock
 		_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey)
 		if err != nil {
@@ -305,11 +384,11 @@ func runMigrations(db *database.DB) error {
 	defer func() {
 		_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
 		if err != nil {
-			log.Printf("Warning: failed to release migration lock: %v", err)
+			slog.Warn("failed to release migration lock", "error", err)
 		}
 	}()
 
-	log.Println("Migration lock acquired, proceeding...")
+	slog.Info("migration lock acquired")
 
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
@@ -361,7 +440,7 @@ func runMigrations(db *database.DB) error {
 
 		// Skip bootstrap and helper files (only process files starting with a digit)
 		if !migrationPattern.MatchString(entry.Name()) {
-			log.Printf("Skipping non-migration file: %s", entry.Name())
+			slog.Info("skipping non-migration file", "name", entry.Name())
 			continue
 		}
 
@@ -370,7 +449,7 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
-		log.Printf("Applying migration: %s", entry.Name())
+		slog.Info("applying migration", "name", entry.Name())
 
 		// Read migration file
 		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
@@ -388,9 +467,9 @@ func runMigrations(db *database.DB) error {
 		// Execute migration DDL within the transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("Warning: failed to rollback transaction after migration error: %v", rbErr)
+				slog.Warn("failed to rollback transaction after migration error", "error", rbErr)
 			}
-			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			slog.Error("failed to apply migration", "name", entry.Name(), "error", err)
 			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
 		}
 
@@ -398,14 +477,14 @@ func runMigrations(db *database.DB) error {
 		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
 		// between our initial check and now, we detect it here and skip redundant work
 		_, err = tx.Exec(
-			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP) 
+			`INSERT INTO schema_migrations (version, applied_at)
+			 VALUES ($1, CURRENT_TIMESTAMP)
 			 ON CONFLICT (version) DO NOTHING`,
 			entry.Name(),
 		)
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("Warning: failed to rollback transaction after insert error: %v", rbErr)
+				slog.Warn("failed to rollback transaction after insert error", "error", rbErr)
 			}
 			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
@@ -416,13 +495,13 @@ func runMigrations(db *database.DB) error {
 		}
 
 		appliedCount++
-		log.Printf("✓ Applied migration: %s", entry.Name())
+		slog.Info("applied migration", "name", entry.Name())
 	}
 
 	if appliedCount == 0 {
-		log.Println("No pending migrations")
+		slog.Info("no pending migrations")
 	} else {
-		log.Printf("Successfully applied %d migration(s)", appliedCount)
+		slog.Info("migrations applied", "count", appliedCount)
 	}
 
 	return nil

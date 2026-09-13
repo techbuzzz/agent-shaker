@@ -67,14 +67,15 @@ func (s *MemoryStore) CreateTask(ctx context.Context, task *models.Task) error {
 	return nil
 }
 
-// GetTask retrieves a task by ID
+// GetTask retrieves a task by ID. Returns ErrTaskNotFound (wrapped) when the
+// task does not exist so callers can use errors.Is for status mapping.
 func (s *MemoryStore) GetTask(ctx context.Context, taskID string) (*models.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	task, exists := s.tasks[taskID]
 	if !exists {
-		return nil, fmt.Errorf("task %s not found", taskID)
+		return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
 	// Return a copy to prevent external modification
@@ -82,13 +83,14 @@ func (s *MemoryStore) GetTask(ctx context.Context, taskID string) (*models.Task,
 	return &taskCopy, nil
 }
 
-// UpdateTask updates an existing task
+// UpdateTask updates an existing task. Returns ErrTaskNotFound (wrapped) when
+// the task does not exist.
 func (s *MemoryStore) UpdateTask(ctx context.Context, task *models.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tasks[task.ID]; !exists {
-		return fmt.Errorf("task %s not found", task.ID)
+		return fmt.Errorf("%w: %s", ErrTaskNotFound, task.ID)
 	}
 
 	s.tasks[task.ID] = task
@@ -133,13 +135,14 @@ func (s *MemoryStore) ListTasks(ctx context.Context, filter *Filter) ([]models.T
 	return tasks, nil
 }
 
-// DeleteTask removes a task by ID
+// DeleteTask removes a task by ID. Returns ErrTaskNotFound (wrapped) when
+// the task does not exist.
 func (s *MemoryStore) DeleteTask(ctx context.Context, taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tasks[taskID]; !exists {
-		return fmt.Errorf("task %s not found", taskID)
+		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
 
 	delete(s.tasks, taskID)
