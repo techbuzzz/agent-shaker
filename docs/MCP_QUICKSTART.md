@@ -316,3 +316,76 @@ docker-compose logs mcp-server
 **Status**: âœ… Ready to use!  
 **Time to Setup**: ~5 minutes  
 **Dependencies**: Node.js, Docker (containers running)
+
+---
+
+## Mesh-app tools (Phase 1/2/3/4)
+
+The mesh-app flow adds the following MCP tools on top of the existing
+read/claim/complete suite. Use them from Claude Desktop / VS Code Copilot
+without leaving the MCP transport.
+
+### PM-side flow (mesh plan)
+
+`jsonc
+// 1. PM registers itself against project X (URL embeds ?project_id=X&agent_id=pm-id)
+{
+  "method": "tools/call",
+  "params": { "name": "register_self",
+               "arguments": { "name": "pm-agent", "role": "pm" } }
+}
+
+// 2. PM creates a milestone
+{
+  "method": "tools/call",
+  "params": { "name": "create_milestone",
+               "arguments": { "title": "M1 — Auth MVP",
+                              "target_date": "2026-12-31" } }
+}
+
+// 3. PM creates a task and links it to the milestone in one shot
+{
+  "method": "tools/call",
+  "params": { "name": "create_task",
+               "arguments": { "title": "Implement JWT login",
+                              "assigned_to": "<backend-agent-id>",
+                              "milestone_id": "<milestone-id>",
+                              "tags": ["feature:auth"] } }
+}
+
+// 4. PM publishes a global playbook
+{
+  "method": "tools/call",
+  "params": { "name": "publish_global_context",
+               "arguments": { "scope": "global",
+                              "title": "On-call playbook",
+                              "content": "# Pager runbook\n...",
+                              "tags": ["oncall"] } }
+}
+`
+
+### Worker-side flow (any agent)
+
+`jsonc
+// Worker asks for its open work
+{ "method": "tools/call",
+  "params": { "name": "get_my_tasks" } }
+
+// Worker claims a task atomically (no race with another agent)
+{ "method": "tools/call",
+  "params": { "name": "claim_task",
+               "arguments": { "task_id": "<id>" } } }
+
+// Worker reads a global playbook via the MCP resources path
+{ "method": "resources/read",
+  "params": { "uri": "global://On-call playbook" } }
+`
+
+### Gating
+
+create_milestone, ssign_task_to_milestone, and publish_global_context
+return error -32003 (Forbidden) when the calling agent's ole is not
+pm. Connect with ?agent_id=<id-of-a-pm-agent> to use them.
+
+See docs/VALIDATION_REPORT.md for the full end-to-end script that
+exercises these.

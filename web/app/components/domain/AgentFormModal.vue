@@ -57,7 +57,18 @@ async function onSubmit() {
         </UFormField>
         <div class="grid grid-cols-2 gap-4">
           <UFormField label="Role" required>
-            <UInput v-model="form.role" placeholder="backend / frontend / devops" />
+            <USelect
+              v-model="form.role"
+              :items="[
+                { label: 'Project Manager', value: 'pm' },
+                { label: 'Backend',         value: 'backend' },
+                { label: 'Frontend',        value: 'frontend' },
+                { label: 'DevOps',          value: 'devops' },
+                { label: 'Design',          value: 'design' },
+                { label: 'QA',              value: 'qa' }
+              ]"
+              value-key="value"
+            />
           </UFormField>
           <UFormField label="Team">
             <UInput v-model="form.team" placeholder="Backend Team" />

@@ -484,3 +484,86 @@ Currently, there are no rate limits. This may change in future versions.
 ## Versioning
 
 The API is currently unversioned. Breaking changes will be communicated in advance.
+
+---
+
+## Mesh-app additions (Phase 1/2/3)
+
+### Milestones
+
+#### POST /api/milestones
+
+Create a milestone.
+
+Request body: { "project_id": "uuid", "title": "string", "description": "string?",
+"status": "planned|active|done|dropped", "target_date": "YYYY-MM-DD?", "created_by": "uuid" }.
+
+Response: 201 with the created Milestone. Status 409 (milestone_open_tasks) is
+returned only on transitions to done if any linked task is not in a terminal state.
+
+#### GET /api/milestones?project_id=...
+
+List milestones for a project, newest first.
+
+#### PUT /api/milestones/{id}/status
+
+Body: { "status": "planned|active|done|dropped", "description": "string?" }.
+done is rejected with 409 if linked tasks are still open.
+
+#### DELETE /api/milestones/{id}
+
+Tasks linked to the deleted milestone are unlinked via ON DELETE SET NULL.
+
+### Project repositories
+
+#### POST /api/project_repos
+#### GET /api/project_repos?project_id=...
+#### GET /api/project_repos/{id}
+#### PUT /api/project_repos/{id}
+#### DELETE /api/project_repos/{id}
+
+Body for create/update: { "project_id": "uuid", "url": "string", "branch": "main?",
+"role": "code|infra|docs|design?", "agent_id": "uuid?" }.
+
+Deleting a repo does NOT delete its owning agent row.
+
+### Global contexts (Phase 3)
+
+#### POST /api/global_contexts
+
+Body: { "scope": "global|project", "project_id": "uuid? (required when scope=project)",
+"agent_id": "uuid", "title": "string", "content": "string", "tags": ["string"]? }.
+
+Returns 201 on success. Returns 409 (global_context_conflict) when
+(scope, title) uniqueness is violated.
+
+#### GET /api/global_contexts?scope=global|project&project_id=...&tag_prefix=...
+
+Filter by scope, project, and tag prefix. Non-PM callers see only their
+project-scoped docs unless they explicitly filter by scope=project.
+
+#### GET /api/global_contexts/{id}
+#### PUT /api/global_contexts/{id}
+#### DELETE /api/global_contexts/{id}
+
+### Tasks — extended
+
+POST /api/tasks and PUT /api/tasks/{id} now accept optional
+milestone_id (UUID, FK to milestones.id) and 	ags (string[]).
+Tasks tagged eature:<name> roll up under the Features view in the Nuxt UI.
+
+### MCP tools added
+
+| Name | Role | Purpose |
+| --- | --- | --- |
+| egister_self | any | Create / re-attach an agent row; optionally create its project_repos row |
+| create_milestone | pm-only | Create a milestone for the connected project |
+| list_milestones | any | List milestones for the connected project |
+| ssign_task_to_milestone | pm-only | Link an existing task to a milestone |
+| publish_global_context | pm-only | Create a global or project playbook |
+| list_global_contexts | any | List server-wide or project docs |
+| ead_global_context | any | Read one doc by id, or one global playbook by title |
+| esources/read global://<title> | any | Read a global playbook as 	ext/markdown |
+
+PM gating returns JSON-RPC error -32003 (Forbidden) when the caller is
+not bound to a pm-role agent.

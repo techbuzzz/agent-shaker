@@ -37,6 +37,11 @@ func NewProjectsStore(q Querier) *ProjectsStore {
 	return &ProjectsStore{q: q}
 }
 
+// Available reports whether the store has a usable Querier. Used by
+// handler methods to short-circuit with 503 when the server is running
+// without a database (degraded mode).
+func (s *ProjectsStore) Available() bool { return s.q != nil }
+
 // CreateProject inserts a new project row.
 func (s *ProjectsStore) CreateProject(ctx context.Context, p *models.Project) error {
 	_, err := s.q.ExecContext(ctx, `

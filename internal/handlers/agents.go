@@ -1,37 +1,43 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/techbuzzz/agent-shaker/internal/database"
+
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
+// AgentHandler manages CRUD for the agents resource.
 type AgentHandler struct {
-	db  *database.DB
-	hub *websocket.Hub
+	store *queries.AgentsStore
+	hub   *websocket.Hub
 }
 
-func NewAgentHandler(db *database.DB, hub *websocket.Hub) *AgentHandler {
-	return &AgentHandler{db: db, hub: hub}
+// NewAgentHandler returns a handler backed by the supplied store.
+func NewAgentHandler(store *queries.AgentsStore, hub *websocket.Hub) *AgentHandler {
+	return &AgentHandler{store: store, hub: hub}
 }
 
 func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
-	var req models.CreateAgentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if !h.store.Available() {
+		handleNoStore(w, r)
 		return
 	}
-
-	// Validate request
+	var req models.CreateAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
+		return
+	}
 	if err := validator.ValidateCreateAgentRequest(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
 		return
 	}
 
@@ -45,224 +51,139 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		LastSeen:  time.Now(),
 		CreatedAt: time.Now(),
 	}
-
-	_, err := h.db.Exec(`
-		INSERT INTO agents (id, project_id, name, role, team, status, last_seen, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, agent.ID, agent.ProjectID, agent.Name, agent.Role, agent.Team, agent.Status, agent.LastSeen, agent.CreatedAt)
-	if err != nil {
-		http.Error(w, "Failed to create agent", http.StatusInternalServerError)
+	if err := h.store.CreateAgent(r.Context(), &agent); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Broadcast agent creation
 	h.hub.BroadcastToProject(agent.ProjectID, "agent_update", agent)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(agent)
+	httpx.WriteJSON(w, http.StatusCreated, agent)
 }
 
 func (h *AgentHandler) ListAgents(w http.ResponseWriter, r *http.Request) {
-	projectIDStr := r.URL.Query().Get("project_id")
-
-	var rows *sql.Rows
-	var err error
-
-	if projectIDStr == "" {
-		// If no project_id, return all agents
-		rows, err = h.db.Query(`
-			SELECT id, project_id, name, role, team, status, last_seen, created_at
-			FROM agents
-			ORDER BY created_at DESC
-		`)
-	} else {
-		// If project_id provided, filter by project
-		projectID, parseErr := uuid.Parse(projectIDStr)
-		if parseErr != nil {
-			http.Error(w, "Invalid project_id format", http.StatusBadRequest)
-			return
-		}
-
-		rows, err = h.db.Query(`
-			SELECT id, project_id, name, role, team, status, last_seen, created_at
-			FROM agents
-			WHERE project_id = $1
-			ORDER BY created_at DESC
-		`, projectID)
-	}
-
-	if err != nil {
-		http.Error(w, "Failed to retrieve agents", http.StatusInternalServerError)
+	if !h.store.Available() {
+		handleNoStore(w, r)
 		return
 	}
-	defer rows.Close()
-
-	var agents []models.Agent
-	for rows.Next() {
-		var a models.Agent
-		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt); err != nil {
-			http.Error(w, "Failed to scan agent", http.StatusInternalServerError)
+	var projectID *uuid.UUID
+	if pidStr := r.URL.Query().Get("project_id"); pidStr != "" {
+		pid, err := uuid.Parse(pidStr)
+		if err != nil {
+			httpx.WriteError(w, r, fmt.Errorf("invalid project_id: %w", err))
 			return
 		}
-		agents = append(agents, a)
+		projectID = &pid
 	}
-
-	// Return empty array instead of null
+	agents, err := h.store.ListAgents(r.Context(), projectID)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
 	if agents == nil {
 		agents = []models.Agent{}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	httpx.WriteJSON(w, http.StatusOK, agents)
 }
 
 func (h *AgentHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid agent ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
 		return
 	}
-
-	var agent models.Agent
-	err = h.db.QueryRow(`
-		SELECT id, project_id, name, role, team, status, last_seen, created_at
-		FROM agents
-		WHERE id = $1
-	`, id).Scan(&agent.ID, &agent.ProjectID, &agent.Name, &agent.Role, &agent.Team, &agent.Status, &agent.LastSeen, &agent.CreatedAt)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Agent not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve agent", http.StatusInternalServerError)
+	agent, err := h.store.GetAgent(r.Context(), id)
+	if err != nil {
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("agent not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agent)
+	httpx.WriteJSON(w, http.StatusOK, agent)
 }
 
 func (h *AgentHandler) UpdateAgentStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid agent ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
 		return
 	}
-
 	var req models.UpdateAgentStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-
-	// Validate request
 	if err := validator.ValidateUpdateAgentStatusRequest(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
 		return
 	}
-
-	_, err = h.db.Exec(`
-		UPDATE agents
-		SET status = $1, last_seen = $2
-		WHERE id = $3
-	`, req.Status, time.Now(), id)
+	if err := h.store.UpdateAgentStatus(r.Context(), id, req.Status, time.Now()); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	agent, err := h.store.GetAgent(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to update agent status", http.StatusInternalServerError)
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("agent not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Get updated agent
-	var agent models.Agent
-	err = h.db.QueryRow(`
-		SELECT id, project_id, name, role, team, status, last_seen, created_at
-		FROM agents
-		WHERE id = $1
-	`, id).Scan(&agent.ID, &agent.ProjectID, &agent.Name, &agent.Role, &agent.Team, &agent.Status, &agent.LastSeen, &agent.CreatedAt)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Agent not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve agent", http.StatusInternalServerError)
-		return
-	}
-
-	// Broadcast agent update
 	h.hub.BroadcastToProject(agent.ProjectID, "agent_update", agent)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agent)
+	httpx.WriteJSON(w, http.StatusOK, agent)
 }
 
 func (h *AgentHandler) DeleteAgent(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
-	idStr := vars["id"]
-
-	id, err := uuid.Parse(idStr)
+	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
 		return
 	}
 
-	// Begin transaction
-	tx, err := h.db.Begin()
+	tx, err := h.store.BeginTx(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to start transaction", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
 	defer tx.Rollback()
 
-	// Get agent to retrieve project_id for WebSocket broadcast
-	var agent models.Agent
-	err = tx.QueryRow("SELECT id, project_id FROM agents WHERE id = $1", id).Scan(&agent.ID, &agent.ProjectID)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Agent not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve agent", http.StatusInternalServerError)
-		return
-	}
-
-	// Delete related contexts (they reference tasks which reference agents)
-	_, err = tx.Exec("DELETE FROM contexts WHERE task_id IN (SELECT id FROM tasks WHERE agent_id = $1)", id)
+	projectID, err := h.store.GetAgentProjectID(r.Context(), tx, id)
 	if err != nil {
-		http.Error(w, "Failed to delete related contexts", http.StatusInternalServerError)
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("agent not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Delete related tasks
-	_, err = tx.Exec("DELETE FROM tasks WHERE agent_id = $1", id)
-	if err != nil {
-		http.Error(w, "Failed to delete related tasks", http.StatusInternalServerError)
+	if _, err := h.store.DeleteAgentCascade(r.Context(), tx, id); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Delete the agent
-	result, err := tx.Exec("DELETE FROM agents WHERE id = $1", id)
-	if err != nil {
-		http.Error(w, "Failed to delete agent", http.StatusInternalServerError)
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		http.Error(w, "Agent not found", http.StatusNotFound)
-		return
-	}
-
-	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		http.Error(w, "Failed to commit transaction", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Broadcast agent deletion
-	h.hub.BroadcastToProject(agent.ProjectID, "agent_deleted", map[string]interface{}{
+	h.hub.BroadcastToProject(projectID, "agent_deleted", map[string]any{
 		"agent_id":   id,
-		"project_id": agent.ProjectID,
+		"project_id": projectID,
 		"deleted_at": time.Now(),
 	})
-
 	w.WriteHeader(http.StatusNoContent)
 }

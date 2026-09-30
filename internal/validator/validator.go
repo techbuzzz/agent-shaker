@@ -2,6 +2,7 @@ package validator
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/techbuzzz/agent-shaker/internal/models"
@@ -115,6 +116,64 @@ func ValidateUpdateContextRequest(req *models.UpdateContextRequest) error {
 	}
 	if len(req.Title) > 255 {
 		return ErrTitleTooLong
+	}
+	return nil
+}
+
+// ValidateCreateMilestoneRequest validates milestone creation.
+func ValidateCreateMilestoneRequest(req *models.CreateMilestoneRequest) error {
+	if strings.TrimSpace(req.Title) == "" {
+		return ErrEmptyTitle
+	}
+	if len(req.Title) > 255 {
+		return ErrTitleTooLong
+	}
+	if req.ProjectID.String() == "00000000-0000-0000-0000-000000000000" {
+		return ErrInvalidProjectID
+	}
+	if req.CreatedBy.String() == "00000000-0000-0000-0000-000000000000" {
+		return ErrInvalidAgentID
+	}
+	return nil
+}
+
+// ValidateCreateProjectRepoRequest validates project_repo creation.
+func ValidateCreateProjectRepoRequest(req *models.CreateProjectRepoRequest) error {
+	if strings.TrimSpace(req.URL) == "" {
+		return errors.New("url cannot be empty")
+	}
+	if req.ProjectID.String() == "00000000-0000-0000-0000-000000000000" {
+		return ErrInvalidProjectID
+	}
+	if req.Role != "" && !models.ValidProjectRepoRoles[req.Role] {
+		return fmt.Errorf("role must be one of: code, infra, docs, design")
+	}
+	return nil
+}
+
+// ValidateCreateGlobalContextRequest validates global_contexts creation.
+//
+// Cross-field rule: scope='global' ⇒ project_id must be nil; scope='project'
+// ⇒ project_id must be non-zero. We surface a 400 instead of letting the
+// DB CHECK constraint fail with 500.
+func ValidateCreateGlobalContextRequest(req *models.CreateGlobalContextRequest) error {
+	if strings.TrimSpace(req.Title) == "" {
+		return ErrEmptyTitle
+	}
+	if len(req.Title) > 255 {
+		return ErrTitleTooLong
+	}
+	if req.AgentID.String() == "00000000-0000-0000-0000-000000000000" {
+		return ErrInvalidAgentID
+	}
+	if !models.ValidGlobalContextScopes[req.Scope] {
+		return fmt.Errorf("scope must be 'global' or 'project'")
+	}
+	if req.Scope == models.ScopeGlobal && req.ProjectID != nil {
+		return errors.New("scope=global requires project_id to be omitted")
+	}
+	if req.Scope == models.ScopeProject && (req.ProjectID == nil || req.ProjectID.String() == "00000000-0000-0000-0000-000000000000") {
+		return errors.New("scope=project requires project_id")
 	}
 	return nil
 }

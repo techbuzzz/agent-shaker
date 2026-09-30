@@ -11,7 +11,11 @@ import type {
   CreateProjectInput, UpdateProjectStatusInput,
   CreateAgentInput, UpdateAgentStatusInput,
   CreateTaskInput, UpdateTaskInput, UpdateTaskStatusInput, ReassignTaskInput,
-  CreateContextInput, CreateStandupInput, CreateHeartbeatInput
+  CreateContextInput, CreateStandupInput, CreateHeartbeatInput,
+  // Mesh-app additions — Phase 1/2/3
+  Milestone, CreateMilestoneInput, UpdateMilestoneStatusInput,
+  ProjectRepo, CreateProjectRepoInput,
+  GlobalContext, CreateGlobalContextInput, UpdateGlobalContextInput
 } from '~/types/api'
 
 export class ApiConnectionError extends Error {
@@ -63,6 +67,24 @@ export interface UseApi {
   getAgentHeartbeats: (agentId: string, limit?: number) => Promise<Heartbeat[]>
   // Dashboard
   getDashboardStats: () => Promise<DashboardStats>
+  // Milestones (Phase 1)
+  listMilestones: (projectId: string) => Promise<Milestone[]>
+  getMilestone: (id: string) => Promise<Milestone>
+  createMilestone: (input: CreateMilestoneInput) => Promise<Milestone>
+  updateMilestoneStatus: (id: string, input: UpdateMilestoneStatusInput) => Promise<Milestone>
+  deleteMilestone: (id: string) => Promise<void>
+  // Project repos (Phase 2)
+  listProjectRepos: (projectId: string) => Promise<ProjectRepo[]>
+  getProjectRepo: (id: string) => Promise<ProjectRepo>
+  createProjectRepo: (input: CreateProjectRepoInput) => Promise<ProjectRepo>
+  updateProjectRepo: (id: string, input: CreateProjectRepoInput) => Promise<ProjectRepo>
+  deleteProjectRepo: (id: string) => Promise<void>
+  // Global contexts (Phase 3)
+  listGlobalContexts: (filters?: { scope?: 'global' | 'project'; project_id?: string; tag_prefix?: string }) => Promise<GlobalContext[]>
+  getGlobalContext: (id: string) => Promise<GlobalContext>
+  createGlobalContext: (input: CreateGlobalContextInput) => Promise<GlobalContext>
+  updateGlobalContext: (id: string, input: UpdateGlobalContextInput) => Promise<GlobalContext>
+  deleteGlobalContext: (id: string) => Promise<void>
 }
 
 function toParams(obj: Record<string, string | number | undefined | null>): Record<string, string> {
@@ -153,6 +175,27 @@ export function useApi(): UseApi {
     recordHeartbeat:     (input)       => request<Heartbeat>('/heartbeats', { method: 'POST', body: input }),
     getAgentHeartbeats:  (agentId, limit = 50) => request<Heartbeat[]>(`/agents/${agentId}/heartbeats`, { params: toParams({ limit }) }),
 
-    getDashboardStats:   () => request<DashboardStats>('/dashboard')
+    getDashboardStats:   () => request<DashboardStats>('/dashboard'),
+
+    // Milestones
+    listMilestones:      (projectId)   => request<Milestone[]>('/milestones', { params: { project_id: projectId } }),
+    getMilestone:        (id)          => request<Milestone>(`/milestones/${id}`),
+    createMilestone:     (input)       => request<Milestone>('/milestones', { method: 'POST', body: input }),
+    updateMilestoneStatus: (id, input) => request<Milestone>(`/milestones/${id}/status`, { method: 'PUT', body: input }),
+    deleteMilestone:     async (id)     => { await request<void>(`/milestones/${id}`, { method: 'DELETE' }) },
+
+    // Project repos
+    listProjectRepos:    (projectId)   => request<ProjectRepo[]>('/project_repos', { params: { project_id: projectId } }),
+    getProjectRepo:      (id)          => request<ProjectRepo>(`/project_repos/${id}`),
+    createProjectRepo:   (input)       => request<ProjectRepo>('/project_repos', { method: 'POST', body: input }),
+    updateProjectRepo:   (id, input)   => request<ProjectRepo>(`/project_repos/${id}`, { method: 'PUT', body: input }),
+    deleteProjectRepo:   async (id)     => { await request<void>(`/project_repos/${id}`, { method: 'DELETE' }) },
+
+    // Global contexts
+    listGlobalContexts:  (filters = {}) => request<GlobalContext[]>('/global_contexts', { params: toParams(filters) }),
+    getGlobalContext:    (id)           => request<GlobalContext>(`/global_contexts/${id}`),
+    createGlobalContext: (input)        => request<GlobalContext>('/global_contexts', { method: 'POST', body: input }),
+    updateGlobalContext: (id, input)    => request<GlobalContext>(`/global_contexts/${id}`, { method: 'PUT', body: input }),
+    deleteGlobalContext: async (id)      => { await request<void>(`/global_contexts/${id}`, { method: 'DELETE' }) }
   }
 }

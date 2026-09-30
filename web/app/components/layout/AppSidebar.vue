@@ -8,6 +8,7 @@ const items: NavItem[] = [
   { label: 'Agents',        to: '/agents',        icon: 'i-lucide-bot' },
   { label: 'Tasks',         to: '/tasks',         icon: 'i-lucide-list-checks' },
   { label: 'Documentation', to: '/documentation', icon: 'i-lucide-book-text' },
+  { label: 'Global',        to: '/global',        icon: 'i-lucide-globe' },
   { label: 'Standups',      to: '/standups',      icon: 'i-lucide-calendar-days' },
   { label: 'Settings',      to: '/settings',      icon: 'i-lucide-settings' }
 ]

@@ -42,6 +42,15 @@ const priorityColor: Record<TaskPriority, 'info' | 'warning' | 'error'> = {
           <UBadge :color="statusColor[task.status]" variant="subtle" size="xs">
             {{ task.status.replace('_', ' ') }}
           </UBadge>
+          <UBadge
+            v-for="tag in (task.tags ?? [])"
+            :key="tag"
+            :color="tag.startsWith('feature:') ? 'primary' : 'neutral'"
+            variant="subtle"
+            size="xs"
+          >
+            {{ tag }}
+          </UBadge>
         </div>
         <p class="text-sm text-muted mt-2 line-clamp-2">{{ truncate(task.description, 200) }}</p>
       </div>
@@ -51,6 +60,7 @@ const priorityColor: Record<TaskPriority, 'info' | 'warning' | 'error'> = {
       <div class="flex flex-wrap gap-x-4 gap-y-1">
         <span v-if="projectName"><span class="font-medium">Project:</span> {{ projectName }}</span>
         <span v-if="assigneeName"><span class="font-medium">Assignee:</span> {{ assigneeName }}</span>
+        <span v-if="task.milestone_id"><span class="font-medium">Milestone:</span> <code class="font-mono text-[10px]">{{ task.milestone_id.slice(0, 8) }}</code></span>
         <span><span class="font-medium">Updated:</span> {{ relativeTime(task.updated_at) }}</span>
       </div>
       <div class="flex gap-1 items-center">

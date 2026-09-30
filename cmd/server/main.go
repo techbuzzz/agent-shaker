@@ -88,17 +88,33 @@ func main() {
 	hub := websocket.NewHub()
 	go hub.Run()
 
-	// Create handlers. Handlers own a typed query store; the project handler
-	// is migrated to use it (M2.3 pilot). The remaining handlers continue to
-	// use *database.DB directly until they are migrated in subsequent PRs.
-	projectStore := queries.NewProjectsStore(db)
+	// Create handlers. Handlers own a typed query store. When the database
+	// is unavailable, pass a literal nil interface — a typed-nil *database.DB
+	// would box into a non-nil Querier interface, defeating the handlers'
+	// `store.Available()` short-circuit (Go's typed-nil-interface gotcha).
+	var querier queries.Querier
+	if db != nil {
+		querier = db
+	}
+	projectStore := queries.NewProjectsStore(querier)
+	agentStore := queries.NewAgentsStore(querier)
+	tasksQueryStore := queries.NewTasksStore(querier)
+	contextsQueryStore := queries.NewContextsStore(querier)
+	standupsQueryStore := queries.NewStandupsStore(querier)
+	dashboardQueryStore := queries.NewDashboardStore(querier)
+	milestonesStore := queries.NewMilestonesStore(querier)
+	projectReposStore := queries.NewProjectReposStore(querier)
+	globalContextsStore := queries.NewGlobalContextsStore(querier)
 	projectHandler := handlers.NewProjectHandler(projectStore, hub)
-	agentHandler := handlers.NewAgentHandler(db, hub)
-	taskHandler := handlers.NewTaskHandler(db, hub)
-	contextHandler := handlers.NewContextHandler(db, hub)
-	standupHandler := handlers.NewStandupHandler(db, hub)
+	agentHandler := handlers.NewAgentHandler(agentStore, hub)
+	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub)
+	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub)
+	standupHandler := handlers.NewStandupHandler(standupsQueryStore, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
-	dashboardHandler := handlers.NewDashboardHandler(db)
+	dashboardHandler := handlers.NewDashboardHandler(dashboardQueryStore)
+	milestoneHandler := handlers.NewMilestoneHandler(milestonesStore, tasksQueryStore, agentStore, hub, db)
+	projectRepoHandler := handlers.NewProjectRepoHandler(projectReposStore, hub)
+	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
 
 	// A2A Protocol Setup
@@ -160,26 +176,29 @@ func main() {
 	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
 
 	deps := routeDeps{
-		db:                db,
-		hub:               hub,
-		projectHandler:    projectHandler,
-		agentHandler:      agentHandler,
-		taskHandler:       taskHandler,
-		contextHandler:    contextHandler,
-		standupHandler:    standupHandler,
-		wsHandler:         wsHandler,
-		dashboardHandler:  dashboardHandler,
-		mcpHandler:        mcpHandler,
-		agentCardHandler:  agentCardHandler,
-		a2aHandler:        a2aHandler,
-		streamingHandler:  streamingHandler,
-		artifactHandler:   artifactHandler,
-		obs:               obs,
-		maxBodyBytes:      parseMaxBodyBytes(),
-		corsOrigins:       corsOrigins,
-		corsAllowCreds:    corsAllowCreds,
-		isTLS:             false,
-		rateLimitShutdown: rateShutdown,
+		db:                   db,
+		hub:                  hub,
+		projectHandler:       projectHandler,
+		agentHandler:         agentHandler,
+		taskHandler:          taskHandler,
+		contextHandler:       contextHandler,
+		standupHandler:       standupHandler,
+		wsHandler:            wsHandler,
+		dashboardHandler:     dashboardHandler,
+		milestoneHandler:     milestoneHandler,
+		projectRepoHandler:   projectRepoHandler,
+		globalContextHandler: globalContextHandler,
+		mcpHandler:           mcpHandler,
+		agentCardHandler:     agentCardHandler,
+		a2aHandler:           a2aHandler,
+		streamingHandler:     streamingHandler,
+		artifactHandler:      artifactHandler,
+		obs:                  obs,
+		maxBodyBytes:         parseMaxBodyBytes(),
+		corsOrigins:          corsOrigins,
+		corsAllowCreds:       corsAllowCreds,
+		isTLS:                false,
+		rateLimitShutdown:    rateShutdown,
 	}
 
 	rootHandler, err := newServeMux(deps)

@@ -19,7 +19,13 @@ const statusColor = computed(() => {
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <h3 class="font-semibold truncate">{{ agent.name }}</h3>
-          <UBadge variant="subtle" size="xs">{{ agent.role }}</UBadge>
+          <UBadge
+            :color="agent.role === 'pm' ? 'primary' : 'neutral'"
+            variant="subtle"
+            size="xs"
+          >
+            {{ agent.role }}
+          </UBadge>
         </div>
         <p class="text-xs text-muted mt-1">{{ agent.team || '—' }}</p>
       </div>

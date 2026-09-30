@@ -1,9 +1,29 @@
 <script setup lang="ts">
-import type { Context } from '~/types/api'
+import type { Context, GlobalContext } from '~/types/api'
+
+// The viewer is structural — both `Context` (project-scoped, agent_id)
+// and `GlobalContext` (server-wide, optional project_id) share the same
+// shape for the fields rendered below. We build a structural alias so
+// callers don't have to cast.
+type ViewableContext = {
+  id: string
+  title: string
+  content: string
+  tags: string[]
+  agent_id: string
+  created_at: string
+  updated_at?: string
+  project_id?: string
+}
+
+const _ctx: ViewableContext = {} as Context
+const _gctx: ViewableContext = {} as GlobalContext
+void _ctx
+void _gctx
 
 const props = defineProps<{
   modelValue: boolean
-  context: Context | null
+  context: ViewableContext | null
   agentName?: string
 }>()
 

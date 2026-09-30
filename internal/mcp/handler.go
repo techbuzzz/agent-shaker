@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -178,6 +180,16 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Short-circuit when the server is running without a database. Every
+	// tool handler below dereferences h.db, so without this guard the
+	// Recovery middleware would catch a nil-pointer panic per request.
+	if h.db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"code":"unavailable","message":"database connection not available"}}`))
 		return
 	}
 
@@ -549,6 +561,15 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 						"type":        "string",
 						"description": "Agent ID to assign the task to",
 					},
+					"milestone_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional milestone id to link this task to",
+					},
+					"tags": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "Optional tags. Use 'feature:<name>' to roll up into the Features view.",
+					},
 				},
 				Required: []string{"title"},
 			},
@@ -683,6 +704,160 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 				Required: []string{"agent_url", "task_id"},
 			},
 		},
+
+		// -----------------------------------------------------------------
+		// Mesh app additions — Phase 1/2/3/4 (agent-shaker #mesh-plan)
+		// -----------------------------------------------------------------
+		// Agent self-registration. Use this the first time an agent joins
+		// the mesh: the project_id/agent_id URL params then carry forward
+		// for every subsequent MCP call.
+		{
+			Name:        "register_self",
+			Description: "Register this agent against a project. Use this when the agent is connecting for the first time and you want the server to create an `agents` row (and optionally a `project_repos` row) on your behalf.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Project ID (optional if project_id is in the MCP connection URL)",
+					},
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Agent name (unique within the project)",
+					},
+					"role": map[string]interface{}{
+						"type":        "string",
+						"description": "Agent role: pm | backend | frontend (other strings accepted as free-text)",
+						"enum":        []string{"pm", "backend", "frontend"},
+					},
+					"team": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional team label (e.g. 'auth', 'growth')",
+					},
+					"repo_url": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional git URL — when provided, a project_repos row is created and linked to this agent",
+					},
+					"repo_branch": map[string]interface{}{
+						"type":        "string",
+						"description": "Branch for the repo (default 'main')",
+					},
+				},
+				Required: []string{"name", "role"},
+			},
+		},
+
+		// Milestones — PM-side tool. Returns 403 for non-PM agents.
+		{
+			Name:        "create_milestone",
+			Description: "PM-only: create a milestone for the connected project. Milestones group tasks and have status planned | active | done | dropped.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Project ID (optional if project_id is in the MCP connection URL)",
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Milestone title (max 255 chars)",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "Long-form description (markdown OK)",
+					},
+					"status": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"planned", "active", "done", "dropped"},
+						"description": "Initial status (default 'planned')",
+					},
+					"target_date": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional target date (ISO 8601 YYYY-MM-DD)",
+					},
+				},
+				Required: []string{"title"},
+			},
+		},
+		{
+			Name:        "list_milestones",
+			Description: "List milestones for the connected project.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"project_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Project ID (optional if project_id is in the MCP connection URL)",
+					},
+				},
+			},
+		},
+		{
+			Name:        "assign_task_to_milestone",
+			Description: "PM-only: link an existing task to a milestone.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id":      map[string]interface{}{"type": "string"},
+					"milestone_id": map[string]interface{}{"type": "string"},
+				},
+				Required: []string{"task_id", "milestone_id"},
+			},
+		},
+
+		// Global context (server-wide playbook) — PM write side.
+		{
+			Name:        "publish_global_context",
+			Description: "PM-only: publish a markdown playbook or note visible to every agent on this server (scope='global') or only to the connected project (scope='project').",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"scope": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{"global", "project"},
+						"description": "Either 'global' (server-wide) or 'project' (this project only)",
+					},
+					"project_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Required when scope='project'; ignored otherwise",
+					},
+					"title": map[string]interface{}{"type": "string"},
+					"content": map[string]interface{}{
+						"type":        "string",
+						"description": "Markdown content",
+					},
+					"tags": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]string{"type": "string"},
+						"description": "Optional tags for grouping",
+					},
+				},
+				Required: []string{"scope", "title", "content"},
+			},
+		},
+		{
+			Name:        "list_global_contexts",
+			Description: "List server-wide (scope='global') and/or project-scoped docs. Useful before reading one via read_global_context.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"scope":      map[string]interface{}{"type": "string", "enum": []string{"global", "project"}},
+					"project_id": map[string]interface{}{"type": "string"},
+					"tag_prefix": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		{
+			Name:        "read_global_context",
+			Description: "Read one global or project-scoped doc by id, or one global playbook by title (use title='On-call playbook' style).",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"id":    map[string]interface{}{"type": "string", "description": "Doc id (UUID) — preferred"},
+					"title": map[string]interface{}{"type": "string", "description": "Title of a scope='global' doc"},
+				},
+			},
+		},
 	}
 
 	return ToolsListResult{Tools: tools}, nil
@@ -747,6 +922,21 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		resultText, isError = h.executeDelegateToA2AAgent(callParams.Arguments)
 	case "get_a2a_task_status":
 		resultText, isError = h.executeGetA2ATaskStatus(callParams.Arguments)
+	// Mesh app additions — Phase 1/2/3/4
+	case "register_self":
+		resultText, isError = h.executeRegisterSelf(callParams.Arguments, ctx)
+	case "create_milestone":
+		resultText, isError = h.executeCreateMilestone(callParams.Arguments, ctx)
+	case "list_milestones":
+		resultText, isError = h.executeListMilestones(callParams.Arguments, ctx)
+	case "assign_task_to_milestone":
+		resultText, isError = h.executeAssignTaskToMilestone(callParams.Arguments, ctx)
+	case "publish_global_context":
+		resultText, isError = h.executePublishGlobalContext(callParams.Arguments, ctx)
+	case "list_global_contexts":
+		resultText, isError = h.executeListGlobalContexts(callParams.Arguments, ctx)
+	case "read_global_context":
+		resultText, isError = h.executeReadGlobalContext(callParams.Arguments)
 	default:
 		return nil, &JSONRPCError{
 			Code:    -32601,
@@ -791,6 +981,28 @@ func (h *MCPHandler) handleResourcesList() (interface{}, *JSONRPCError) {
 		},
 	}
 
+	// Expose every global playbook as `global://<title>`. This is what
+	// lets any agent on any project read server-wide playbooks via the MCP
+	// `resources/read` path.
+	if h.db != nil {
+		rows, err := h.db.Query(`SELECT title FROM global_contexts WHERE scope = 'global' ORDER BY title`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var title string
+				if err := rows.Scan(&title); err != nil {
+					continue
+				}
+				resources = append(resources, Resource{
+					URI:         "global://" + title,
+					Name:        title,
+					Description: "Server-wide playbook (global_contexts row)",
+					MimeType:    "text/markdown",
+				})
+			}
+		}
+	}
+
 	return ResourcesListResult{Resources: resources}, nil
 }
 
@@ -808,16 +1020,21 @@ func (h *MCPHandler) handleResourcesRead(params json.RawMessage) (interface{}, *
 
 	var content string
 	var isError bool
+	var mimeType = "application/json"
 
-	switch readParams.URI {
-	case "agent-shaker://projects":
+	switch {
+	case readParams.URI == "agent-shaker://projects":
 		content, isError = h.executeListProjects()
-	case "agent-shaker://agents":
+	case readParams.URI == "agent-shaker://agents":
 		content, isError = h.executeListAgents(nil)
-	case "agent-shaker://tasks":
+	case readParams.URI == "agent-shaker://tasks":
 		content, isError = h.executeListTasks(nil)
-	case "agent-shaker://dashboard":
+	case readParams.URI == "agent-shaker://dashboard":
 		content, isError = h.executeGetDashboard()
+	case strings.HasPrefix(readParams.URI, "global://"):
+		mimeType = "text/markdown"
+		title := strings.TrimPrefix(readParams.URI, "global://")
+		content, isError = h.executeReadGlobalContextByTitle(title)
 	default:
 		return nil, &JSONRPCError{
 			Code:    -32602,
@@ -838,7 +1055,7 @@ func (h *MCPHandler) handleResourcesRead(params json.RawMessage) (interface{}, *
 		Contents: []ResourceContent{
 			{
 				URI:      readParams.URI,
-				MimeType: "application/json",
+				MimeType: mimeType,
 				Text:     content,
 			},
 		},
@@ -1002,7 +1219,7 @@ func (h *MCPHandler) executeListTasks(args map[string]interface{}) (string, bool
 		return `{"error": "Database not connected"}`, true
 	}
 
-	query := `SELECT id, project_id, title, description, status, priority, assigned_to, created_at FROM tasks WHERE 1=1`
+	query := `SELECT id, project_id, title, description, status, priority, assigned_to, milestone_id, created_at FROM tasks WHERE 1=1`
 	var queryArgs []interface{}
 	argNum := 1
 
@@ -1034,9 +1251,9 @@ func (h *MCPHandler) executeListTasks(args map[string]interface{}) (string, bool
 	var tasks []map[string]interface{}
 	for rows.Next() {
 		var id, projectID, title, status, priority string
-		var description, assignedTo *string
+		var description, assignedTo, milestoneID *string
 		var createdAt interface{}
-		if err := rows.Scan(&id, &projectID, &title, &description, &status, &priority, &assignedTo, &createdAt); err != nil {
+		if err := rows.Scan(&id, &projectID, &title, &description, &status, &priority, &assignedTo, &milestoneID, &createdAt); err != nil {
 			continue
 		}
 		task := map[string]interface{}{
@@ -1052,6 +1269,9 @@ func (h *MCPHandler) executeListTasks(args map[string]interface{}) (string, bool
 		}
 		if assignedTo != nil {
 			task["assigned_to"] = *assignedTo
+		}
+		if milestoneID != nil {
+			task["milestone_id"] = *milestoneID
 		}
 		tasks = append(tasks, task)
 	}
@@ -1107,8 +1327,13 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 	}
 
 	id := uuid.New().String()
-	query := `INSERT INTO tasks (id, project_id, title, description, status, priority, created_by, assigned_to) 
-	          VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7) RETURNING id, created_at`
+	milestoneID, _ := args["milestone_id"].(string)
+	var milestonePtr *string
+	if milestoneID != "" {
+		milestonePtr = &milestoneID
+	}
+	query := `INSERT INTO tasks (id, project_id, title, description, status, priority, created_by, assigned_to, milestone_id)
+	          VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8) RETURNING id, created_at`
 
 	var createdID string
 	var createdAt interface{}
@@ -1117,7 +1342,7 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		assignedToPtr = &assignedTo
 	}
 
-	err := h.db.QueryRow(query, id, projectID, title, description, priority, createdBy, assignedToPtr).Scan(&createdID, &createdAt)
+	err := h.db.QueryRow(query, id, projectID, title, description, priority, createdBy, assignedToPtr, milestonePtr).Scan(&createdID, &createdAt)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
@@ -1130,6 +1355,9 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		"priority":   priority,
 		"created_by": createdBy,
 		"created_at": createdAt,
+	}
+	if milestonePtr != nil {
+		responseData["milestone_id"] = *milestonePtr
 	}
 
 	// Include assigned_to in response if it was set
@@ -1441,14 +1669,99 @@ func (h *MCPHandler) executeDelegateToA2AAgent(args map[string]interface{}) (str
 		if err != nil {
 			result["wait_error"] = err.Error()
 			result["final_status"] = "unknown"
+			// Phase 5: even on timeout, persist a partial global_contexts row
+			// so PMs see it on the global page. Tagged a2a:timeout so it
+			// stands out in the GlobalContextCard.
+			h.landA2AArtifact(agentURL, resp.TaskID, ctx, "timeout: "+err.Error())
 		} else {
 			result["final_status"] = task.Status
 			result["task"] = task
+			// Phase 5: on a completed A2A task, persist the artifact payload
+			// into the global_contexts table so any agent can read it back
+			// via list_global_contexts / resources/read. Tag format: a2a:<host>
+			// so the UI can group / filter them.
+			h.landA2AArtifact(agentURL, resp.TaskID, ctx, formatA2ATaskMarkdown(task))
 		}
 	}
 
 	resultJSON, _ := json.MarshalIndent(result, "", "  ")
 	return string(resultJSON), false
+}
+
+// landA2AArtifact persists an A2A delegation result into the
+// `global_contexts` table so it is visible to other agents via the same
+// flows the PM uses for human-authored playbooks.
+//
+// Behaviour:
+//   - scope = 'project' when ctx.ProjectID is set; 'global' otherwise.
+//     We default to 'global' on A2A artifacts because the most common
+//     case is "external reviewer shared something everyone should read".
+//   - Title is `<a2a-host> — <task-id prefix>` so the dashboard's
+//     GlobalContextCard shows a recognisable heading.
+//   - Tags always include `a2a:<host>`; failures / timeouts add
+//     `a2a:timeout` or `a2a:failed` so PMs can filter.
+//   - Errors are silently logged: an A2A artifact write failure must
+//     never break the MCP response, because the calling agent still
+//     needs the A2A task ID and status to act on.
+func (h *MCPHandler) landA2AArtifact(agentURL, taskID string, ctx context.Context, body string) {
+	if h.db == nil {
+		return
+	}
+	// Fallback agent_id for the artifact row: the calling MCP agent, or
+	// any PM if none is bound. We never want a NULL agent_id (FK requires
+	// a real agent).
+	agentID := ""
+	if mcpc, ok := ctx.Value("mcpCtx").(MCPContext); ok {
+		agentID = mcpc.AgentID
+	}
+	if agentID == "" {
+		// Last resort: pick any PM agent so the FK passes.
+		_ = h.db.QueryRow(`SELECT id FROM agents WHERE role = 'pm' ORDER BY created_at LIMIT 1`).Scan(&agentID)
+	}
+	if agentID == "" {
+		log.Printf("landA2AArtifact: no agent available; skipping write for task %s", taskID)
+		return
+	}
+
+	host := agentURL
+	if u, err := url.Parse(agentURL); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	title := fmt.Sprintf("%s — %s", host, shortPrefix(taskID, 8))
+	tags := []string{"a2a:" + host, "a2a:" + shortPrefix(taskID, 8)}
+	if strings.HasPrefix(body, "timeout:") {
+		tags = append(tags, "a2a:timeout")
+	} else if strings.HasPrefix(body, "failed:") {
+		tags = append(tags, "a2a:failed")
+	}
+
+	_, err := h.db.Exec(`
+		INSERT INTO global_contexts (id, scope, project_id, agent_id, title, content, tags)
+		VALUES ($1, 'global', NULL, $2, $3, $4, $5)
+	`, uuid.New().String(), agentID, title, body, pq.Array(tags))
+	if err != nil {
+		log.Printf("landA2AArtifact: insert failed for %s: %v", taskID, err)
+	}
+}
+
+// formatA2ATaskMarkdown renders a *a2aModels.Task as a markdown blob
+// suitable for a global_contexts row. We keep the shape stable so
+// downstream agents can parse it.
+func formatA2ATaskMarkdown(t *a2aModels.Task) string {
+	if t == nil {
+		return ""
+	}
+	b, _ := json.MarshalIndent(t, "", "  ")
+	return fmt.Sprintf("# A2A task\n\n**Status:** `%s`\n\n```json\n%s\n```\n", t.Status, string(b))
+}
+
+// shortPrefix returns the first n characters of s — used to keep the
+// a2a-context title short.
+func shortPrefix(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func (h *MCPHandler) executeGetA2ATaskStatus(args map[string]interface{}) (string, bool) {
@@ -1503,6 +1816,522 @@ func pollTaskUntilComplete(ctx context.Context, client *a2aClient.HTTPClient, ag
 		}
 	}
 }
+
+// -------------------------------------------------------------------
+// Mesh app additions — Phase 1/2/3/4 (agent-shaker #mesh-plan)
+// -------------------------------------------------------------------
+
+// helper: returns true when ctx.AgentID is bound to an agent whose role
+// is 'pm'. Used to gate PM-only MCP tools. Returns false when the agent
+// cannot be resolved (no DB / agent not found), which is the safest
+// default — closed by default, open only when the role is explicit.
+func (h *MCPHandler) isPMAgent(ctx MCPContext) bool {
+	if h.db == nil || ctx.AgentID == "" {
+		return false
+	}
+	var role string
+	err := h.db.QueryRow(`SELECT role FROM agents WHERE id = $1`, ctx.AgentID).Scan(&role)
+	if err != nil {
+		return false
+	}
+	return role == string(models.RolePM)
+}
+
+// helper: returns a JSON-RPC -32003 error string for PM-only tools.
+func pmForbidden(tool string) string {
+	return fmt.Sprintf(`{"error": "Forbidden: tool %q is PM-only. Connect with an agent whose role='pm' or ask the project owner to grant your agent the PM role."}`, tool)
+}
+
+func (h *MCPHandler) executeRegisterSelf(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	projectID, _ := args["project_id"].(string)
+	if projectID == "" {
+		projectID = ctx.ProjectID
+	}
+	if projectID == "" {
+		return `{"error": "project_id is required (pass as argument or set it in the MCP connection URL)"}`, true
+	}
+
+	name, ok := args["name"].(string)
+	if !ok || name == "" {
+		return `{"error": "name is required"}`, true
+	}
+
+	role, _ := args["role"].(string)
+	if role == "" {
+		role = "backend"
+	}
+	team, _ := args["team"].(string)
+	repoURL, _ := args["repo_url"].(string)
+	repoBranch, _ := args["repo_branch"].(string)
+	if repoBranch == "" {
+		repoBranch = "main"
+	}
+
+	id := uuid.New().String()
+	var teamPtr *string
+	if team != "" {
+		teamPtr = &team
+	}
+
+	// Use a single transaction so an agent row + its optional repo row
+	// either both succeed or both roll back.
+	tx, err := h.db.Begin()
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	rolledBack := false
+	defer func() {
+		if rolledBack {
+			_ = tx.Rollback()
+		}
+	}()
+
+	_, err = tx.Exec(`
+		INSERT INTO agents (id, project_id, name, role, team, status)
+		VALUES ($1, $2, $3, $4, $5, 'idle')
+		ON CONFLICT (project_id, name) DO UPDATE SET role = EXCLUDED.role, team = EXCLUDED.team
+		RETURNING id
+	`, id, projectID, name, role, teamPtr)
+	if err != nil {
+		rolledBack = true
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	// Re-read the agent id — ON CONFLICT may have rewritten our freshly
+	// generated uuid.
+	var finalAgentID string
+	err = tx.QueryRow(`SELECT id FROM agents WHERE project_id = $1 AND name = $2`, projectID, name).Scan(&finalAgentID)
+	if err != nil {
+		rolledBack = true
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	var repoRow map[string]interface{}
+	if repoURL != "" {
+		repoID := uuid.New().String()
+		_, err = tx.Exec(`
+			INSERT INTO project_repos (id, project_id, url, branch, role, agent_id)
+			VALUES ($1, $2, $3, $4, 'code', $5)
+		`, repoID, projectID, repoURL, repoBranch, finalAgentID)
+		if err != nil {
+			rolledBack = true
+			return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+		}
+		repoRow = map[string]interface{}{
+			"id":       repoID,
+			"url":      repoURL,
+			"branch":   repoBranch,
+			"agent_id": finalAgentID,
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	resp := map[string]interface{}{
+		"success":    true,
+		"id":         finalAgentID,
+		"project_id": projectID,
+		"name":       name,
+		"role":       role,
+		"note":       "Send this id as ?agent_id= in your MCP connection URL on subsequent connections",
+	}
+	if team != "" {
+		resp["team"] = team
+	}
+	if repoRow != nil {
+		resp["repo"] = repoRow
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeCreateMilestone(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+	if !h.isPMAgent(ctx) {
+		return pmForbidden("create_milestone"), true
+	}
+
+	projectID, _ := args["project_id"].(string)
+	if projectID == "" {
+		projectID = ctx.ProjectID
+	}
+	if projectID == "" {
+		return `{"error": "project_id is required"}`, true
+	}
+	title, ok := args["title"].(string)
+	if !ok || title == "" {
+		return `{"error": "title is required"}`, true
+	}
+	description, _ := args["description"].(string)
+	status, _ := args["status"].(string)
+	if status == "" {
+		status = "planned"
+	}
+	var targetDate *time.Time
+	if td, ok := args["target_date"].(string); ok && td != "" {
+		// Accept either YYYY-MM-DD or RFC3339.
+		var t time.Time
+		var err error
+		if t, err = time.Parse("2006-01-02", td); err != nil {
+			t, err = time.Parse(time.RFC3339, td)
+		}
+		if err != nil {
+			return fmt.Sprintf(`{"error": "invalid target_date %q (use YYYY-MM-DD)"}`, td), true
+		}
+		targetDate = &t
+	}
+
+	id := uuid.New().String()
+	createdBy := ctx.AgentID
+	if createdBy == "" {
+		// Last-resort fallback: use the first PM agent of the project.
+		var pmID string
+		err := h.db.QueryRow(`SELECT id FROM agents WHERE project_id = $1 AND role = 'pm' ORDER BY created_at LIMIT 1`, projectID).Scan(&pmID)
+		if err != nil {
+			return `{"error": "created_by is required (no agent_id in URL and no PM in project)"}`, true
+		}
+		createdBy = pmID
+	}
+
+	_, err := h.db.Exec(`
+		INSERT INTO milestones (id, project_id, title, description, status, target_date, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, projectID, title, description, status, targetDate, createdBy)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	out, _ := json.MarshalIndent(map[string]interface{}{
+		"success":     true,
+		"id":          id,
+		"project_id":  projectID,
+		"title":       title,
+		"description": description,
+		"status":      status,
+		"target_date": targetDate,
+		"created_by":  createdBy,
+		"note":        "Add tasks to this milestone with assign_task_to_milestone",
+	}, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeListMilestones(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+	projectID, _ := args["project_id"].(string)
+	if projectID == "" {
+		projectID = ctx.ProjectID
+	}
+	if projectID == "" {
+		return `{"error": "project_id is required"}`, true
+	}
+	rows, err := h.db.Query(`
+		SELECT id, title, description, status, target_date, created_by, created_at
+		FROM milestones WHERE project_id = $1 ORDER BY created_at DESC
+	`, projectID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	defer rows.Close()
+
+	var items []map[string]interface{}
+	for rows.Next() {
+		var id, title, status, createdBy string
+		var description *string
+		var targetDate *time.Time
+		var createdAt interface{}
+		if err := rows.Scan(&id, &title, &description, &status, &targetDate, &createdBy, &createdAt); err != nil {
+			continue
+		}
+		entry := map[string]interface{}{
+			"id":         id,
+			"title":      title,
+			"status":     status,
+			"created_by": createdBy,
+			"created_at": createdAt,
+		}
+		if description != nil {
+			entry["description"] = *description
+		}
+		if targetDate != nil {
+			entry["target_date"] = targetDate.Format("2006-01-02")
+		}
+		items = append(items, entry)
+	}
+	out, _ := json.MarshalIndent(map[string]interface{}{
+		"milestones": items,
+		"count":      len(items),
+	}, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeAssignTaskToMilestone(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+	if !h.isPMAgent(ctx) {
+		return pmForbidden("assign_task_to_milestone"), true
+	}
+	taskID, ok := args["task_id"].(string)
+	if !ok || taskID == "" {
+		return `{"error": "task_id is required"}`, true
+	}
+	milestoneID, ok := args["milestone_id"].(string)
+	if !ok || milestoneID == "" {
+		return `{"error": "milestone_id is required"}`, true
+	}
+	tag, err := h.db.Exec(`UPDATE tasks SET milestone_id = $1, updated_at = NOW() WHERE id = $2`, milestoneID, taskID)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	rows, err := tag.RowsAffected()
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	if rows == 0 {
+		return `{"error": "task not found"}`, true
+	}
+	out, _ := json.MarshalIndent(map[string]interface{}{
+		"success":      true,
+		"task_id":      taskID,
+		"milestone_id": milestoneID,
+	}, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executePublishGlobalContext(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+	if !h.isPMAgent(ctx) {
+		return pmForbidden("publish_global_context"), true
+	}
+
+	scope, _ := args["scope"].(string)
+	if scope != "global" && scope != "project" {
+		return `{"error": "scope must be 'global' or 'project'"}`, true
+	}
+	title, ok := args["title"].(string)
+	if !ok || title == "" {
+		return `{"error": "title is required"}`, true
+	}
+	content, _ := args["content"].(string)
+
+	var tags []string
+	if t, ok := args["tags"].([]interface{}); ok {
+		for _, v := range t {
+			if s, ok := v.(string); ok {
+				tags = append(tags, s)
+			}
+		}
+	}
+
+	var projectIDPtr *string
+	if scope == "project" {
+		pid, _ := args["project_id"].(string)
+		if pid == "" {
+			pid = ctx.ProjectID
+		}
+		if pid == "" {
+			return `{"error": "scope='project' requires project_id"}`, true
+		}
+		projectIDPtr = &pid
+	}
+
+	agentID := ctx.AgentID
+	if agentID == "" {
+		// Fallback to first PM agent of the project (or any agent if global).
+		if projectIDPtr != nil {
+			err := h.db.QueryRow(`SELECT id FROM agents WHERE project_id = $1 AND role = 'pm' ORDER BY created_at LIMIT 1`, *projectIDPtr).Scan(&agentID)
+			if err != nil {
+				return `{"error": "no agent_id in URL and no PM in project"}`, true
+			}
+		} else {
+			err := h.db.QueryRow(`SELECT id FROM agents WHERE role = 'pm' ORDER BY created_at LIMIT 1`).Scan(&agentID)
+			if err != nil {
+				return `{"error": "no PM agent registered on this server"}`, true
+			}
+		}
+	}
+
+	id := uuid.New().String()
+	_, err := h.db.Exec(`
+		INSERT INTO global_contexts (id, scope, project_id, agent_id, title, content, tags)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, id, scope, projectIDPtr, agentID, title, content, pq.Array(tags))
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			return fmt.Sprintf(`{"error": "a global context with title %q already exists; pick a different title"}`, title), true
+		}
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	resp := map[string]interface{}{
+		"success":  true,
+		"id":       id,
+		"scope":    scope,
+		"title":    title,
+		"tags":     tags,
+		"agent_id": agentID,
+	}
+	if projectIDPtr != nil {
+		resp["project_id"] = *projectIDPtr
+	}
+	if scope == "global" {
+		resp["uri"] = "global://" + title
+		resp["note"] = "any agent can now read this with read_resource('global://" + title + "')"
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeListGlobalContexts(args map[string]interface{}, ctx MCPContext) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	scope, _ := args["scope"].(string)
+	if scope != "" && scope != "global" && scope != "project" {
+		return `{"error": "scope must be 'global', 'project', or empty"}`, true
+	}
+
+	var projectIDPtr *string
+	if pid, _ := args["project_id"].(string); pid != "" {
+		projectIDPtr = &pid
+	} else if ctx.ProjectID != "" {
+		pid := ctx.ProjectID
+		projectIDPtr = &pid
+	}
+	tagPrefix, _ := args["tag_prefix"].(string)
+
+	q := `SELECT id, scope, project_id, agent_id, title, tags, created_at, updated_at
+	      FROM global_contexts WHERE 1=1`
+	args2 := []interface{}{}
+	if scope != "" {
+		q += fmt.Sprintf(" AND scope = $%d", len(args2)+1)
+		args2 = append(args2, scope)
+	}
+	if projectIDPtr != nil {
+		q += fmt.Sprintf(" AND project_id = $%d", len(args2)+1)
+		args2 = append(args2, *projectIDPtr)
+	} else if scope == "" {
+		// Listing all and no project filter: do not surface global rows
+		// to non-PM callers. PMs see everything.
+		if !h.isPMAgent(ctx) {
+			q += " AND scope = 'project'"
+		}
+	}
+	if tagPrefix != "" {
+		q += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM unnest(tags) t WHERE t LIKE $%d)", len(args2)+1)
+		args2 = append(args2, tagPrefix+"%")
+	}
+	q += " ORDER BY updated_at DESC"
+
+	rows, err := h.db.Query(q, args2...)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	defer rows.Close()
+
+	var items []map[string]interface{}
+	for rows.Next() {
+		var id, scopeStr, agentID, title string
+		var projectID *string
+		var tagsRaw interface{}
+		var createdAt, updatedAt interface{}
+		if err := rows.Scan(&id, &scopeStr, &projectID, &agentID, &title, &tagsRaw, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		entry := map[string]interface{}{
+			"id":         id,
+			"scope":      scopeStr,
+			"agent_id":   agentID,
+			"title":      title,
+			"tags":       tagsRaw,
+			"created_at": createdAt,
+			"updated_at": updatedAt,
+		}
+		if projectID != nil {
+			entry["project_id"] = *projectID
+		}
+		if scopeStr == "global" {
+			entry["uri"] = "global://" + title
+		}
+		items = append(items, entry)
+	}
+	out, _ := json.MarshalIndent(map[string]interface{}{
+		"contexts": items,
+		"count":    len(items),
+	}, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeReadGlobalContext(args map[string]interface{}) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+	id, _ := args["id"].(string)
+	title, _ := args["title"].(string)
+	if id == "" && title == "" {
+		return `{"error": "either id or title is required"}`, true
+	}
+
+	var (
+		rowID, scopeStr, agentID, rowTitle, content string
+		projectID                                   *string
+		tagsRaw                                     interface{}
+		createdAt, updatedAt                        interface{}
+	)
+	var err error
+	if id != "" {
+		err = h.db.QueryRow(`
+			SELECT id, scope, project_id, agent_id, title, content, tags, created_at, updated_at
+			FROM global_contexts WHERE id = $1
+		`, id).Scan(&rowID, &scopeStr, &projectID, &agentID, &rowTitle, &content, &tagsRaw, &createdAt, &updatedAt)
+	} else {
+		err = h.db.QueryRow(`
+			SELECT id, scope, project_id, agent_id, title, content, tags, created_at, updated_at
+			FROM global_contexts WHERE scope = 'global' AND title = $1
+		`, title).Scan(&rowID, &scopeStr, &projectID, &agentID, &rowTitle, &content, &tagsRaw, &createdAt, &updatedAt)
+	}
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	resp := map[string]interface{}{
+		"id":         rowID,
+		"scope":      scopeStr,
+		"agent_id":   agentID,
+		"title":      rowTitle,
+		"content":    content,
+		"tags":       tagsRaw,
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+		"format":     "markdown",
+	}
+	if projectID != nil {
+		resp["project_id"] = *projectID
+	}
+	if scopeStr == "global" {
+		resp["uri"] = "global://" + rowTitle
+	}
+	out, _ := json.MarshalIndent(resp, "", "  ")
+	return string(out), false
+}
+
+func (h *MCPHandler) executeReadGlobalContextByTitle(title string) (string, bool) {
+	return h.executeReadGlobalContext(map[string]interface{}{"title": title})
+}
+
+// -------------------------------------------------------------------
 
 func (h *MCPHandler) sendResponse(w http.ResponseWriter, id interface{}, result interface{}, rpcErr *JSONRPCError) {
 	w.Header().Set("Content-Type", "application/json")

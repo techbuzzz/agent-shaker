@@ -29,13 +29,17 @@ func NewProjectHandler(store *queries.ProjectsStore, hub *websocket.Hub) *Projec
 
 // CreateProject decodes, validates, and inserts a new project.
 func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	var req models.CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	if err := validator.ValidateCreateProjectRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: %v", httpx.ErrBadRequest, err))
 		return
 	}
 
@@ -57,6 +61,10 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 // ListProjects returns every project as a JSON array (empty array, never
 // null).
 func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	projects, err := h.store.ListProjects(r.Context())
 	if err != nil {
 		httpx.WriteError(w, r, err)
@@ -70,6 +78,10 @@ func (h *ProjectHandler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 // GetProject returns one project by id.
 func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
@@ -90,21 +102,25 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 
 // UpdateProjectStatus validates a status value and updates the row.
 func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req struct {
 		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	if !validProjectStatus(req.Status) {
-		httpx.WriteError(w, r, fmt.Errorf("invalid status; expected active, completed or archived"))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid status; expected active, completed or archived", httpx.ErrBadRequest))
 		return
 	}
 	if err := h.store.UpdateProjectStatus(r.Context(), id, req.Status); err != nil {
@@ -131,10 +147,14 @@ func (h *ProjectHandler) UpdateProjectStatus(w http.ResponseWriter, r *http.Requ
 // touches three tables (contexts, tasks, agents, projects) — keeping the
 // orchestration here avoids leaking a half-deleted state.
 func (h *ProjectHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: %v", httpx.ErrBadRequest, err))
 		return
 	}
 
@@ -172,11 +192,4 @@ func validProjectStatus(s string) bool {
 	default:
 		return false
 	}
-}
-
-// isNotFound matches the sentinel strings produced by the query helpers
-// when a row is missing. Kept local because the helpers do not yet return a
-// typed sentinel (that follow-up is part of the broader M4 work).
-func isNotFound(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "not found"))
 }

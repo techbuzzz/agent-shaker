@@ -10,9 +10,33 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/task"
+)
+
+// Sentinel errors that handlers wrap into fmt.Errorf("context: %w", ...)
+// when they want a specific HTTP status. classify() maps these via errors.Is.
+var (
+	// ErrBadRequest → 400. Use for malformed JSON, parse errors, and
+	// user-input validation failures the validator surfaced.
+	ErrBadRequest = errors.New("bad request")
+
+	// ErrUnauthorized → 401. Reserved; auth is out of scope today.
+	ErrUnauthorized = errors.New("unauthorized")
+
+	// ErrForbidden → 403. Reserved for future role-based access control.
+	ErrForbidden = errors.New("forbidden")
+
+	// ErrNotFound → 404. Use when a resource lookup found nothing.
+	ErrNotFound = errors.New("not found")
+
+	// ErrUnavailable → 503. Use when a backing service (database, cache,
+	// upstream API) is not reachable. The handler MUST NOT panic; this
+	// sentinel exists so the no-DB path can degrade gracefully instead of
+	// tripping middleware.Recovery.
+	ErrUnavailable = errors.New("service unavailable")
 )
 
 // ErrorEnvelope is the wire shape returned for every non-2xx response.
@@ -58,6 +82,26 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 // identifier that clients can switch on.
 func classify(err error) (code, msg string, httpStatus int) {
 	switch {
+	// Phase-1 milestone close guard. errMilestoneOpenTasks.Error() contains
+	// "milestone has N open task(s)" — match on the prefix so the wire stays
+	// stable without exporting the struct from the handlers package.
+	case strings.HasPrefix(err.Error(), "milestone has ") && strings.Contains(err.Error(), "open task"):
+		return "milestone_open_tasks", err.Error(), http.StatusConflict
+
+	// Phase-3 global_contexts conflict (title already taken in this scope).
+	case strings.Contains(err.Error(), "global context with title") && strings.Contains(err.Error(), "already exists"):
+		return "global_context_conflict", err.Error(), http.StatusConflict
+
+	case errors.Is(err, ErrBadRequest):
+		return "bad_request", msg, http.StatusBadRequest
+	case errors.Is(err, ErrUnauthorized):
+		return "unauthorized", msg, http.StatusUnauthorized
+	case errors.Is(err, ErrForbidden):
+		return "forbidden", msg, http.StatusForbidden
+	case errors.Is(err, ErrNotFound):
+		return "not_found", msg, http.StatusNotFound
+	case errors.Is(err, ErrUnavailable):
+		return "unavailable", msg, http.StatusServiceUnavailable
 	case errors.Is(err, task.ErrTaskNotFound):
 		return "task_not_found", "the requested task does not exist", http.StatusNotFound
 	case errors.Is(err, task.ErrTaskTerminal):
