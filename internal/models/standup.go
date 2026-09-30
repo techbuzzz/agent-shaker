@@ -12,12 +12,12 @@ type DailyStandup struct {
 	AgentID        uuid.UUID `json:"agent_id" db:"agent_id"`
 	ProjectID      uuid.UUID `json:"project_id" db:"project_id"`
 	StandupDate    time.Time `json:"standup_date" db:"standup_date"`
-	Did            string    `json:"did" db:"did"`                       // What I did yesterday
-	Doing          string    `json:"doing" db:"doing"`                   // What I'm doing today
-	Done           string    `json:"done" db:"done"`                     // What I plan to complete
-	Blockers       string    `json:"blockers" db:"blockers"`             // Any blockers
-	Challenges     string    `json:"challenges" db:"challenges"`         // Current challenges
-	ReferenceLinks string    `json:"references" db:"reference_links"`    // Links, docs, etc.
+	Did            string    `json:"did" db:"did"`                    // What I did yesterday
+	Doing          string    `json:"doing" db:"doing"`                // What I'm doing today
+	Done           string    `json:"done" db:"done"`                  // What I plan to complete
+	Blockers       string    `json:"blockers" db:"blockers"`          // Any blockers
+	Challenges     string    `json:"challenges" db:"challenges"`      // Current challenges
+	ReferenceLinks string    `json:"references" db:"reference_links"` // Links, docs, etc.
 	CreatedAt      time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
 }

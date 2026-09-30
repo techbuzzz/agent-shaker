@@ -1,0 +1,1 @@
+import{m as e}from"#entry";var t=[`Enter`,` `],n=[`ArrowDown`,`PageUp`,`Home`],r=[`ArrowUp`,`PageDown`,`End`];[...n,...r],[...t],[...t];function i(e){return e?`open`:`closed`}function a(t){let n=e();for(let r of t)if(r===n||(r.focus(),e()!==n))return}export{i as n,a as t};

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/task"
@@ -130,8 +129,8 @@ func TestGetTaskEndpoint(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Get the task
-	r := mux.NewRouter()
-	r.HandleFunc("/a2a/v1/tasks/{taskId}", handler.GetTask)
+	r := http.NewServeMux()
+	r.HandleFunc("GET /a2a/v1/tasks/{taskId}", handler.GetTask)
 
 	req := httptest.NewRequest(http.MethodGet, "/a2a/v1/tasks/"+createdTask.ID, nil)
 	rec := httptest.NewRecorder()
@@ -157,8 +156,8 @@ func TestGetTaskNotFound(t *testing.T) {
 	manager := task.NewManager(store, nil, "http://localhost:8080")
 	handler := a2aserver.NewA2AHandler(manager)
 
-	r := mux.NewRouter()
-	r.HandleFunc("/a2a/v1/tasks/{taskId}", handler.GetTask)
+	r := http.NewServeMux()
+	r.HandleFunc("GET /a2a/v1/tasks/{taskId}", handler.GetTask)
 
 	req := httptest.NewRequest(http.MethodGet, "/a2a/v1/tasks/nonexistent-id", nil)
 	rec := httptest.NewRecorder()

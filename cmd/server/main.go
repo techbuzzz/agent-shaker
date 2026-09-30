@@ -2,51 +2,85 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
+	"time"
 
-	"github.com/gorilla/mux"
-	"github.com/rs/cors"
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
 	"github.com/techbuzzz/agent-shaker/internal/database"
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
+	"github.com/techbuzzz/agent-shaker/internal/observability"
 	"github.com/techbuzzz/agent-shaker/internal/task"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
 func main() {
+	// Root context for startup. The server lifecycle owns its own context.
+	ctx := context.Background()
+
+	// Tracing must be initialised BEFORE the logger so the otelslog bridge
+	// is available when NewLogger is constructed (otherwise log lines would
+	// lack trace_id correlation). InitTracing is a no-op when
+	// OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", "0.1.0")
+	if err != nil {
+		slog.Error("tracing init failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tracingShutdown(shutdownCtx); err != nil {
+			slog.Error("tracing shutdown error", "error", err)
+		}
+	}()
+
+	// Structured logging is the default for everything in this binary.
+	slog.SetDefault(observability.NewLogger())
+
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		databaseURL = "postgres://mcp:secret@localhost:5433/mcp_tracker?sslmode=disable"
 	}
 
-	// Connect to database
-	db, err := database.NewDB(databaseURL)
+	// Production safety guard: refuse to boot when sslmode=disable would
+	// silently send credentials and data over an unencrypted connection.
+	if os.Getenv("ENV") == "production" && strings.Contains(databaseURL, "sslmode=disable") {
+		slog.Error("refusing to start in production with sslmode=disable")
+		os.Exit(2)
+	}
+
+	// Connect to database. Pool tuning happens inside NewDB; see
+	// internal/database/database.go for defaults.
+	db, err := database.NewDB(ctx, databaseURL)
 	if err != nil {
-		log.Printf("Failed to connect to database: %v", err)
-		log.Println("Starting server without database for WebSocket testing...")
+		slog.Warn("database connection failed, starting without database", "error", err)
 		db = nil
 	} else {
 		defer db.Close()
 
-		// Configure connection pool
-		db.SetMaxOpenConns(25)
-		db.SetMaxIdleConns(5)
+		slog.Info("database connected")
 
-		log.Println("Connected to database")
-
-		// Run migrations
-		if err := runMigrations(db); err != nil {
-			log.Printf("Failed to run migrations: %v", err)
-			log.Println("Continuing without migrations...")
+		// Run migrations on startup unless the operator has disabled it (CI
+		// runs the dedicated cmd/migrate binary instead).
+		if os.Getenv("RUN_MIGRATIONS_ON_START") != "false" {
+			if err := runMigrations(db); err != nil {
+				slog.Warn("migrations failed, continuing without", "error", err)
+			}
+		} else {
+			slog.Info("RUN_MIGRATIONS_ON_START=false; skipping in-process migrations")
 		}
 	}
 
@@ -54,14 +88,33 @@ func main() {
 	hub := websocket.NewHub()
 	go hub.Run()
 
-	// Create handlers
-	projectHandler := handlers.NewProjectHandler(db, hub)
-	agentHandler := handlers.NewAgentHandler(db, hub)
-	taskHandler := handlers.NewTaskHandler(db, hub)
-	contextHandler := handlers.NewContextHandler(db, hub)
-	standupHandler := handlers.NewStandupHandler(db, hub)
+	// Create handlers. Handlers own a typed query store. When the database
+	// is unavailable, pass a literal nil interface — a typed-nil *database.DB
+	// would box into a non-nil Querier interface, defeating the handlers'
+	// `store.Available()` short-circuit (Go's typed-nil-interface gotcha).
+	var querier queries.Querier
+	if db != nil {
+		querier = db
+	}
+	projectStore := queries.NewProjectsStore(querier)
+	agentStore := queries.NewAgentsStore(querier)
+	tasksQueryStore := queries.NewTasksStore(querier)
+	contextsQueryStore := queries.NewContextsStore(querier)
+	standupsQueryStore := queries.NewStandupsStore(querier)
+	dashboardQueryStore := queries.NewDashboardStore(querier)
+	milestonesStore := queries.NewMilestonesStore(querier)
+	projectReposStore := queries.NewProjectReposStore(querier)
+	globalContextsStore := queries.NewGlobalContextsStore(querier)
+	projectHandler := handlers.NewProjectHandler(projectStore, hub)
+	agentHandler := handlers.NewAgentHandler(agentStore, hub)
+	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub)
+	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub)
+	standupHandler := handlers.NewStandupHandler(standupsQueryStore, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
-	dashboardHandler := handlers.NewDashboardHandler(db)
+	dashboardHandler := handlers.NewDashboardHandler(dashboardQueryStore)
+	milestoneHandler := handlers.NewMilestoneHandler(milestonesStore, tasksQueryStore, agentStore, hub, db)
+	projectRepoHandler := handlers.NewProjectRepoHandler(projectReposStore, hub)
+	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
 
 	// A2A Protocol Setup
@@ -70,12 +123,34 @@ func main() {
 		baseURL = "http://localhost:" + getPort()
 	}
 
-	// Create A2A task store and manager
-	tasksDir := os.Getenv("TASKS_DIR")
-	if tasksDir == "" {
-		tasksDir = "./data/tasks"
+	// Create A2A task store. Default to MemoryStore for back-compat; opt into
+	// the Postgres-backed store via TASK_STORE=postgres (requires DATABASE_URL
+	// and that migrations 001..004 have been applied).
+	var taskStore task.Store
+	switch os.Getenv("TASK_STORE") {
+	case "", "memory":
+		tasksDir := os.Getenv("TASKS_DIR")
+		if tasksDir == "" {
+			tasksDir = "./data/tasks"
+		}
+		taskStore = task.NewMemoryStore(tasksDir)
+		slog.Info("task store", "type", "memory", "dir", tasksDir)
+	case "postgres":
+		if db == nil {
+			slog.Error("TASK_STORE=postgres requires a working database connection")
+			os.Exit(1)
+		}
+		pgxPool, err := database.NewPool(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			slog.Error("failed to open pgxpool for task store", "error", err)
+			os.Exit(1)
+		}
+		taskStore = task.NewPostgresStore(pgxPool)
+		slog.Info("task store", "type", "postgres")
+	default:
+		slog.Error("unknown TASK_STORE value; expected memory or postgres", "value", os.Getenv("TASK_STORE"))
+		os.Exit(1)
 	}
-	taskStore := task.NewMemoryStore(tasksDir)
 	taskManager := task.NewManager(taskStore, nil, baseURL)
 
 	// Create A2A context storage (bridges existing contexts to A2A artifacts)
@@ -87,145 +162,53 @@ func main() {
 	streamingHandler := a2aserver.NewStreamingHandler(taskManager)
 	artifactHandler := a2aserver.NewArtifactHandler(contextStorage, baseURL)
 
-	// Setup router
-	r := mux.NewRouter()
-
-	// API routes
-	api := r.PathPrefix("/api").Subrouter()
-
-	// Dashboard
-	api.HandleFunc("/dashboard", dashboardHandler.GetDashboardStats).Methods("GET")
-
-	// Projects
-	api.HandleFunc("/projects", projectHandler.CreateProject).Methods("POST")
-	api.HandleFunc("/projects", projectHandler.ListProjects).Methods("GET")
-	api.HandleFunc("/projects/{id}", projectHandler.GetProject).Methods("GET")
-	api.HandleFunc("/projects/{id}", projectHandler.DeleteProject).Methods("DELETE")
-	api.HandleFunc("/projects/{id}/status", projectHandler.UpdateProjectStatus).Methods("PUT")
-
-	// Agents
-	api.HandleFunc("/agents", agentHandler.CreateAgent).Methods("POST")
-	api.HandleFunc("/agents", agentHandler.ListAgents).Methods("GET")
-	api.HandleFunc("/agents/{id}", agentHandler.GetAgent).Methods("GET")
-	api.HandleFunc("/agents/{id}", agentHandler.DeleteAgent).Methods("DELETE")
-	api.HandleFunc("/agents/{id}/status", agentHandler.UpdateAgentStatus).Methods("PUT")
-
-	// Tasks
-	api.HandleFunc("/tasks", taskHandler.CreateTask).Methods("POST")
-	api.HandleFunc("/tasks", taskHandler.ListTasks).Methods("GET")
-	api.HandleFunc("/tasks/{id}", taskHandler.GetTask).Methods("GET")
-	api.HandleFunc("/tasks/{id}", taskHandler.UpdateTask).Methods("PUT")
-	api.HandleFunc("/tasks/{id}", taskHandler.DeleteTask).Methods("DELETE")
-	api.HandleFunc("/tasks/{id}/status", taskHandler.UpdateTaskStatus).Methods("PUT")
-	api.HandleFunc("/tasks/{id}/reassign", taskHandler.ReassignTask).Methods("PUT")
-
-	// Contexts
-	api.HandleFunc("/contexts", contextHandler.CreateContext).Methods("POST")
-	api.HandleFunc("/contexts", contextHandler.ListContexts).Methods("GET")
-	api.HandleFunc("/contexts/{id}", contextHandler.GetContext).Methods("GET")
-	api.HandleFunc("/contexts/{id}", contextHandler.UpdateContext).Methods("PUT")
-	api.HandleFunc("/contexts/{id}", contextHandler.DeleteContext).Methods("DELETE")
-
-	// Daily Standups
-	api.HandleFunc("/standups", standupHandler.CreateStandup).Methods("POST")
-	api.HandleFunc("/standups", standupHandler.ListStandups).Methods("GET")
-	api.HandleFunc("/standups/{id}", standupHandler.GetStandup).Methods("GET")
-	api.HandleFunc("/standups/{id}", standupHandler.UpdateStandup).Methods("PUT")
-	api.HandleFunc("/standups/{id}", standupHandler.DeleteStandup).Methods("DELETE")
-
-	// Agent Heartbeats
-	api.HandleFunc("/heartbeats", standupHandler.RecordHeartbeat).Methods("POST")
-	api.HandleFunc("/agents/{id}/heartbeats", standupHandler.GetAgentHeartbeats).Methods("GET")
-
-	// A2A Protocol routes
-	a2aserver.RegisterA2ARoutes(r, a2aHandler, streamingHandler, artifactHandler, agentCardHandler)
-
-	// WebSocket
-	r.HandleFunc("/ws", wsHandler.HandleWebSocket)
-
-	// MCP Protocol endpoint (root level for VS Code)
-	r.HandleFunc("/", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
-	r.HandleFunc("/mcp", mcpHandler.HandleMCP).Methods("GET", "POST", "OPTIONS")
-	r.HandleFunc("/mcp/message", mcpHandler.HandleMCP).Methods("POST", "OPTIONS")
-
-	// Health check
-	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers manually for health endpoint
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+	// Build the route table and middleware chain. See cmd/server/routes.go
+	// for the actual route registrations.
+	obs := observability.New()
+	rateMW, rateShutdown := middleware.RateLimit(middleware.RateLimitConfig{
+		Limit: middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
+		Burst: middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
+		Skip:  middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
 	})
+	defer rateShutdown(context.Background())
 
-	// Setup CORS for API routes only
-	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
-		AllowCredentials: true,
-	})
+	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
+	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
 
-	// Create a custom handler that routes WebSocket without middleware
-	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// WebSocket requests bypass all middleware
-		if req.URL.Path == "/ws" {
-			wsHandler.HandleWebSocket(w, req)
-			return
-		}
+	deps := routeDeps{
+		db:                   db,
+		hub:                  hub,
+		projectHandler:       projectHandler,
+		agentHandler:         agentHandler,
+		taskHandler:          taskHandler,
+		contextHandler:       contextHandler,
+		standupHandler:       standupHandler,
+		wsHandler:            wsHandler,
+		dashboardHandler:     dashboardHandler,
+		milestoneHandler:     milestoneHandler,
+		projectRepoHandler:   projectRepoHandler,
+		globalContextHandler: globalContextHandler,
+		mcpHandler:           mcpHandler,
+		agentCardHandler:     agentCardHandler,
+		a2aHandler:           a2aHandler,
+		streamingHandler:     streamingHandler,
+		artifactHandler:      artifactHandler,
+		obs:                  obs,
+		maxBodyBytes:         parseMaxBodyBytes(),
+		corsOrigins:          corsOrigins,
+		corsAllowCreds:       corsAllowCreds,
+		isTLS:                false,
+		rateLimitShutdown:    rateShutdown,
+	}
 
-		// A2A Protocol routes - handle with CORS
-		if req.URL.Path == "/.well-known/agent-card.json" ||
-			strings.HasPrefix(req.URL.Path, "/a2a/") {
-			middleware.Recovery(
-				middleware.Logger(
-					c.Handler(r),
-				),
-			).ServeHTTP(w, req)
-			return
-		}
-
-		// MCP Protocol requests (root, /mcp, /mcp/message) - handle with CORS
-		if req.URL.Path == "/" || req.URL.Path == "/mcp" || len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/mcp" {
-			c.Handler(http.HandlerFunc(mcpHandler.HandleMCP)).ServeHTTP(w, req)
-			return
-		}
-
-		// API routes get full middleware
-		if len(req.URL.Path) >= 4 && req.URL.Path[:4] == "/api" {
-			middleware.Recovery(
-				middleware.Logger(
-					middleware.RequestSizeLimit(10*1024*1024)(
-						c.Handler(api),
-					),
-				),
-			).ServeHTTP(w, req)
-			return
-		}
-
-		// Health endpoint gets CORS
-		if req.URL.Path == "/health" {
-			middleware.Recovery(
-				middleware.Logger(
-					c.Handler(r),
-				),
-			).ServeHTTP(w, req)
-			return
-		}
-
-		// Other routes get minimal middleware
-		middleware.Recovery(
-			middleware.Logger(
-				r,
-			),
-		).ServeHTTP(w, req)
-	})
+	rootHandler, err := newServeMux(deps)
+	if err != nil {
+		slog.Error("failed to build routes", "error", err)
+		os.Exit(1)
+	}
+	// Wrap the router with the rate limiter so it sits between RequestID
+	// (outermost) and the per-route CORS handlers.
+	handler := middleware.Apply(rootHandler, rateMW)
 
 	// Start server
 	port := os.Getenv("PORT")
@@ -233,24 +216,76 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("Server starting on port %s", port)
-	log.Println("Agent Shaker - Multi-Protocol AI Agent Platform")
-	log.Println("Endpoints:")
-	log.Println("  A2A Discovery: http://localhost:" + port + "/.well-known/agent-card.json")
-	log.Println("  A2A API:       http://localhost:" + port + "/a2a/v1")
-	log.Println("  MCP:           http://localhost:" + port + "/ (Protocol endpoint)")
-	log.Println("  REST API:      http://localhost:" + port + "/api")
-	log.Println("  WebSocket:     ws://localhost:" + port + "/ws")
-	log.Println("  Health:        http://localhost:" + port + "/health")
-	log.Println("  GitHub:        https://github.com/techbuzzz/agent-shaker")
+	slog.Info("server starting", "port", port)
+	slog.Info("Agent Shaker - Multi-Protocol AI Agent Platform")
+	slog.Info("endpoints",
+		"a2a_discovery", "http://localhost:"+port+"/.well-known/agent-card.json",
+		"a2a_api", "http://localhost:"+port+"/a2a/v1",
+		"mcp", "http://localhost:"+port+"/",
+		"rest_api", "http://localhost:"+port+"/api",
+		"websocket", "ws://localhost:"+port+"/ws",
+		"health", "http://localhost:"+port+"/healthz",
+		"ready", "http://localhost:"+port+"/readyz",
+		"metrics", "http://localhost:"+port+"/metrics",
+		"github", "https://github.com/techbuzzz/agent-shaker",
+	)
 
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	if err := runServer(":"+port, handler, hub); err != nil {
+		slog.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }
 
+// runServer starts an http.Server and blocks until a SIGINT/SIGTERM arrives,
+// then drains in-flight requests (graceful shutdown) and finally closes the
+// WebSocket hub so all client pumps exit cleanly.
+func runServer(addr string, h http.Handler, hub *websocket.Hub) error {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+
+	// Cancel root context on SIGINT/SIGTERM so background goroutines can drain.
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("server listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	select {
+	case err, ok := <-errCh:
+		if ok && err != nil {
+			return err
+		}
+		return nil
+	case <-rootCtx.Done():
+		slog.Info("shutdown signal received, draining HTTP connections")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP shutdown error", "error", err)
+	}
+
+	slog.Info("closing WebSocket hub")
+	hub.Shutdown()
+	slog.Info("server stopped")
+	return nil
+}
+
 func runMigrations(db *database.DB) error {
-	log.Println("Running database migrations...")
+	slog.Info("running database migrations")
 
 	// Acquire advisory lock to prevent concurrent migrations
 	// Use a fixed integer key for migrations lock (hash of "agent-shaker-migrations")
@@ -273,7 +308,7 @@ func runMigrations(db *database.DB) error {
 	}
 
 	if !lockAcquired {
-		log.Println("Another instance is running migrations, waiting...")
+		slog.Info("another instance is running migrations, waiting")
 		// Block until we can acquire the lock
 		_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey)
 		if err != nil {
@@ -285,11 +320,11 @@ func runMigrations(db *database.DB) error {
 	defer func() {
 		_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockKey)
 		if err != nil {
-			log.Printf("Warning: failed to release migration lock: %v", err)
+			slog.Warn("failed to release migration lock", "error", err)
 		}
 	}()
 
-	log.Println("Migration lock acquired, proceeding...")
+	slog.Info("migration lock acquired")
 
 	// Create migrations tracking table if it doesn't exist
 	createTableSQL := `
@@ -341,7 +376,7 @@ func runMigrations(db *database.DB) error {
 
 		// Skip bootstrap and helper files (only process files starting with a digit)
 		if !migrationPattern.MatchString(entry.Name()) {
-			log.Printf("Skipping non-migration file: %s", entry.Name())
+			slog.Info("skipping non-migration file", "name", entry.Name())
 			continue
 		}
 
@@ -350,7 +385,7 @@ func runMigrations(db *database.DB) error {
 			continue
 		}
 
-		log.Printf("Applying migration: %s", entry.Name())
+		slog.Info("applying migration", "name", entry.Name())
 
 		// Read migration file
 		migrationSQL, err := os.ReadFile("migrations/" + entry.Name())
@@ -368,9 +403,9 @@ func runMigrations(db *database.DB) error {
 		// Execute migration DDL within the transaction
 		if _, err := tx.Exec(string(migrationSQL)); err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("Warning: failed to rollback transaction after migration error: %v", rbErr)
+				slog.Warn("failed to rollback transaction after migration error", "error", rbErr)
 			}
-			log.Printf("✗ Failed to apply migration %s: %v", entry.Name(), err)
+			slog.Error("failed to apply migration", "name", entry.Name(), "error", err)
 			return fmt.Errorf("failed to execute migration %s: %w", entry.Name(), err)
 		}
 
@@ -378,14 +413,14 @@ func runMigrations(db *database.DB) error {
 		// ON CONFLICT provides defense-in-depth: if somehow a migration was recorded
 		// between our initial check and now, we detect it here and skip redundant work
 		_, err = tx.Exec(
-			`INSERT INTO schema_migrations (version, applied_at) 
-			 VALUES ($1, CURRENT_TIMESTAMP) 
+			`INSERT INTO schema_migrations (version, applied_at)
+			 VALUES ($1, CURRENT_TIMESTAMP)
 			 ON CONFLICT (version) DO NOTHING`,
 			entry.Name(),
 		)
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Printf("Warning: failed to rollback transaction after insert error: %v", rbErr)
+				slog.Warn("failed to rollback transaction after insert error", "error", rbErr)
 			}
 			return fmt.Errorf("failed to record migration %s: %w", entry.Name(), err)
 		}
@@ -396,13 +431,13 @@ func runMigrations(db *database.DB) error {
 		}
 
 		appliedCount++
-		log.Printf("✓ Applied migration: %s", entry.Name())
+		slog.Info("applied migration", "name", entry.Name())
 	}
 
 	if appliedCount == 0 {
-		log.Println("No pending migrations")
+		slog.Info("no pending migrations")
 	} else {
-		log.Printf("Successfully applied %d migration(s)", appliedCount)
+		slog.Info("migrations applied", "count", appliedCount)
 	}
 
 	return nil

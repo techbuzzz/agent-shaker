@@ -3,23 +3,89 @@ package websocket
 import (
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/techbuzzz/agent-shaker/internal/models"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		// In production, validate specific origins
-		// For now, allow all origins for development
-		// TODO: Configure allowed origins via environment variable
-		return true
-	},
+// newUpgrader builds a websocket.Upgrader with a strict, env-driven origin allow-list.
+// Origins are matched against the request's Origin header. By default only same-host
+// (empty Origin, http://localhost:* , http://127.0.0.1:*) origins are accepted.
+func newUpgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin:     checkOrigin(defaultAllowedOrigins()),
+	}
+}
+
+// defaultAllowedOrigins reads the WS_ALLOWED_ORIGINS env var (comma-separated) and
+// merges it with the built-in localhost defaults. An empty env value keeps the
+// defaults; a "*" entry allows any origin (development only).
+func defaultAllowedOrigins() []string {
+	envVal := os.Getenv("WS_ALLOWED_ORIGINS")
+	if envVal == "*" {
+		return []string{"*"}
+	}
+	defaults := []string{
+		"http://localhost",
+		"http://127.0.0.1",
+	}
+	if envVal == "" {
+		return defaults
+	}
+	merged := make([]string, 0, len(defaults)+8)
+	merged = append(merged, defaults...)
+	for _, o := range strings.Split(envVal, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			merged = append(merged, o)
+		}
+	}
+	return merged
+}
+
+// checkOrigin returns an http.Handler-friendly CheckOrigin that matches the
+// request Origin header against the supplied allow-list. Empty Origin (same-origin
+// request) is always accepted so curl, Postman, and server-to-server traffic work.
+func checkOrigin(allowed []string) func(r *http.Request) bool {
+	allowAll := false
+	set := make(map[string]struct{}, len(allowed))
+	for _, o := range allowed {
+		if o == "*" {
+			allowAll = true
+			continue
+		}
+		set[strings.ToLower(o)] = struct{}{}
+	}
+	return func(r *http.Request) bool {
+		if allowAll {
+			return true
+		}
+		origin := strings.ToLower(r.Header.Get("Origin"))
+		if origin == "" {
+			return true
+		}
+		if _, ok := set[origin]; ok {
+			return true
+		}
+		// Allow sub-paths of a registered origin (e.g. http://localhost:3000 vs http://localhost).
+		for allowed := range set {
+			if strings.HasPrefix(origin, allowed+":") || origin == allowed {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 type Message struct {
@@ -41,7 +107,11 @@ type Hub struct {
 	broadcast  chan *Message
 	register   chan *Client
 	unregister chan *Client
-	mu         sync.RWMutex
+	done       chan struct{}
+	closeOnce  sync.Once
+	wg         sync.WaitGroup
+	mu         sync.Mutex // serializes broadcasts + register/unregister; client send queues are per-channel
+	upgrader   *websocket.Upgrader
 }
 
 func NewHub() *Hub {
@@ -51,12 +121,19 @@ func NewHub() *Hub {
 		broadcast:  make(chan *Message, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		done:       make(chan struct{}),
+		upgrader:   newUpgrader(),
 	}
 }
 
+// Run drives the hub event loop until Shutdown is called.
 func (h *Hub) Run() {
+	h.wg.Add(1)
+	defer h.wg.Done()
 	for {
 		select {
+		case <-h.done:
+			return
 		case client := <-h.register:
 			h.mu.Lock()
 			client.hub = h // Set the hub reference
@@ -83,16 +160,37 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 			log.Printf("Client %s unregistered", client.ID)
 
-		case message := <-h.broadcast:
+		case message, ok := <-h.broadcast:
+			if !ok {
+				return
+			}
 			h.broadcastMessage(message)
 		}
 	}
 }
 
-func (h *Hub) broadcastMessage(message *Message) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+// Shutdown closes the hub event loop, waits for Run to exit, then closes every
+// remaining client's send channel so pumps terminate cleanly.
+func (h *Hub) Shutdown() {
+	h.closeOnce.Do(func() {
+		close(h.done)
+	})
+	h.wg.Wait()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id, client := range h.clients {
+		close(client.Send)
+		delete(h.clients, id)
+	}
+	for pid, projectClients := range h.projects {
+		for id := range projectClients {
+			delete(projectClients, id)
+		}
+		delete(h.projects, pid)
+	}
+}
 
+func (h *Hub) broadcastMessage(message *Message) {
 	data, err := json.Marshal(message)
 	if err != nil {
 		log.Printf("Failed to marshal message: %v", err)
@@ -122,17 +220,27 @@ func (h *Hub) broadcastMessage(message *Message) {
 		}
 	}
 
-	// Broadcast to all clients of the project
-	if projectClients, ok := h.projects[projectID]; ok {
-		for _, client := range projectClients {
-			select {
-			case client.Send <- data:
-			default:
-				close(client.Send)
-				delete(h.clients, client.ID)
-				delete(projectClients, client.ID)
-			}
+	// Hold the write lock for the whole broadcast so map mutations on overflow
+	// (delete of slow clients) are race-free against Register/Unregister.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	projectClients, ok := h.projects[projectID]
+	if !ok {
+		return
+	}
+	for id, client := range projectClients {
+		select {
+		case client.Send <- data:
+		default:
+			// Slow client: close its send channel, drop it from both maps.
+			close(client.Send)
+			delete(projectClients, id)
+			delete(h.clients, client.ID)
 		}
+	}
+	if len(projectClients) == 0 {
+		delete(h.projects, projectID)
 	}
 }
 
@@ -141,7 +249,10 @@ func (h *Hub) BroadcastToProject(projectID uuid.UUID, messageType string, payloa
 		Type:    messageType,
 		Payload: payload,
 	}
-	h.broadcast <- message
+	select {
+	case h.broadcast <- message:
+	case <-h.done:
+	}
 }
 
 // BroadcastTaskUpdate sends a task update to all connected clients
@@ -150,36 +261,55 @@ func (h *Hub) BroadcastTaskUpdate(update *models.TaskUpdate) {
 		Type:    "task_update",
 		Payload: update,
 	}
-	h.broadcast <- message
+	select {
+	case h.broadcast <- message:
+	case <-h.done:
+	}
 }
 
 func (h *Hub) Register(client *Client) {
-	h.register <- client
+	select {
+	case h.register <- client:
+	case <-h.done:
+	}
 }
 
 func (h *Hub) Unregister(client *Client) {
-	h.unregister <- client
+	select {
+	case h.unregister <- client:
+	case <-h.done:
+	}
 }
 
-// HandleWebSocket handles WebSocket connections
+// HandleWebSocket handles WebSocket connections. When OpenTelemetry tracing
+// is enabled, the handshake opens a span ("websocket.handle") that the
+// hub pumps link to via their own spans (added in a follow-up).
 func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	tracer := otel.Tracer("agent-shaker/websocket")
+	ctx, span := tracer.Start(r.Context(), "websocket.handle")
+	defer span.End()
+
+	conn, err := h.upgrader.Upgrade(w, r.WithContext(ctx), nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		slog.ErrorContext(ctx, "websocket upgrade error", "error", err)
 		return
 	}
 
 	projectIDStr := r.URL.Query().Get("project_id")
 	if projectIDStr == "" {
-		projectIDStr = "00000000-0000-0000-0000-000000000000" // default uuid
+		projectIDStr = "00000000-0000-0000-0000-000000000000"
 	}
 
 	projectID, err := uuid.Parse(projectIDStr)
 	if err != nil {
-		log.Printf("Invalid project_id: %v", err)
+		slog.ErrorContext(ctx, "invalid project_id", "error", err, "raw", projectIDStr)
 		conn.Close()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("ws.project_id", projectID.String()),
+		attribute.String("ws.client_id", ""),
+	)
 
 	client := &Client{
 		ID:        uuid.New().String(),
@@ -188,6 +318,7 @@ func (h *Hub) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		Send:      make(chan []byte, 256),
 		hub:       h,
 	}
+	span.SetAttributes(attribute.String("ws.client_id", client.ID))
 
 	h.Register(client)
 

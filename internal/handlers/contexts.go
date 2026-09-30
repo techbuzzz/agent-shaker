@@ -1,44 +1,47 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/lib/pq"
-	"github.com/techbuzzz/agent-shaker/internal/database"
+
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
 type ContextHandler struct {
-	db  *database.DB
-	hub *websocket.Hub
+	store *queries.ContextsStore
+	hub   *websocket.Hub
 }
 
-func NewContextHandler(db *database.DB, hub *websocket.Hub) *ContextHandler {
-	return &ContextHandler{db: db, hub: hub}
+func NewContextHandler(store *queries.ContextsStore, hub *websocket.Hub) *ContextHandler {
+	return &ContextHandler{store: store, hub: hub}
 }
 
 func (h *ContextHandler) CreateContext(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	var req models.CreateContextRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-
-	// Validate request
 	if err := validator.ValidateCreateContextRequest(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
 		return
 	}
 
-	ctx := models.Context{
+	c := models.Context{
 		ID:        uuid.New(),
 		ProjectID: req.ProjectID,
 		AgentID:   req.AgentID,
@@ -49,214 +52,151 @@ func (h *ContextHandler) CreateContext(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-
-	_, err := h.db.Exec(`
-		INSERT INTO contexts (id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, ctx.ID, ctx.ProjectID, ctx.AgentID, ctx.TaskID, ctx.Title, ctx.Content, ctx.Tags, ctx.CreatedAt, ctx.UpdatedAt)
-	if err != nil {
-		http.Error(w, "Failed to create context", http.StatusInternalServerError)
+	if err := h.store.CreateContext(r.Context(), &c); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Broadcast context creation
-	h.hub.BroadcastToProject(ctx.ProjectID, "context_added", ctx)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(ctx)
+	h.hub.BroadcastToProject(c.ProjectID, "context_added", c)
+	httpx.WriteJSON(w, http.StatusCreated, c)
 }
 
 func (h *ContextHandler) ListContexts(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
 	projectIDStr := r.URL.Query().Get("project_id")
 	if projectIDStr == "" {
-		http.Error(w, "project_id query parameter is required", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("project_id query parameter is required"))
 		return
 	}
-
 	projectID, err := uuid.Parse(projectIDStr)
 	if err != nil {
-		http.Error(w, "Invalid project_id format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid project_id: %w", err))
 		return
 	}
-
-	query := `
-		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
-		FROM contexts
-		WHERE project_id = $1
-	`
-	args := []interface{}{projectID}
-
-	// Add tag filter
-	tagsParam := r.URL.Query().Get("tags")
-	if tagsParam != "" {
-		tags := strings.Split(tagsParam, ",")
-		query += " AND tags && $2"
-		args = append(args, pq.Array(tags))
-	}
-
-	query += " ORDER BY created_at DESC"
-
-	rows, err := h.db.Query(query, args...)
-	if err != nil {
-		http.Error(w, "Failed to retrieve contexts", http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	var contexts []models.Context
-	for rows.Next() {
-		var c models.Context
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, &c.Tags, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			http.Error(w, "Failed to scan context", http.StatusInternalServerError)
+	var taskID *uuid.UUID
+	if t := r.URL.Query().Get("task_id"); t != "" {
+		parsed, err := uuid.Parse(t)
+		if err != nil {
+			httpx.WriteError(w, r, fmt.Errorf("invalid task_id: %w", err))
 			return
 		}
-		contexts = append(contexts, c)
+		taskID = &parsed
 	}
-
-	// Return empty array instead of null
+	var tags []string
+	if tagsParam := r.URL.Query().Get("tags"); tagsParam != "" {
+		tags = strings.Split(tagsParam, ",")
+	}
+	contexts, err := h.store.ListContexts(r.Context(), projectID, taskID, tags)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
 	if contexts == nil {
 		contexts = []models.Context{}
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(contexts)
+	httpx.WriteJSON(w, http.StatusOK, contexts)
 }
 
 func (h *ContextHandler) GetContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid context ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
 		return
 	}
-
-	var ctx models.Context
-	err = h.db.QueryRow(`
-		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
-		FROM contexts
-		WHERE id = $1
-	`, id).Scan(&ctx.ID, &ctx.ProjectID, &ctx.AgentID, &ctx.TaskID, &ctx.Title, &ctx.Content, &ctx.Tags, &ctx.CreatedAt, &ctx.UpdatedAt)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Context not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve context", http.StatusInternalServerError)
+	c, err := h.store.GetContext(r.Context(), id)
+	if err != nil {
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("context not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ctx)
+	httpx.WriteJSON(w, http.StatusOK, c)
 }
 
 func (h *ContextHandler) UpdateContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid context ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
 		return
 	}
-
 	var req models.UpdateContextRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
-
-	// Validate request
 	if err := validator.ValidateUpdateContextRequest(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
 		return
 	}
-
-	// Check if context exists and get current data
-	var currentCtx models.Context
-	err = h.db.QueryRow(`
-		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
-		FROM contexts
-		WHERE id = $1
-	`, id).Scan(&currentCtx.ID, &currentCtx.ProjectID, &currentCtx.AgentID, &currentCtx.TaskID, &currentCtx.Title, &currentCtx.Content, &currentCtx.Tags, &currentCtx.CreatedAt, &currentCtx.UpdatedAt)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Context not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve context", http.StatusInternalServerError)
-		return
-	}
-
-	// Update the context
-	_, err = h.db.Exec(`
-		UPDATE contexts
-		SET task_id = $1, title = $2, content = $3, tags = $4, updated_at = $5
-		WHERE id = $6
-	`, req.TaskID, req.Title, req.Content, pq.Array(req.Tags), time.Now(), id)
+	current, err := h.store.GetContext(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to update context", http.StatusInternalServerError)
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("context not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Get updated context
-	var updatedCtx models.Context
-	err = h.db.QueryRow(`
-		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
-		FROM contexts
-		WHERE id = $1
-	`, id).Scan(&updatedCtx.ID, &updatedCtx.ProjectID, &updatedCtx.AgentID, &updatedCtx.TaskID, &updatedCtx.Title, &updatedCtx.Content, &updatedCtx.Tags, &updatedCtx.CreatedAt, &updatedCtx.UpdatedAt)
+	current.TaskID = req.TaskID
+	current.Title = req.Title
+	current.Content = req.Content
+	current.Tags = pq.StringArray(req.Tags)
+	current.UpdatedAt = time.Now()
+	if err := h.store.UpdateContext(r.Context(), current); err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	updated, err := h.store.GetContext(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to retrieve updated context", http.StatusInternalServerError)
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	// Broadcast context update
-	h.hub.BroadcastToProject(updatedCtx.ProjectID, "context_updated", updatedCtx)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(updatedCtx)
+	h.hub.BroadcastToProject(updated.ProjectID, "context_updated", updated)
+	httpx.WriteJSON(w, http.StatusOK, updated)
 }
 
 func (h *ContextHandler) DeleteContext(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
+	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid context ID format", http.StatusBadRequest)
+		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
 		return
 	}
-
-	// Check if context exists and get project_id for broadcasting
-	var projectID uuid.UUID
-	err = h.db.QueryRow(`
-		SELECT project_id FROM contexts WHERE id = $1
-	`, id).Scan(&projectID)
-	if err == sql.ErrNoRows {
-		http.Error(w, "Context not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, "Failed to retrieve context", http.StatusInternalServerError)
-		return
-	}
-
-	// Delete the context
-	result, err := h.db.Exec(`DELETE FROM contexts WHERE id = $1`, id)
+	projectID, err := h.store.GetContextProjectID(r.Context(), id)
 	if err != nil {
-		http.Error(w, "Failed to delete context", http.StatusInternalServerError)
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("context not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		http.Error(w, "Failed to confirm deletion", http.StatusInternalServerError)
+	if err := h.store.DeleteContext(r.Context(), id); err != nil {
+		httpx.WriteError(w, r, err)
 		return
 	}
-
-	if rowsAffected == 0 {
-		http.Error(w, "Context not found", http.StatusNotFound)
-		return
-	}
-
-	// Broadcast context deletion
-	h.hub.BroadcastToProject(projectID, "context_deleted", map[string]interface{}{
-		"id": id,
+	h.hub.BroadcastToProject(projectID, "context_deleted", map[string]any{
+		"context_id": id,
+		"project_id": projectID,
+		"deleted_at": time.Now(),
 	})
-
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // TaskStatus represents the status of a task
@@ -17,17 +18,19 @@ const (
 )
 
 type Task struct {
-	ID          uuid.UUID  `json:"id" db:"id"`
-	ProjectID   uuid.UUID  `json:"project_id" db:"project_id"`
-	Title       string     `json:"title" db:"title"`
-	Description string     `json:"description" db:"description"`
-	Status      TaskStatus `json:"status" db:"status"`
-	Priority    string     `json:"priority" db:"priority"`
-	CreatedBy   uuid.UUID  `json:"created_by" db:"created_by"`
-	AssignedTo  *uuid.UUID `json:"assigned_to" db:"assigned_to"`
-	Output      string     `json:"output" db:"output"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
+	ID          uuid.UUID      `json:"id" db:"id"`
+	ProjectID   uuid.UUID      `json:"project_id" db:"project_id"`
+	Title       string         `json:"title" db:"title"`
+	Description string         `json:"description" db:"description"`
+	Status      TaskStatus     `json:"status" db:"status"`
+	Priority    string         `json:"priority" db:"priority"`
+	CreatedBy   uuid.UUID      `json:"created_by" db:"created_by"`
+	AssignedTo  *uuid.UUID     `json:"assigned_to" db:"assigned_to"`
+	Output      string         `json:"output" db:"output"`
+	MilestoneID *uuid.UUID     `json:"milestone_id" db:"milestone_id"`
+	Tags        pq.StringArray `json:"tags" db:"tags"`
+	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
 }
 
 type CreateTaskRequest struct {
@@ -37,6 +40,8 @@ type CreateTaskRequest struct {
 	Priority    string     `json:"priority"`
 	CreatedBy   uuid.UUID  `json:"created_by"`
 	AssignedTo  *uuid.UUID `json:"assigned_to"`
+	MilestoneID *uuid.UUID `json:"milestone_id"`
+	Tags        []string   `json:"tags"`
 }
 
 type UpdateTaskRequest struct {

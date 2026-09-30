@@ -1,0 +1,4 @@
+{
+  // Nuxt-generated tsconfig. Commit-friendly: only adds app/* to includes.
+  "extends": "./.nuxt/tsconfig.json"
+}

@@ -2,13 +2,25 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
+)
+
+// Sentinel errors. Callers should use errors.Is to map these to HTTP status
+// codes (ErrTaskNotFound → 404, ErrTaskTerminal → 409).
+var (
+	// ErrTaskNotFound is returned when a task ID does not exist in the store.
+	ErrTaskNotFound = errors.New("task not found")
+
+	// ErrTaskTerminal is returned when a caller tries to cancel a task that
+	// has already reached a terminal state (completed or failed).
+	ErrTaskTerminal = errors.New("task already in terminal state")
 )
 
 // TaskUpdate represents an update event for a task
@@ -73,7 +85,10 @@ func (m *Manager) ListTasks(ctx context.Context, filter *Filter) ([]models.Task,
 	return m.store.ListTasks(ctx, filter)
 }
 
-// CancelTask attempts to cancel a running task
+// CancelTask attempts to cancel a running task. Returns ErrTaskNotFound when
+// the task ID does not exist and ErrTaskTerminal when the task has already
+// completed or failed. Callers should use errors.Is to map these to status
+// codes (404 / 409 respectively).
 func (m *Manager) CancelTask(ctx context.Context, taskID string) error {
 	task, err := m.store.GetTask(ctx, taskID)
 	if err != nil {
@@ -81,7 +96,7 @@ func (m *Manager) CancelTask(ctx context.Context, taskID string) error {
 	}
 
 	if task.Status == models.TaskStatusCompleted || task.Status == models.TaskStatusFailed {
-		return fmt.Errorf("cannot cancel task with status %s", task.Status)
+		return fmt.Errorf("%w: status=%s", ErrTaskTerminal, task.Status)
 	}
 
 	task.Status = models.TaskStatusFailed
@@ -147,7 +162,7 @@ func (m *Manager) notifySubscribers(taskID string, update TaskUpdate) {
 		case ch <- update:
 		default:
 			// Channel full, skip this update
-			log.Printf("Warning: subscriber channel full for task %s", taskID)
+			slog.Warn("subscriber channel full, dropping update", "task_id", taskID)
 		}
 	}
 }
@@ -159,7 +174,7 @@ func (m *Manager) executeTask(taskID string) {
 	// Get the task
 	task, err := m.store.GetTask(ctx, taskID)
 	if err != nil {
-		log.Printf("Failed to get task %s for execution: %v", taskID, err)
+		slog.Error("failed to get task for execution", "task_id", taskID, "error", err)
 		return
 	}
 
@@ -168,7 +183,7 @@ func (m *Manager) executeTask(taskID string) {
 	task.UpdatedAt = time.Now()
 
 	if err := m.store.UpdateTask(ctx, task); err != nil {
-		log.Printf("Failed to update task %s status to running: %v", taskID, err)
+		slog.Error("failed to mark task running", "task_id", taskID, "error", err)
 		return
 	}
 
@@ -216,7 +231,7 @@ func (m *Manager) executeTask(taskID string) {
 	}
 
 	if err := m.store.UpdateTask(ctx, task); err != nil {
-		log.Printf("Failed to update task %s with result: %v", taskID, err)
+		slog.Error("failed to update task with result", "task_id", taskID, "error", err)
 		return
 	}
 
@@ -227,7 +242,7 @@ func (m *Manager) executeTask(taskID string) {
 		IsFinal: true,
 	})
 
-	log.Printf("Task %s completed with status %s", taskID, task.Status)
+	slog.Info("task completed", "task_id", taskID, "status", string(task.Status))
 }
 
 // GetStore returns the underlying store (for testing or advanced usage)

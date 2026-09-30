@@ -32,7 +32,13 @@ services:
       context: ./web
       dockerfile: Dockerfile
     ports:
-      - "80:80"
+      - "80:3000"
+    environment:
+      # Internal proxy target (the MCP backend is reachable at this hostname inside the compose network)
+      NUXT_API_UPSTREAM: "http://mcp-server:8080/api"
+      NUXT_API_UPSTREAM_WS: "ws://mcp-server:8080"
+      NUXT_PUBLIC_API_BASE: "http://mcp-server:8080"
+      NUXT_PUBLIC_WS_BASE: "ws://mcp-server:8080"
     depends_on:
       mcp-server:
         condition: service_started

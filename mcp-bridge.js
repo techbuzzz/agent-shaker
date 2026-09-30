@@ -2,7 +2,19 @@
 
 /**
  * Agent Shaker MCP Bridge
- * A simple bridge between GitHub Copilot and the Agent Shaker API
+ * A simple bridge between GitHub Copilot and the Agent Shaker API.
+ *
+ * Mesh-app tools (Phase 1/2/3/4 of the agent-shaker mesh plan):
+ *   * register_self              — create the agent + its repo in one shot
+ *   * create_milestone (PM-only) — start a milestone for the project
+ *   * list_milestones            — list the project's milestones
+ *   * assign_task_to_milestone   — link a task to a milestone
+ *   * publish_global_context     — publish a server-wide or project playbook
+ *   * list_global_contexts       — list playbooks
+ *   * read_global_context        — read one playbook
+ *   * resources/read             — `global://<title>` returns the playbook as markdown
+ *
+ * See docs/MESH_PLAN.md and docs/MCP_QUICKSTART.md for worked examples.
  */
 
 const axios = require('axios');

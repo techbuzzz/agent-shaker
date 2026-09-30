@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
 )
 
@@ -84,7 +83,7 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	vars := mux.Vars(r)
+	vars := a2aVars(r)
 	artifactID := vars["artifactId"]
 	if artifactID == "" {
 		h.writeError(w, "Artifact ID is required", http.StatusBadRequest)
