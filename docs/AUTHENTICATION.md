@@ -51,6 +51,15 @@ caller.
 A bare token in `Authorization` with no scheme is also accepted, because some
 MCP clients send it that way.
 
+The A2A agent card at `/.well-known/agent-card.json` advertises the scheme that
+is actually in force — `apiKey` when `AUTH_ENABLED=true`, `none` otherwise. It
+used to hardcode `none`, which was a straight lie once this layer landed: a
+conforming client would send no credential and collect a `401` on every call.
+
+The card also advertises the origin it was reached on, taken from
+`X-Forwarded-Proto` / `X-Forwarded-Host` rather than a hardcoded internal
+address, so a peer agent is pointed at the public URL instead of a dead one.
+
 ### Why `/ws` is the only route that reads a query parameter
 
 A browser cannot attach headers to a WebSocket handshake. For every other route
@@ -64,7 +73,10 @@ has no credential to present, and a `401` there becomes a crash-restart loop
 that looks like an outage rather than the configuration error it is.
 
 `/metrics` in particular should not be public on a real deployment — either
-bind it to an internal network or gate it at the reverse proxy.
+bind it to an internal network or gate it at the reverse proxy. The bundled
+Caddyfile does the latter by routing it nowhere at all: the catch-all hands it
+to Nuxt, which returns `404`. Scrape `mcp-server:8080/metrics` on the internal
+network instead.
 
 ## What this does not protect
 
@@ -93,6 +105,46 @@ reverse proxy in front of the web service.
 All three compose with the API key without changes. Keep `AUTH_ENABLED=true` as
 defence in depth so the Go service is not usable even if the perimeter is
 misconfigured.
+
+The bundled Caddy edge (`make edge-up`) is the first option, pre-wired. See
+[DEPLOYMENT.md](./DEPLOYMENT.md) for the topology and how it splits the two
+kinds of caller.
+
+## The two-surface model
+
+With the TLS edge in front, the public origin answers two different kinds of
+caller, and each path takes exactly one credential:
+
+| Path | For | Credential |
+| --- | --- | --- |
+| `/`, `/api/*`, `/ws` | browsers, the SPA | basic auth (the key is injected server-side) |
+| `/mcp`, `/mcp/*`, `/a2a/*`, `/.well-known/*` | agents, MCP hosts, scripts | API key |
+| `/metrics` | nobody — 404 at the edge | — |
+
+**`/api/*` is a UI surface, not a machine one.** A headless client with a valid
+API key still gets a `401` there, because the edge requires basic auth on that
+path and an HTTP client cannot send `Authorization: Basic` and
+`Authorization: Bearer` in the same header. Integrations use `/mcp` or
+`/a2a/v1/*`.
+
+The machine branch deliberately has no basic auth, for the same reason: MCP
+clients authenticate with `Bearer`, and requiring both would make the surface
+unusable rather than more secure. Those paths are still guarded by
+`RequireAPIKey`, so every path requires a credential and none requires two
+mutually exclusive ones.
+
+### The edge's Basic credential never reaches the Go service
+
+Behind basic auth, every browser request arrives at the Nitro proxy carrying
+`Authorization: Basic …`. The proxy **drops** it and forwards only `X-API-Key`
+or `Authorization: Bearer`, injecting `NUXT_API_KEY` when the caller presented
+neither. See `web/server/utils/upstreamAuth.ts`.
+
+Two things this prevents. The Go service would otherwise receive a Basic
+credential where it expects a key and answer `401` to every request; and the
+perimeter password would be written into the Go service's request log on every
+call, which is strictly worse than the outage.
+
 
 ## Rotating a key
 

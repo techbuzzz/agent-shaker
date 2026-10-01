@@ -29,6 +29,8 @@ WEB_DIR    := web
         web-install web-build web-typecheck web-dev \
         migrate-up migrate-version migrate-force \
         docker-build docker-up docker-down docker-logs docker-config \
+        caddy-validate caddy-fmt caddy-fmt-check \
+        edge-up edge-down \
         dev demo deps
 
 help: ## Show this help message
@@ -36,6 +38,7 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ''
 	@echo 'Stack: Postgres -> Go API (:8080) -> Nuxt SSR (:3000, single public origin)'
+	@echo 'Edge:  make edge-up  (adds Caddy: TLS + basic auth + MCP/A2A on one origin)'
 
 # --------------------------------------------------------------------- checks
 
@@ -118,13 +121,62 @@ docker-build: ## Build both production images
 		--build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILD_TIME=$(BUILD_TIME) .
 	docker build -t agent-shaker-web:local -f $(WEB_DIR)/Dockerfile $(WEB_DIR)
 
-docker-config: ## Validate the compose file
-	docker compose config --quiet && echo "✓ compose config valid"
+docker-config: ## Validate the compose file, both with and without the tls profile
+	@POSTGRES_PASSWORD=ci-only API_KEYS=ci-only docker compose config --quiet
+	@POSTGRES_PASSWORD=ci-only API_KEYS=ci-only BASIC_AUTH_USER=ci BASIC_AUTH_HASH=ci-only \
+		docker compose --profile tls config --quiet
+	@echo "✓ compose config valid (default + tls profiles)"
+
+# The Caddyfile is a production input, so it gets the same treatment as Go
+# source: a validator and a formatter, both runnable locally and in CI.
+#
+# BASIC_AUTH_HASH is generated here rather than read from a .env file on
+# purpose. Docker Compose interpolates $$VAR inside env files, which silently
+# eats the $$<salt> segment of a bcrypt hash — see docs/DEPLOYMENT.md. Exporting
+# a literal value is the form that survives.
+CADDY_IMAGE ?= caddy:2-alpine
+CADDYFILE   ?= deploy/Caddyfile
+
+caddy-validate: ## Validate deploy/Caddyfile
+	@H=$$(docker run --rm $(CADDY_IMAGE) caddy hash-password --plaintext 'validate-only' 2>/dev/null); \
+	docker run --rm -e BASIC_AUTH_USER=validate -e BASIC_AUTH_HASH="$$H" -e PUBLIC_HOST=localhost \
+		-v "$(CURDIR)/$(CADDYFILE):/etc/caddy/Caddyfile:ro" \
+		$(CADDY_IMAGE) caddy validate --config /etc/caddy/Caddyfile
+	@echo "✓ Caddyfile valid"
+
+caddy-fmt: ## Rewrite deploy/Caddyfile in canonical form
+	@H=$$(docker run --rm $(CADDY_IMAGE) caddy hash-password --plaintext 'fmt-only' 2>/dev/null); \
+	id=$$(docker create $(CADDY_IMAGE)); \
+	docker cp "$(CURDIR)/$(CADDYFILE)" "$$id:/in"; \
+	docker start -a "$$id" > /dev/null; \
+	docker exec "$$id" cp /in /tmp/Caddyfile; \
+	docker exec "$$id" caddy fmt --overwrite /tmp/Caddyfile; \
+	docker cp "$$id:/tmp/Caddyfile" "$(CURDIR)/$(CADDYFILE)"; \
+	docker rm -f "$$id" > /dev/null
+	@echo "✓ Caddyfile formatted"
+
+caddy-fmt-check: ## Fail if deploy/Caddyfile is not caddy-fmt clean
+	@H=$$(docker run --rm $(CADDY_IMAGE) caddy hash-password --plaintext 'fmt-only' 2>/dev/null); \
+	docker run --rm -e BASIC_AUTH_USER=validate -e BASIC_AUTH_HASH="$$H" -e PUBLIC_HOST=localhost \
+		-v "$(CURDIR)/$(CADDYFILE):/etc/caddy/Caddyfile:ro" \
+		$(CADDY_IMAGE) caddy fmt --diff /etc/caddy/Caddyfile > /dev/null
+	@echo "✓ Caddyfile format clean"
 
 docker-up: ## Start the full stack (Postgres + API + web)
 	docker compose up -d --build
 	@echo "→ UI    http://localhost:$${WEB_PORT:-3000}"
 	@echo "→ API   http://localhost:8080"
+
+# The TLS edge is opt-in. BASIC_AUTH_HASH must be exported in the shell, not
+# placed in .env — see docs/DEPLOYMENT.md.
+edge-up: ## Start the stack with the TLS edge (requires exported BASIC_AUTH_USER + BASIC_AUTH_HASH)
+	@test -n "$$BASIC_AUTH_USER" || { echo "BASIC_AUTH_USER must be exported (see docs/DEPLOYMENT.md)"; exit 1; }
+	@test -n "$$BASIC_AUTH_HASH" || { echo "BASIC_AUTH_HASH must be exported (see docs/DEPLOYMENT.md)"; exit 1; }
+	docker compose --profile tls up -d --build
+	@echo "→ https://$${PUBLIC_HOST:-localhost}"
+
+edge-down: ## Stop the TLS-edge stack and remove its volumes
+	docker compose --profile tls down -v
 
 docker-down: ## Stop the stack
 	docker compose down

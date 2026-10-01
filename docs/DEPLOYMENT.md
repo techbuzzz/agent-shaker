@@ -41,15 +41,30 @@ either enable that profile or put your own reverse proxy in front and give
 ```bash
 # 1. Required configuration
 cp .env.example .env
-$EDITOR .env          # POSTGRES_PASSWORD, API_KEYS, BASIC_AUTH_USER, BASIC_AUTH_HASH, PUBLIC_HOST
+$EDITOR .env          # POSTGRES_PASSWORD, API_KEYS, PUBLIC_HOST
 
-# 2. Bring it up
-docker compose --profile tls up -d
+# 2. Export the basic-auth credential (see the warning below for why it is
+#    not in .env)
+export BASIC_AUTH_USER=admin
+export BASIC_AUTH_HASH="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password')"
 
-# 3. Watch it converge
+# 3. Bring it up — `make edge-up` is `docker compose --profile tls up -d --build`
+make edge-up
+
+# 4. Watch it converge
 docker compose --profile tls ps
 docker compose --profile tls logs -f edge
 ```
+
+Validate before you deploy:
+
+```bash
+make docker-config     # both compose profiles
+make caddy-validate   # the Caddyfile parses
+make caddy-fmt-check  # the Caddyfile is in canonical form
+```
+
+CI runs all three on every push.
 
 Generate the basic-auth hash once:
 
@@ -61,11 +76,26 @@ docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
 
 ## Do not put the bcrypt hash in `.env`
 
-`BASIC_AUTH_USER` and `BASIC_AUTH_HASH` are **required** under the `tls`
-profile and compose will refuse to start without them. This is deliberate: a
-Caddyfile cannot branch on whether an environment variable is set, so the only
-alternative is a placeholder credential, and a guessable one is worse than a
-refusal to boot.
+`BASIC_AUTH_USER` and `BASIC_AUTH_HASH` are **required for the edge to boot**.
+The `edge` service refuses to start without them, exiting 1 with an actionable
+message. This is deliberate: a Caddyfile cannot branch on whether an environment
+variable is set, so the only alternative is a placeholder credential, and a
+guessable one is worse than a refusal to boot.
+
+The check lives in the `edge` service's command rather than in compose's `:?`
+syntax. Compose interpolates the whole file regardless of which profiles are
+active, so `:?` would make these variables mandatory for a plain
+`docker compose up -d` — forcing every developer without a TLS edge to invent a
+bcrypt hash. Guarding at startup keeps the requirement scoped to the profile
+that needs it.
+
+```
+FATAL: the tls profile requires BASIC_AUTH_USER and BASIC_AUTH_HASH.
+  The API key is not a login, so the edge is the only access
+  control in this topology. Generate a hash with:
+    docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+  ...
+```
 
 ### Do not put the bcrypt hash in `.env`
 

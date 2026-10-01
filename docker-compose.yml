@@ -162,15 +162,34 @@ services:
     image: caddy:2-alpine
     profiles: [tls]
     restart: unless-stopped
+    # The requirement that basic auth exists is enforced HERE, at edge startup,
+    # rather than with compose's `:?` syntax. Compose interpolates the whole
+    # file regardless of which profiles are active, so `:?` on this service
+    # would make BASIC_AUTH_USER/BASIC_AUTH_HASH mandatory for a plain
+    # `docker compose up -d` — forcing every developer without a TLS edge to
+    # invent a bcrypt hash. Guarding in the command keeps the requirement
+    # scoped to the profile that needs it, and produces an actionable message
+    # instead of Caddy's "unrecognized hash algorithm" parse error.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$$BASIC_AUTH_USER" ] || [ -z "$$BASIC_AUTH_HASH" ]; then
+          echo "FATAL: the tls profile requires BASIC_AUTH_USER and BASIC_AUTH_HASH." >&2
+          echo "  The API key is not a login, so the edge is the only access" >&2
+          echo "  control in this topology. Generate a hash with:" >&2
+          echo "    docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'" >&2
+          echo "  then export it — see docs/DEPLOYMENT.md for why it must NOT" >&2
+          echo "  go in .env." >&2
+          exit 1
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
-      # Basic auth is mandatory under this profile: the API key is not a login,
-      # so the edge is the only access control in the topology. Required rather
-      # than defaulted, because a placeholder credential that happens to be
-      # guessable is worse than a refusal to start.
-      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER is required for the tls profile}
-      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH is required for the tls profile}
+      # Optional here, mandatory for the edge to boot (see the command above).
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       # Persists the ACME account and certificates across restarts. Without

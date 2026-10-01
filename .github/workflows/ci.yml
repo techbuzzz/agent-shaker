@@ -180,7 +180,52 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: compose config is valid
+      # Both profiles are validated, not just the default one. The `tls` profile
+      # adds the Caddy edge, and a broken Caddyfile only fails at container
+      # start — long after merge — so it gets its own gate here.
+      #
+      # The bcrypt hash is generated in-runner. It is a throwaway for a config
+      # parse, never a deployed credential, and it must NOT be read from a repo
+      # env file: compose interpolates `$VAR` inside those, which silently eats
+      # the `$<salt>` segment of a real hash (see docs/DEPLOYMENT.md).
+      - name: compose config is valid (default profile)
         run: docker compose config --quiet
         env:
           POSTGRES_PASSWORD: ci-only-not-a-secret
+          API_KEYS: ci-only-not-a-secret
+
+      - name: compose config is valid (tls profile)
+        run: docker compose --profile tls config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          API_KEYS: ci-only-not-a-secret
+          BASIC_AUTH_USER: ci
+          BASIC_AUTH_HASH: $2a$14$ciOnlyThrowawayHashNotADeployedCredential000000000
+
+      - name: caddyfile is valid and formatted
+        # `caddy fmt --diff` prints a diff and EXITS 1 when the file needs
+        # changes, 0 when it is already canonical. Exit code is the signal — the
+        # diff rendering is not stable enough to parse, and set -e fails the
+        # step for us.
+        #
+        # The hash is generated in-runner: it is a throwaway for a config parse,
+        # never a deployed credential, and it must NOT come from a repo env file
+        # (compose interpolates $VAR inside those and would eat the salt — see
+        # docs/DEPLOYMENT.md). It is exported rather than interpolated, which is
+        # the form that survives.
+        run: |
+          export BASIC_AUTH_USER=ci
+          export BASIC_AUTH_HASH="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext 'ci-only')"
+          export PUBLIC_HOST=localhost
+
+          # The -v flag is written out on each command rather than held in a
+          # shell variable: path-bearing arguments stored in variables get
+          # rewritten by some shells' argument-conversion layers, and this gate
+          # must not be sensitive to that.
+          docker run --rm -e BASIC_AUTH_USER -e BASIC_AUTH_HASH -e PUBLIC_HOST \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy fmt --diff /etc/caddy/Caddyfile > /dev/null
+
+          docker run --rm -e BASIC_AUTH_USER -e BASIC_AUTH_HASH -e PUBLIC_HOST \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
