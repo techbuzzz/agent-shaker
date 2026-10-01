@@ -48,7 +48,12 @@ type routeDeps struct {
 	// decided per request from r.TLS / X-Forwarded-Proto; see
 	// middleware.SecurityHeaders. Set only when the fronting proxy does not set
 	// X-Forwarded-Proto.
-	assumeTLS         bool
+	assumeTLS bool
+	// accessLog is the shared access logger. Every route uses the same
+	// instance so the client address is resolved identically everywhere, and
+	// identically to the rate limiter — an operator correlating a 429 with the
+	// request behind it joins on that value. See middleware.LoggerClientIP.
+	accessLog         middleware.Middleware
 	rateLimitShutdown func(context.Context)
 	// auth guards the REST, WebSocket, MCP and A2A surfaces. Probes stay open
 	// because an orchestrator has no credential and locking it out of /healthz
@@ -121,7 +126,7 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	// RequireAPIKey accepts, so they work unchanged once auth is on.
 	mcpHandler := middleware.Apply(
 		http.HandlerFunc(d.mcpHandler.HandleMCP),
-		middleware.Logger,
+		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		d.auth,
 	)
@@ -166,7 +171,7 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	}
 	a2aHandler := middleware.Apply(
 		http.StripPrefix("/a2a/v1", a2aSub),
-		middleware.Logger,
+		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		d.auth,
 	)
@@ -177,19 +182,19 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	// open discovery document is reconnaissance.
 	mux.Handle("GET /.well-known/agent-card.json", middleware.Apply(
 		http.HandlerFunc(d.agentCardHandler.ServeHTTP),
-		middleware.Logger,
+		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		d.auth,
 	))
 	mux.Handle("OPTIONS /.well-known/agent-card.json", middleware.Apply(
 		http.HandlerFunc(d.agentCardHandler.ServeHTTP),
-		middleware.Logger,
+		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 	))
 
 	// REST API — CORS-wrapped + body-size limited + authenticated.
 	apiHandler := middleware.Apply(d.apiRouter(),
-		middleware.Logger,
+		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		middleware.RequestSizeLimit(d.maxBodyBytes),
 		d.auth,

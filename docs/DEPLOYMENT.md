@@ -253,6 +253,24 @@ Verified through the running edge: 600 concurrent requests carrying a rotating
 forged `X-Forwarded-For` are throttled into the same bucket the honest requests
 use, not into fresh ones.
 
+### What the access log shows
+
+The same resolution is applied to logging, and deliberately shares one instance
+across every route so the two agree. An access log whose `remote` field is the
+proxy's address for every line is the one thing an access log cannot be.
+
+Each line carries both:
+
+- `remote` — the client, as the rate limiter sees it. This is the field to
+  group by.
+- `peer` — the socket address. It is the proxy's in this topology, and keeping
+  it means a misconfiguration is diagnosable: if `remote` ever stops varying
+  while `peer` does, `X-Forwarded-For` is not arriving and the edge is not
+  forwarding it.
+
+Joining a `429` to the request that caused it is `remote`, and that join works
+only because both subsystems resolve the same value.
+
 ## A2A discovery
 
 The agent card is served at `/.well-known/agent-card.json` and is reachable

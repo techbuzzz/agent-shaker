@@ -114,25 +114,45 @@ func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWrite
 
 var errNotHijacker = errors.New("middleware: underlying http.ResponseWriter does not implement http.Hijacker")
 
-// Logger middleware logs each HTTP request using slog. The log line carries
-// method, path, status, duration, remote addr, and the request id when present.
-func Logger(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+// Logger is the default access logger. It reports the socket peer, which is
+// the right answer only when nothing proxies this service.
+//
+// Behind a reverse proxy every request arrives from the proxy's own address, so
+// every line reads identically and the log cannot tell you who did what — the
+// one thing an access log exists to answer. Use LoggerClientIP in that case.
+var Logger = LoggerClientIP(false)
 
-		next.ServeHTTP(wrapped, r)
+// LoggerClientIP returns an access logger that reports the client address as
+// the rate limiter resolves it, so the two agree.
+//
+// The two must agree on purpose: an operator correlating a 429 with the request
+// that caused it is joining on the client address, and two different values for
+// the same request makes that join impossible. Both read the rightmost
+// X-Forwarded-For entry for the same reason — see clientIP.
+//
+// Set trustedProxy only when nothing can reach the service except through a
+// proxy you control. Otherwise the header is caller-controlled and the log
+// records whatever the caller felt like sending, which is worse than useless.
+func LoggerClientIP(trustedProxy bool) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
-		slog.InfoContext(r.Context(), "http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"bytes", wrapped.bytes,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"remote", r.RemoteAddr,
-			"request_id", RequestIDFromContext(r.Context()),
-		)
-	})
+			next.ServeHTTP(wrapped, r)
+
+			slog.InfoContext(r.Context(), "http request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", wrapped.statusCode,
+				"bytes", wrapped.bytes,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"remote", clientIP(r, trustedProxy),
+				"peer", r.RemoteAddr,
+				"request_id", RequestIDFromContext(r.Context()),
+			)
+		})
+	}
 }
 
 // RequestSizeLimit middleware limits request body size.

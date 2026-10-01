@@ -316,6 +316,7 @@ func main() {
 		corsOrigins:          corsOrigins,
 		corsAllowCreds:       corsAllowCreds,
 		assumeTLS:            assumeTLS,
+		accessLog:            middleware.LoggerClientIP(trustedProxy),
 		auth:                 authMW,
 		wsAuth:               wsAuthMW,
 		rateLimitShutdown:    rateShutdown,

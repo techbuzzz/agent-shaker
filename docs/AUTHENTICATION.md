@@ -182,6 +182,10 @@ Never edit a key in place on a running container — restart with a different
 - **Logs never contain the key.** The startup line reports only a key count and
   a four-character fingerprint (`DescribeAuthConfig`); rejections log the path,
   method and client IP, never the credential.
+- **The access log identifies the client, not the proxy.** Behind the edge,
+  `remote` is the address the rate limiter resolves (the same value, so a `429`
+  can be joined to the request that caused it) and `peer` is the socket address.
+  See [DEPLOYMENT.md](./DEPLOYMENT.md#what-the-access-log-shows).
 - **Rate limiting** still applies to authenticated requests, keyed by client IP.
   Excluded paths are unchanged: `/ws`, `/healthz`, `/readyz`, `/metrics`.
 

@@ -37,6 +37,7 @@ func a2aTestMux(t *testing.T) http.Handler {
 		obs:              observability.New(),
 		auth:             noAuth,
 		wsAuth:           noAuth,
+		accessLog:        middleware.Logger,
 	}
 
 	mux, err := newServeMux(d)
@@ -155,6 +156,7 @@ func TestA2ARequiresAuthentication(t *testing.T) {
 		obs:              obs,
 		auth:             authMW,
 		wsAuth:           authMW,
+		accessLog:        middleware.Logger,
 	})
 	if err != nil {
 		t.Fatalf("newServeMux: %v", err)
