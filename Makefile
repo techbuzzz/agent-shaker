@@ -29,7 +29,7 @@ GO_FILES   := $(shell find cmd internal tests -name '*.go' 2>/dev/null)
 GO_DIRS    := $(sort $(dir $(GO_FILES)))
 WEB_DIR    := web
 
-.PHONY: help check check-all fmt fmt-check vet lint build run clean \
+.PHONY: help check check-all workflow-lint fmt fmt-check vet lint build run clean \
         test test-race test-integration cover \
         web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \
@@ -53,8 +53,16 @@ check: fmt-check vet test ## Run the full pre-commit gate (fmt, vet, tests)
 
 # The whole gate, including the frontend. `check` stays Go-only so it stays fast
 # enough to run on every save; this is the one to run before pushing.
-check-all: check web-typecheck web-test ## Full gate: Go + frontend typecheck + frontend tests
+check-all: check workflow-lint web-typecheck web-test ## Full gate: Go + workflow schema + frontend typecheck + frontend tests
 	@echo "✓ check-all passed"
+
+# Validates .github/workflows against GitHub's own schema, not just YAML
+# syntax. This has to be runnable outside CI: a workflow that GitHub refuses to
+# dispatch cannot report on its own validity, which is how this repo spent its
+# entire CI history at 0 successful runs while every local check passed.
+workflow-lint: ## Validate the GitHub Actions workflows with actionlint
+	@docker run --rm -v "$(CURDIR):/repo" -w /repo rhysd/actionlint:latest
+	@echo "✓ workflow schema valid"
 
 fmt: ## Format Go source files (normalises to LF)
 	gofmt -w .

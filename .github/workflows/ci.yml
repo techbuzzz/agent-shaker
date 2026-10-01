@@ -20,6 +20,34 @@ jobs:
   backend:
     name: go (build, vet, fmt, race)
     runs-on: ubuntu-latest
+
+    # Service containers are declared at JOB level, never at step level. A
+    # step-level `services:` key is not in the workflow schema: GitHub rejects
+    # the entire file with "Unexpected value 'services'" and the run fails
+    # instantly with zero jobs. That is exactly what happened here — this
+    # workflow had been invalid since it was written, so 21 runs produced 0
+    # successes and not one step ever executed, while every local check passed
+    # and the badge sat red.
+    #
+    # One postgres serves both database-backed steps. They deliberately share
+    # an instance, and the migration step runs FIRST so its emptiness assertion
+    # sees a virgin database and the integration tests run against a schema that
+    # already exists.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mcp_tracker
+          POSTGRES_USER: mcp
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mcp -d mcp_tracker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -49,28 +77,6 @@ jobs:
       - name: unit tests (race detector)
         run: go test -race -count=1 ./...
 
-      # Every currently-tagged integration test needs a live database. The tag
-      # is applied to a package-scoped run so a future -tags=integration file
-      # is picked up without this job silently testing nothing.
-      - name: integration tests (postgres)
-        run: go test -tags=integration -count=1 ./...
-        env:
-          DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
-        services:
-          postgres:
-            image: postgres:16-alpine
-            env:
-              POSTGRES_DB: mcp_tracker
-              POSTGRES_USER: mcp
-              POSTGRES_PASSWORD: secret
-            ports:
-              - 5432:5432
-            options: >-
-              --health-cmd "pg_isready -U mcp -d mcp_tracker"
-              --health-interval 5s
-              --health-timeout 5s
-              --health-retries 10
-
       - name: migrations apply cleanly and leave an empty database
         # Proves the migration chain is internally consistent: every file
         # applies in order against an empty database, and `up` is idempotent.
@@ -82,6 +88,9 @@ jobs:
         # demo rows the UI rendered exactly like real work. Migrations that
         # apply cleanly and migrations that seed data are not the same gate, so
         # this one is asserted rather than assumed.
+        #
+        # Runs before the integration tests so the assertion sees a virgin
+        # database and those tests run against a schema that already exists.
         run: |
           go run ./cmd/migrate -cmd version || true
           go run ./cmd/migrate -cmd up
@@ -103,20 +112,16 @@ jobs:
           echo "fresh database is empty across all four tables"
         env:
           DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
-        services:
-          postgres:
-            image: postgres:16-alpine
-            env:
-              POSTGRES_DB: mcp_tracker
-              POSTGRES_USER: mcp
-              POSTGRES_PASSWORD: secret
-            ports:
-              - 5432:5432
-            options: >-
-              --health-cmd "pg_isready -U mcp -d mcp_tracker"
-              --health-interval 5s
-              --health-timeout 5s
-              --health-retries 10
+
+      # Every currently-tagged integration test needs a live database. The tag
+      # is applied to a package-scoped run so a future -tags=integration file
+      # is picked up without this job silently testing nothing. No such file
+      # exists yet, so today this re-runs the ordinary tests against a migrated
+      # schema — harmless, and it becomes meaningful the moment one is added.
+      - name: integration tests (postgres)
+        run: go test -tags=integration -count=1 ./...
+        env:
+          DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
 
   # ------------------------------------------------------------ shell scripts
   #
@@ -175,10 +180,25 @@ jobs:
 
   # ------------------------------------------------------------------- linting
   lint:
-    name: golangci-lint
+    name: golangci-lint + workflow schema
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # Runs first, before anything else in this job. actionlint validates
+      # against GitHub's own workflow schema, which a YAML parser does not:
+      # this file carried step-level `services:` keys, which parse cleanly and
+      # which GitHub rejects with "Invalid workflow file". The consequence was
+      # invisible locally — every check passed — while 21 runs produced 0
+      # successes and not one step ever executed.
+      #
+      # A check that lives inside a workflow cannot catch a workflow that does
+      # not dispatch, which is exactly why this needs to be a step AND a local
+      # target (`make workflow-lint`).
+      - name: workflow schema (actionlint)
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest
 
       - uses: actions/setup-go@v5
         with:
@@ -231,9 +251,23 @@ jobs:
         # existing. A mis-scoped directory in nuxt.config would silently drop
         # it from the bundle and only fail at runtime, so assert on the output.
         run: |
+          set -euo pipefail
           test -f .output/server/index.mjs || { echo "::error::no Nitro server bundle"; exit 1; }
-          ls .output/server/chunks/routes/ | grep -q 'ws' || { echo "::error::WS proxy route missing from bundle"; exit 1; }
-          ls .output/server/chunks/routes/api/ >/dev/null 2>&1 || { echo "::error::API proxy route missing from bundle"; exit 1; }
+
+          # Glob rather than `ls | grep`: filenames here are generated, so a
+          # fixed path would be a guess, and piping ls breaks on odd characters.
+          shopt -s nullglob
+          ws_routes=(.output/server/chunks/routes/*ws*)
+          if [ "${#ws_routes[@]}" -eq 0 ]; then
+            echo "::error::WS proxy route missing from bundle"
+            exit 1
+          fi
+          api_routes=(.output/server/chunks/routes/api/*)
+          if [ "${#api_routes[@]}" -eq 0 ]; then
+            echo "::error::API proxy route missing from bundle"
+            exit 1
+          fi
+          echo "proxy routes present: ${ws_routes[*]} ${api_routes[*]}"
 
   # -------------------------------------------------- container build sanity
   containers:
@@ -303,7 +337,13 @@ jobs:
         # the form that survives.
         run: |
           export BASIC_AUTH_USER=ci
-          export BASIC_AUTH_HASH="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext 'ci-only')"
+          # Assign then export, rather than `export X="$(...)"`: the latter masks
+          # the command's exit status, so a failed hash generation would export an
+          # empty value and the gate below would validate a Caddyfile configured
+          # with no credential at all — passing for the wrong reason.
+          BASIC_AUTH_HASH="$(docker run --rm caddy:2-alpine caddy hash-password --plaintext 'ci-only')"
+          export BASIC_AUTH_HASH
+          [ -n "$BASIC_AUTH_HASH" ] || { echo "::error::bcrypt hash generation produced nothing"; exit 1; }
           export PUBLIC_HOST=localhost
 
           # The -v flag is written out on each command rather than held in a
