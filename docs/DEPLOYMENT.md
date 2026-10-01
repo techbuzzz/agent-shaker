@@ -447,6 +447,26 @@ curl -s -X POST https://your.host/mcp \
 curl -s -H "Authorization: Bearer $API_KEY" https://your.host/a2a/v1/tasks
 ```
 
+### Two checks that need a credential, not a `curl -o /dev/null`
+
+`/metrics` and `/ws` sit on the edge's human branch, so the basic-auth gate
+answers **before the routing table is consulted**. Unauthenticated they return
+`401` — the gate — regardless of whether the route exists. Probing them without
+a credential therefore tells you nothing, and asserting `404` there fails on a
+perfectly healthy deployment:
+
+```bash
+# 404 — not routed, so metrics are not public. Needs the credential.
+curl -s -o /dev/null -w '%{http_code}\n' -u "$UI_USER:$UI_PASS" https://your.host/metrics
+
+# 426 — the route exists and correctly refuses a non-upgrade GET.
+# 200 instead would mean no route matched and the SPA shell was served,
+# which breaks live updates without ever raising an error.
+curl -s -o /dev/null -w '%{http_code}\n' -u "$UI_USER:$UI_PASS" https://your.host/ws
+```
+
+`scripts/deploy.sh` asserts exactly these values; they are measured, not assumed.
+
 Confirm the agent card advertises your **public** origin, not the container's:
 
 ```bash

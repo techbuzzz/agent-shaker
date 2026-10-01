@@ -367,22 +367,10 @@ check() {
 
 VERIFY_FAILED=0
 
-# If the password was not generated this run we cannot build the Basic header.
-# Skip those checks rather than sending a wrong credential and reporting a
-# misleading 401.
-if [ -z "${BASIC_PLAINTEXT:-}" ]; then
-    warn "no plaintext password in this shell, so the browser-surface checks need your password:"
-    warn "  curl -u '$BASIC_AUTH_USER:...' https://$HOST/api/projects"
-else
-    check "human surface with credentials" 200 \
-        "$(curl -ksS -o /dev/null -w '%{http_code}' -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/api/projects")"
-    check "human surface without credentials" 401 \
-        "$(curl -ksS -o /dev/null -w '%{http_code}' "https://$HOST/api/projects")"
-    check "healthz" 200 \
-        "$(curl -ksS -o /dev/null -w '%{http_code}' -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/healthz")"
-fi
+# --- machine surface: API key, no basic auth ---------------------------------
+# These are on the edge's machine branch, so they are checkable whether or not
+# the perimeter password is available in this shell.
 
-# Machine surface: API key, no basic auth.
 check "agent card with API key" 200 \
     "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $API_KEYS" \
         "https://$HOST/.well-known/agent-card.json")"
@@ -407,25 +395,66 @@ check "MCP initialize" 200 \
         -H "Authorization: Bearer $API_KEYS" -H 'Content-Type: application/json' \
         -d "$MCP_INIT" "https://$HOST/mcp")"
 
-check "metrics is not public" 404 \
-    "$(curl -ksS -o /dev/null -w '%{http_code}' "https://$HOST/metrics")"
+# --- human surface: basic auth at the edge ------------------------------------
+#
+# These paths sit on the edge's human branch, so the gate answers FIRST. That
+# detail decides how they have to be checked:
+#
+#   * /api/projects unauthenticated is meant to be 401 — that is the gate.
+#   * /metrics and /ws are NOT meant to be reachable at all, but unauthenticated
+#     they return the same 401 before routing is ever consulted. Asserting 404
+#     there without a credential would fail on a perfectly healthy deployment.
+#
+# So both are checked WITH a credential, where the answer reflects the routing
+# table rather than the gate.
 
-# The live-update feed. A missing /ws route is invisible from the UI — it simply
-# never updates — so assert the route exists rather than serving the SPA shell.
-# A plain GET cannot complete the upgrade, so anything other than an HTML page
-# means the Nitro route is present and proxying.
-WS_BODY="$(curl -ksS --max-time 5 "https://$HOST/ws" 2>/dev/null || true)"
-case "$WS_BODY" in
-    *"<html"*|*"<!DOCTYPE"*)
-        warn "/ws returned the SPA shell — the WebSocket route is missing, so live"
-        warn "  updates will silently never arrive. Check that web/server/routes/ws.ts"
-        warn "  is present in the running image."
-        VERIFY_FAILED=1
-        ;;
-    *)
-        ok "/ws is routed (live updates will work)"
-        ;;
-esac
+if [ -z "${BASIC_PLAINTEXT:-}" ]; then
+    warn "the perimeter password is not in this shell, so the human-surface checks"
+    warn "  below were skipped. Run them yourself once:"
+    warn "  curl -u '$BASIC_AUTH_USER:...' https://$HOST/api/projects"
+    warn "  curl -u '$BASIC_AUTH_USER:...' https://$HOST/metrics   # expect 404"
+    warn "  curl -u '$BASIC_AUTH_USER:...' https://$HOST/ws       # expect 426"
+else
+    check "human surface with credentials" 200 \
+        "$(curl -ksS -o /dev/null -w '%{http_code}' -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/api/projects")"
+    check "human surface without credentials" 401 \
+        "$(curl -ksS -o /dev/null -w '%{http_code}' "https://$HOST/api/projects")"
+    check "healthz" 200 \
+        "$(curl -ksS -o /dev/null -w '%{http_code}' -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/healthz")"
+
+    # Prometheus metrics at a public origin are free reconnaissance. Authenticated
+    # 404 proves the path is not routed even for a caller the edge admits.
+    check "metrics is not exposed" 404 \
+        "$(curl -ksS -o /dev/null -w '%{http_code}' -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/metrics")"
+
+    # A missing /ws route is invisible from the UI — it never errors, it simply
+    # stops updating — so assert the route is there. The discriminator is the
+    # status code, not the body:
+    #
+    #   426  the Nitro route exists and correctly refuses a non-upgrade GET
+    #   200  no route matched, so the SPA shell was served instead
+    #   000  nothing answered at all
+    WS_CODE="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 \
+        -u "$BASIC_AUTH_USER:$BASIC_PLAINTEXT" "https://$HOST/ws" 2>/dev/null || true)"
+    case "$WS_CODE" in
+        426)
+            ok "/ws is routed -> 426 Upgrade Required (live updates will work)"
+            ;;
+        200|301|302)
+            warn "/ws returned $WS_CODE, which is the SPA shell — the WebSocket"
+            warn "  route is missing, so live updates will silently never arrive."
+            warn "  Check that web/server/routes/ws.ts is in the running image."
+            VERIFY_FAILED=1
+            ;;
+        000|'')
+            warn "/ws could not be reached (curl status '$WS_CODE')"
+            VERIFY_FAILED=1
+            ;;
+        *)
+            ok "/ws -> $WS_CODE (a real route refused the non-upgrade GET)"
+            ;;
+    esac
+fi
 
 # ------------------------------------------------------------------ backups
 
