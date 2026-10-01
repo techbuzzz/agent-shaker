@@ -39,6 +39,21 @@ either enable that profile or put your own reverse proxy in front and give
 ## Quick start (TLS)
 
 ```bash
+make deploy HOST=agent-shaker.example.com
+```
+
+That is the whole procedure. `scripts/deploy.sh` checks the ports, resolves
+secrets (prompting, or generating with `GENERATE=1`), builds, starts, waits for
+the certificate, and then verifies the live public origin — the agent card's
+advertised URL, an MCP `initialize`, that `/metrics` is 404, that the human
+surface rejects an unauthenticated request, and that the WebSocket route is
+present rather than silently falling through to the SPA shell. It installs a
+daily backup timer and prints the URLs.
+
+Read [`scripts/deploy.sh`](../scripts/deploy.sh) before running it if you want to
+know exactly what it touches. The steps it performs are, equivalently:
+
+```bash
 # 1. Required configuration
 cp .env.example .env
 $EDITOR .env          # POSTGRES_PASSWORD, API_KEYS, PUBLIC_HOST
@@ -78,6 +93,32 @@ docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
 ```
 
 **See "Do not put the bcrypt hash in `.env`" below before you fill it in.**
+
+## What the deploy script decides for you
+
+Three choices are worth stating, because each one exists to avoid a failure that
+looks like something else.
+
+**`BASIC_AUTH_HASH` never touches `.env`.** The hash is generated inside the
+script, held in a shell variable, and exported for the `docker compose` call
+only. Shell variables take precedence over `.env`, so this composes with a
+populated `.env` without the interpolation corruption described below.
+
+**Generated passwords are hex.** `POSTGRES_PASSWORD` is interpolated into
+`postgres://user:PASSWORD@postgres:5432/db`. An alphabet containing `/`, `@`,
+`:` or `#` produces a DSN that parses as a different host or a different
+database, and that surfaces as a connection error rather than as a bad password.
+`openssl rand -hex 32` cannot produce any of them. `API_KEYS` travels in a
+header and has no such constraint, but hex keeps it comma-safe for rotation.
+
+**The basic-auth password is prompted for, not read from `.env`.** It is a
+login, so it should be one the operator chose. It is typed without echo, and
+cleared from memory by an exit trap. Only the hash survives, and only in the
+process environment.
+
+Generate everything non-interactively on a throwaway host with `GENERATE=1`;
+generated secrets are printed exactly once, because there is no recovery path
+for a lost API key.
 
 ## Do not put the bcrypt hash in `.env`
 

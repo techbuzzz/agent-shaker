@@ -36,7 +36,7 @@ WEB_DIR    := web
         db-backup db-backups db-restore \
         docker-build docker-up docker-down docker-logs docker-config \
         caddy-validate caddy-fmt caddy-fmt-check \
-        edge-up edge-down \
+        edge-up edge-down deploy \
         dev demo deps
 
 help: ## Show this help message
@@ -272,6 +272,14 @@ edge-up: ## Start the stack with the TLS edge (requires exported BASIC_AUTH_USER
 
 edge-down: ## Stop the TLS-edge stack and remove its volumes
 	docker compose --profile tls down -v
+
+# The full first-time bootstrap for a real host: checks the ports, resolves and
+# records secrets, builds, starts, then verifies the live public origin. The
+# script rather than a Makefile recipe because it prompts, loops and prints a
+# report — all of which read as noise in a stack of shell lines.
+deploy: ## Bootstrap the production stack on this host. HOST=example.com [GENERATE=1]
+	@test -n "$(HOST)" || { echo "usage: make deploy HOST=example.com"; exit 2; }
+	bash scripts/deploy.sh --host $(HOST) $(if $(GENERATE),--generate,)
 
 docker-down: ## Stop the stack
 	docker compose down
