@@ -139,6 +139,12 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
+      - name: unit tests
+        # The MCP setup generator is the one place where a regression would
+        # write a credential into a file that gets committed to a customer's
+        # repository, so it is asserted directly rather than left to review.
+        run: npm test
+
       - name: build
         run: npm run build
 

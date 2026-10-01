@@ -12,7 +12,9 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
-    "typecheck": "nuxt typecheck"
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@nuxt/ui": "^3.0.0",
@@ -30,6 +32,7 @@
     "@types/dompurify": "^3.0.5",
     "@types/node": "^22.20.4",
     "typescript": "^5.7.0",
+    "vitest": "^3.2.7",
     "vue-tsc": "^2.2.0"
   }
 }

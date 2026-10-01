@@ -22,11 +22,16 @@ LDFLAGS    := -s -w \
               -X main.buildTime=$(BUILD_TIME)
 
 GO_FILES   := $(shell find cmd internal tests -name '*.go' 2>/dev/null)
+# The directories holding them, de-duplicated. `$(dir $(GO_FILES))` alone emits
+# one entry per *file*, so the argument list grows with the codebase and a
+# 100-file tree passes the same 20 directories fifty times over. `sort` also
+# makes the gofmt invocation stable, which keeps CI logs readable.
+GO_DIRS    := $(sort $(dir $(GO_FILES)))
 WEB_DIR    := web
 
-.PHONY: help check fmt fmt-check vet lint build run clean \
+.PHONY: help check check-all fmt fmt-check vet lint build run clean \
         test test-race test-integration cover \
-        web-install web-build web-typecheck web-dev \
+        web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \
         docker-build docker-up docker-down docker-logs docker-config \
         caddy-validate caddy-fmt caddy-fmt-check \
@@ -45,11 +50,16 @@ help: ## Show this help message
 check: fmt-check vet test ## Run the full pre-commit gate (fmt, vet, tests)
 	@echo "✓ check passed"
 
+# The whole gate, including the frontend. `check` stays Go-only so it stays fast
+# enough to run on every save; this is the one to run before pushing.
+check-all: check web-typecheck web-test ## Full gate: Go + frontend typecheck + frontend tests
+	@echo "✓ check-all passed"
+
 fmt: ## Format Go source files (normalises to LF)
 	gofmt -w .
 
 fmt-check: ## Fail if any Go file needs gofmt
-	@out=$$(gofmt -l $(dir $(GO_FILES))); \
+	@out=$$(gofmt -l $(GO_DIRS)); \
 	if [ -n "$$out" ]; then \
 		echo "✗ files need gofmt:"; echo "$$out"; exit 1; \
 	fi
@@ -99,6 +109,9 @@ web-build: web-install ## Build the Nuxt SSR bundle
 
 web-typecheck: web-install ## Typecheck the frontend (gates CI)
 	cd $(WEB_DIR) && npm run typecheck
+
+web-test: web-install ## Run the frontend unit tests (gates CI)
+	cd $(WEB_DIR) && npm test
 
 web-dev: web-install ## Run the Nuxt dev server with HMR
 	cd $(WEB_DIR) && npm run dev
