@@ -1,1 +1,0 @@
-import{V as e}from"./BvhBCthK.js";var t=()=>e(`color-mode`).value;export{t};

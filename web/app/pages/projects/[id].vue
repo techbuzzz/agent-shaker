@@ -383,7 +383,7 @@ const currentAgentIsPM = computed(() => {
           </div>
           <EmptyState v-if="!standups?.length" icon="i-lucide-calendar-days" title="No standups yet" />
           <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <StandupCard v-for="s in standups" :key="s.id" :standup="s" :agent-name="agentsById[s.agent_id]" @delete="(s) => api.deleteStandup(s.id).then(refreshStandups)" />
+            <StandupCard v-for="s in standups" :key="s.id" :standup="s" :agent-name="agentsById[s.agent_id]" @delete="(s) => api.deleteStandup(s.id).then(() => refreshStandups())" />
           </div>
         </div>
       </template>
@@ -392,7 +392,7 @@ const currentAgentIsPM = computed(() => {
     <!-- Modals -->
     <AgentFormModal v-model="showAgent" :project-id="projectId" :initial="editingAgent" @submit="editingAgent ? api.updateAgentStatus(editingAgent.id, $event.status || 'active') : handleCreateAgent($event)" />
     <TaskFormModal v-model="showTask" :project-id="projectId" :agents="agentsForSelect" :milestones="milestones ?? []" :initial="editingTask" @submit="editingTask ? handleUpdateTask(editingTask.id, $event) : handleCreateTask($event)" />
-    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" @submit="editingContext ? api.updateContext(editingContext.id, $event).then(refreshContexts) : handleCreateContext($event)" />
+    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" @submit="editingContext ? api.updateContext(editingContext.id, $event).then(() => refreshContexts()) : handleCreateContext($event)" />
     <StandupFormModal v-model="showStandup" :project-id="projectId" :agents="agentsForSelect" @submit="handleCreateStandup" />
 
     <MilestoneFormModal

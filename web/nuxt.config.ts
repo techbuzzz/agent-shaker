@@ -38,11 +38,21 @@ export default defineNuxtConfig({
 
   css: ['~/assets/css/main.css'],
 
-  // Backend defaults — overridden by NUXT_PUBLIC_API_BASE / NUXT_PUBLIC_WS_BASE at runtime.
+  // Backend wiring.
   runtimeConfig: {
+    // Server-only. Consumed by server/routes/api/[...path].ts to forward /api/*
+    // to the Go backend. Deliberately NOT under `public`, so the internal
+    // hostname (e.g. http://mcp-server:8080) is never shipped to the browser.
+    // Set at deploy time via NUXT_API_UPSTREAM.
+    apiUpstream: process.env.NUXT_API_UPSTREAM || 'http://127.0.0.1:8080',
     public: {
-      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8080',
-      wsBase: process.env.NUXT_PUBLIC_WS_BASE || 'ws://localhost:8080'
+      // Leave EMPTY in production. An empty value makes useServerUrl resolve a
+      // same-origin `/api` and `/ws`, both served by the Nitro proxy. That
+      // keeps the deployment on one origin — no CORS, no cross-origin cookies.
+      // Dev does not need these either: nitro.devProxy below already forwards
+      // to localhost:8080.
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '',
+      wsBase: process.env.NUXT_PUBLIC_WS_BASE || ''
     }
   },
 

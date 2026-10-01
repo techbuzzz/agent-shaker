@@ -2,44 +2,40 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
+
+# Cancel superseded runs on the same ref — saves CI minutes on rapid pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.27'
+  NODE_VERSION: '22'
 
 jobs:
-  test:
-    name: go test (ubuntu)
+  # ---------------------------------------------------------------- Go backend
+  backend:
+    name: go (build, vet, fmt, race)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_DB: mcp_tracker
-          POSTGRES_USER: mcp
-          POSTGRES_PASSWORD: secret
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mcp"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-        env:
-          DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
-
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: gofmt
+        # .gitattributes pins text files to LF, so this is stable across
+        # runner platforms. Runs against ./cmd and ./internal only so that
+      # generated or vendored trees cannot break the gate.
         run: |
-          out=$(gofmt -l .)
+          out=$(gofmt -l ./cmd ./internal ./tests)
           if [ -n "$out" ]; then
-            echo "Files needing gofmt:"
+            echo "::error::Files need gofmt:"
             echo "$out"
             exit 1
           fi
@@ -50,28 +46,141 @@ jobs:
       - name: go build
         run: go build ./...
 
-      - name: unit tests with race detector
+      - name: unit tests (race detector)
         run: go test -race -count=1 ./...
 
-      - name: apply migrations
-        if: always()
-        run: go run ./cmd/migrate -cmd up
-
-      - name: integration tests
-        if: always()
+      # Every currently-tagged integration test needs a live database. The tag
+      # is applied to a package-scoped run so a future -tags=integration file
+      # is picked up without this job silently testing nothing.
+      - name: integration tests (postgres)
         run: go test -tags=integration -count=1 ./...
+        env:
+          DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
+        services:
+          postgres:
+            image: postgres:16-alpine
+            env:
+              POSTGRES_DB: mcp_tracker
+              POSTGRES_USER: mcp
+              POSTGRES_PASSWORD: secret
+            ports:
+              - 5432:5432
+            options: >-
+              --health-cmd "pg_isready -U mcp -d mcp_tracker"
+              --health-interval 5s
+              --health-timeout 5s
+              --health-retries 10
 
+      - name: migrations apply cleanly
+        # Proves the migration chain is internally consistent: every file
+        # applies in order against an empty database, and `up` is idempotent.
+        run: |
+          go run ./cmd/migrate -cmd version || true
+          go run ./cmd/migrate -cmd up
+          go run ./cmd/migrate -cmd up   # second run must be a no-change
+        env:
+          DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
+        services:
+          postgres:
+            image: postgres:16-alpine
+            env:
+              POSTGRES_DB: mcp_tracker
+              POSTGRES_USER: mcp
+              POSTGRES_PASSWORD: secret
+            ports:
+              - 5432:5432
+            options: >-
+              --health-cmd "pg_isready -U mcp -d mcp_tracker"
+              --health-interval 5s
+              --health-timeout 5s
+              --health-retries 10
+
+  # ------------------------------------------------------------------- linting
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: run linter
-        uses: golangci/golangci-lint-action@v6
+
+      # v2 is required for Go 1.26+ module graph handling; the pinned v1 line
+      # cannot parse the current go directive.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v1.61
+          version: v2.1
           args: --timeout=5m
+
+  # --------------------------------------------------------- Nuxt 4 frontend
+  frontend:
+    name: nuxt (build + typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install
+        # `ci` not `install`: it honours the lockfile exactly and fails if
+        # package.json and package-lock.json have drifted apart.
+        run: npm ci --no-audit --no-fund
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: build
+        run: npm run build
+
+      - name: verify Nitro proxy routes were emitted
+        # The production topology depends on server/routes/api/[...path].ts
+        # existing. A mis-scoped directory in nuxt.config would silently drop
+        # it from the bundle and only fail at runtime, so assert on the output.
+        run: |
+          test -f .output/server/index.mjs || { echo "::error::no Nitro server bundle"; exit 1; }
+          ls .output/server/chunks/routes/ | grep -q 'ws' || { echo "::error::WS proxy route missing from bundle"; exit 1; }
+          ls .output/server/chunks/routes/api/ >/dev/null 2>&1 || { echo "::error::API proxy route missing from bundle"; exit 1; }
+
+  # -------------------------------------------------- container build sanity
+  containers:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build Go image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: agent-shaker-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: build Nuxt image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: false
+          tags: agent-shaker-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: compose config is valid
+        run: docker compose config --quiet
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret

@@ -1,48 +1,134 @@
+# Production topology for Agent Shaker.
+#
+#   browser ──► web (Nuxt SSR, :3000) ──► /api,/ws ──► mcp-server (:8080) ──► postgres
+#                     ▲                        (Nitro proxy)                     │
+#                     └──────────────── single public origin ───────────────────┘
+#
+# Why this shape:
+#   * The browser only ever talks to ONE origin (:3000). `useServerUrl` defaults
+#     to an empty server URL, which resolves apiBase to `/api` and wsBase to
+#     `/ws`; both are proxied server-side to the Go service. That means no CORS
+#     negotiation, no third-party cookies, and no internal hostname leak.
+#   * `mcp-server` publishes NO host port. It is only reachable on the internal
+#     compose network. Put TLS termination in front of `web`.
+#   * Migrations run as a one-shot job before the API starts, so a fresh volume
+#     converges without a manual step.
+#
+# Required env (see .env.example):
+#   POSTGRES_PASSWORD  — required; compose refuses to start without it.
+name: agent-shaker
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: mcp_tracker
-      POSTGRES_USER: mcp
-      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ${POSTGRES_DB:-mcp_tracker}
+      POSTGRES_USER: ${POSTGRES_USER:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # Deterministic collation so ORDER BY does not change between hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mcp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcp} -d ${POSTGRES_DB:-mcp_tracker}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+    # No published port by default. Uncomment for local `psql` access.
+    # ports:
+    #   - "127.0.0.1:5433:5432"
+    networks: [internal]
 
-  mcp-server:
-    build: .
-    ports:
-      - "8080:8080"
+  # One-shot: apply migrations, then exit. `service_completed_successfully`
+  # gates the API on it, so the API never starts against a stale schema.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./migrate", "-cmd", "up", "-dir", "migrations"]
     environment:
-      DATABASE_URL: postgres://mcp:secret@postgres:5432/mcp_tracker?sslmode=disable
-      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-mcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_tracker}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+    networks: [internal]
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_tracker}?sslmode=disable
+      PORT: "8080"
+      ENV: production
+      # Single-origin deployment: the browser only ever sends requests to the
+      # Nuxt origin, so the Go service needs no cross-origin allow-list. The
+      # Nitro proxy is server-to-server and CORS does not apply.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # WebSocket origin check. Must list the public origin that serves the UI.
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Set true only when a proxy in front terminates TLS, so HSTS is honest.
+      TLS_TERMINATED: ${TLS_TERMINATED:-false}
+      # Compose already runs migrations as the one-shot `migrate` job above;
+      # running them again in-process would mean two processes racing on the
+      # same schema. Disable it here explicitly.
+      RUN_MIGRATIONS_ON_START: "false"
+      TASK_STORE: ${TASK_STORE:-postgres}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-200}
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-10485760}
+      # Tracing stays off unless an OTLP endpoint is supplied.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.05}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8080"
+    networks: [internal]
 
   web:
     build:
       context: ./web
       dockerfile: Dockerfile
-    ports:
-      - "80:3000"
+    restart: unless-stopped
     environment:
-      # Internal proxy target (the MCP backend is reachable at this hostname inside the compose network)
-      NUXT_API_UPSTREAM: "http://mcp-server:8080/api"
-      NUXT_API_UPSTREAM_WS: "ws://mcp-server:8080"
-      NUXT_PUBLIC_API_BASE: "http://mcp-server:8080"
-      NUXT_PUBLIC_WS_BASE: "ws://mcp-server:8080"
+      NODE_ENV: production
+      PORT: "3000"
+      NITRO_HOST: "0.0.0.0"
+      NITRO_PORT: "3000"
+      # Server-only upstream for the Nitro proxy. Never exposed to the browser.
+      NUXT_API_UPSTREAM: "http://mcp-server:8080"
+      # Public bases stay EMPTY so the SPA uses same-origin /api and /ws.
+      NUXT_PUBLIC_API_BASE: ""
+      NUXT_PUBLIC_WS_BASE: ""
     depends_on:
       mcp-server:
-        condition: service_started
-    restart: unless-stopped
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
 
 volumes:
   postgres_data:
+
+networks:
+  internal:
+    driver: bridge

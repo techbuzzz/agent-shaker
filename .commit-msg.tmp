@@ -1,0 +1,67 @@
+fix(deploy): make the production topology actually buildable and runnable
+
+The repo could not be deployed as it stood. These are the defects that
+blocked it, all now fixed and verified.
+
+Blocking:
+* cmd/server/routes.go and internal/a2a/server/pathvalue.go were never
+  committed. The .gitignore pattern "server" (unanchored) matched every
+  directory named server at any depth, so git silently refused to add NEW
+  files under cmd/server/ and internal/a2a/server/. main.go calls
+  newServeMux(), which only exists in routes.go, so a fresh clone of develop
+  did not compile. Anchored the pattern and committed both files.
+* web/server/ (the Nitro proxy layer) was ignored by the same rule, and the
+  /api proxy route did not exist at all. Added server/routes/api/[...path].ts
+  and server/routes/healthz.ts; server/routes/ws.ts existed on disk but was
+  untracked.
+* web/Dockerfile pinned node:20 while Nuxt 4.5 needs the trustedFunctions
+  global (Node >= 22.12). The image build failed with
+  "TypeError: trustedFunctions.difference is not a function". Bumped to
+  node:22 and raised the engines floor to match.
+* Root Dockerfile built the frontend into web/dist, which Nuxt 4 SSR does not
+  produce, and used golang:1.24 against a go 1.26 module. Rewritten as a
+  Go-only build (golang:1.27, non-root, static binary, migrations, healthcheck).
+* docker-compose published the Go service on a host port and pointed the
+  browser at the internal hostname mcp-server. Rewritten as a single-origin
+  stack: Nuxt SSR (:3000) is the only public port, /api and /ws are proxied
+  server-side, and migrations run as a one-shot job gated by
+  service_completed_successfully.
+
+Correctness:
+* ws.ts used peer.on(), which does not exist on crossws Peer. The proxy threw
+  on the first client frame. Rewritten against the real hook API
+  (open/message/close) with upstream cleanup in the close hook.
+* useRealtime connect() took a parameter named projectId, shadowing the ref, so
+  projectId.value was written to a string primitive.
+* layouts/default.vue destructured url from useApi(), which does not expose it;
+  the watcher was dead and url.value would throw on a failed health check.
+* useToastBus derived ToastInput via Parameters<ReturnType<typeof useToast>>,
+  which collapses to unknown. It also passed "timeout", renamed to "duration"
+  in Nuxt UI v3, so the intended 4s was silently ignored.
+* useServerUrl hardcoded localhost:8080 as the default, which breaks any
+  real deployment. Empty now means same-origin, routed through the proxy.
+* isTLS was hardcoded false, so HSTS was never advertised. Driven by
+  TLS_TERMINATED.
+* The production sslmode=disable guard also fired on private hosts, which
+  made the documented compose topology unbootable. Now scoped to public hosts,
+  with a table test.
+* The SPA catch-all logged on every unmatched request.
+
+Infrastructure:
+* Added .gitattributes pinning text to LF. Without it a Windows checkout
+  rewrote 50+ Go files to CRLF and gofmt -l flagged the entire tree.
+* Added .dockerignore at the root and in web/; the build context was shipping
+  node_modules.
+* ci.yml triggered only on main, ran a duplicate "env:" key that clobbered the
+  Postgres credentials, tested a -tags=integration build with no tagged tests,
+  pinned golangci-lint v1.61 against a Go 1.26 module, and never built the
+  frontend. Rewritten: develop trigger, frontend and container jobs, v2 lint.
+* Untracked web/_out_old/ (70+ stale build artefacts), 15 dot-prefixed .ps1
+  helpers, and bin/*.log.
+* .env.example documented 2 of ~15 env vars. Completed.
+* Makefile: lint swallowed its own failures with || true, air referenced a
+  missing .air.toml, and there were no frontend targets. Rewritten.
+
+Verified: gofmt -l clean, go build ./... 0, go vet ./... 0, go test ./... 5/5
+packages, nuxt typecheck exit 0, both Docker images build, docker compose config
+valid.

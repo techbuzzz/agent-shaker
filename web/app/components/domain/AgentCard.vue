@@ -14,7 +14,7 @@ const statusColor = computed(() => {
 </script>
 
 <template>
-  <UCard :ui="{ body: { padding: 'p-5' } }">
+  <UCard :ui="{ body: 'p-5' }">
     <div class="flex items-start justify-between gap-3">
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">

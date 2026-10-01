@@ -12,7 +12,7 @@ const { truncate, relativeTime } = useFormatters()
 </script>
 
 <template>
-  <UCard :ui="{ body: { padding: 'p-5' } }" class="hover:ring-1 hover:ring-primary/30 transition-shadow cursor-pointer" @click="$emit('view', context)">
+  <UCard :ui="{ body: 'p-5' }" class="hover:ring-1 hover:ring-primary/30 transition-shadow cursor-pointer" @click="$emit('view', context)">
     <div class="flex items-start justify-between gap-3">
       <div class="flex-1 min-w-0">
         <h3 class="font-semibold truncate">{{ context.title }}</h3>

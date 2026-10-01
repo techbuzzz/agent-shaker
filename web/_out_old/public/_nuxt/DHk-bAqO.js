@@ -1,1 +1,0 @@
-import{b as e,k as t,mt as n,xt as r}from"./Car86Ubo.js";var i={class:`min-h-screen bg-default text-default`},a=t({__name:`blank`,setup(t){return(t,a)=>(n(),e(`div`,i,[r(t.$slots,`default`)]))}});export{a as default};

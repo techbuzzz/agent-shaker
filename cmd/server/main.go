@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -25,6 +26,20 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
+// Build metadata, injected at link time. See the Dockerfile ARG block and the
+// `build` target in the Makefile:
+//
+//	go build -ldflags "-X main.version=... -X main.commit=... -X main.buildTime=..."
+//
+// The defaults are deliberately honest: a plain `go build ./...` produces a
+// binary that reports itself as a development build rather than claiming a
+// release version.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
 	// Root context for startup. The server lifecycle owns its own context.
 	ctx := context.Background()
@@ -33,7 +48,7 @@ func main() {
 	// is available when NewLogger is constructed (otherwise log lines would
 	// lack trace_id correlation). InitTracing is a no-op when
 	// OTEL_EXPORTER_OTLP_ENDPOINT is unset.
-	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", "0.1.0")
+	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", version)
 	if err != nil {
 		slog.Error("tracing init failed", "error", err)
 		os.Exit(1)
@@ -49,6 +64,10 @@ func main() {
 	// Structured logging is the default for everything in this binary.
 	slog.SetDefault(observability.NewLogger())
 
+	// Emit build info once at boot so any log aggregator can answer "which
+	// commit is this container" without an extra endpoint call.
+	slog.Info("build", "version", version, "commit", commit, "built", buildTime, "go", runtime.Version())
+
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -56,10 +75,21 @@ func main() {
 	}
 
 	// Production safety guard: refuse to boot when sslmode=disable would
-	// silently send credentials and data over an unencrypted connection.
+	// silently send credentials and data over a link that leaves the host.
+	//
+	// The distinction that matters is whether the database is reachable only
+	// over a private/loopback path. `docker compose` puts Postgres on an
+	// internal bridge network where sslmode=disable is correct and safe, while
+	// a managed instance on a public hostname with sslmode=disable is a real
+	// credential leak. So the guard fires only on a public host.
 	if os.Getenv("ENV") == "production" && strings.Contains(databaseURL, "sslmode=disable") {
-		slog.Error("refusing to start in production with sslmode=disable")
-		os.Exit(2)
+		if host := databaseHost(databaseURL); !isPrivateHost(host) {
+			slog.Error("refusing to start: production with sslmode=disable against a non-private database host",
+				"host", host,
+				"hint", "use sslmode=require/verify-full, or point DATABASE_URL at a private host")
+			os.Exit(2)
+		}
+		slog.Info("production with sslmode=disable accepted: database host is private", "host", databaseHost(databaseURL))
 	}
 
 	// Connect to database. Pool tuning happens inside NewDB; see
@@ -175,6 +205,13 @@ func main() {
 	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
 	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
 
+	// TLS normally terminates at a reverse proxy in front of this service.
+	// This flag does not enable TLS — it tells SecurityHeaders whether the
+	// client-facing hop is encrypted, so HSTS is only advertised when the
+	// browser will actually honour it. Behind a TLS-terminating proxy, set
+	// TLS_TERMINATED=true.
+	isTLS := os.Getenv("TLS_TERMINATED") == "true"
+
 	deps := routeDeps{
 		db:                   db,
 		hub:                  hub,
@@ -197,7 +234,7 @@ func main() {
 		maxBodyBytes:         parseMaxBodyBytes(),
 		corsOrigins:          corsOrigins,
 		corsAllowCreds:       corsAllowCreds,
-		isTLS:                false,
+		isTLS:                isTLS,
 		rateLimitShutdown:    rateShutdown,
 	}
 

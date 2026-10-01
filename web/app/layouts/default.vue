@@ -1,7 +1,11 @@
 <script setup lang="ts">
 // Default layout: vertical sidebar + main column with optional sticky header.
 const route = useRoute()
-const { url, isConnected, checkHealth } = useApi()
+// `url` lives on useServerUrl (it is the server-URL cookie), not on useApi.
+// Destructuring it from useApi used to yield undefined, which made the watcher
+// below a no-op and made `url.value` throw whenever the health check failed.
+const { url } = useServerUrl()
+const { isConnected, checkHealth } = useApi()
 const toast = useToastBus()
 
 // Run a health check on first mount and whenever the URL changes.

@@ -8,7 +8,7 @@ const { formatDate, truncate } = useFormatters()
 </script>
 
 <template>
-  <UCard class="hover:ring-1 hover:ring-primary/30 transition-shadow group" :ui="{ body: { padding: 'p-5' } }">
+  <UCard class="hover:ring-1 hover:ring-primary/30 transition-shadow group" :ui="{ body: 'p-5' }">
     <div class="flex items-start justify-between gap-3 mb-2">
       <div class="flex-1 min-w-0">
         <NuxtLink :to="`/projects/${project.id}`" class="block">

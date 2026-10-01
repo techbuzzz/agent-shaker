@@ -63,4 +63,18 @@ export type WsEvent =
   | GlobalContextDeletedEvent
   | HeartbeatEvent
 
-export type WsEventHandler<E extends WsEvent = WsEvent> = (event: E) => void
+/**
+ * Narrow the union to the single variant carrying a given `type` tag.
+ *
+ * This is what makes `on('task_update', e => e.payload.task.title)` typecheck:
+ * the handler is generic over the event *name*, so `Extract` resolves the
+ * payload to `{ task: Task; action: ... }` instead of the whole union.
+ */
+export type WsEventFor<T extends WsEventType> = Extract<WsEvent, { type: T }>
+
+/**
+ * A listener for a specific event name, or for any event when `T` is the full
+ * `WsEventType` set (the `'*'` wildcard case).
+ */
+export type WsEventHandler<T extends WsEventType = WsEventType> =
+  (event: WsEventFor<T>) => void

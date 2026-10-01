@@ -1,1 +1,0 @@
-import{H as e}from"./BvhBCthK.js";import{g as t}from"#entry";var n=t(`settings`,()=>{let t=e(`ui:table-density`,{default:()=>`comfortable`,sameSite:`lax`}),n=e(`ui:last-project`,{default:()=>null,sameSite:`lax`});function r(e){t.value=e}function i(e){n.value=e}return{tableDensity:t,lastProjectId:n,setDensity:r,rememberProject:i}});export{n as t};
