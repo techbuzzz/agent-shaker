@@ -58,8 +58,9 @@ func (h *ArtifactHandler) ListArtifacts(w http.ResponseWriter, r *http.Request) 
 	}
 
 	artifacts := make([]models.Artifact, len(contexts))
+	baseURL := resolvePublicBaseURL(h.baseURL, r)
 	for i, ctx := range contexts {
-		artifacts[i] = h.contextToArtifact(&ctx)
+		artifacts[i] = h.contextToArtifact(&ctx, baseURL)
 	}
 
 	resp := models.ArtifactListResponse{
@@ -96,19 +97,23 @@ func (h *ArtifactHandler) GetArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artifact := h.contextToArtifact(ctx)
+	artifact := h.contextToArtifact(ctx, resolvePublicBaseURL(h.baseURL, r))
 	h.writeJSON(w, artifact, http.StatusOK)
 }
 
-// contextToArtifact converts a context to an A2A artifact
-func (h *ArtifactHandler) contextToArtifact(ctx *ContextData) models.Artifact {
+// contextToArtifact converts a context to an A2A artifact.
+//
+// baseURL is the public origin already resolved for the current request, so the
+// advertised artifact URL is one a peer agent can actually fetch. See
+// resolvePublicBaseURL.
+func (h *ArtifactHandler) contextToArtifact(ctx *ContextData, baseURL string) models.Artifact {
 	return models.Artifact{
 		ID:          ctx.ID,
 		Name:        ctx.Name,
 		Type:        "markdown",
 		ContentType: "text/markdown",
 		Content:     ctx.Content,
-		URL:         h.baseURL + "/a2a/v1/artifacts/" + ctx.ID,
+		URL:         baseURL + "/a2a/v1/artifacts/" + ctx.ID,
 		Size:        int64(len(ctx.Content)),
 		CreatedAt:   ctx.CreatedAt,
 		Metadata: map[string]any{

@@ -1,4 +1,5 @@
 import { send } from 'h3'
+import { resolveUpstreamAuth } from '../../utils/upstreamAuth'
 
 /**
  * Server-side reverse proxy for the Go MCP backend.
@@ -25,15 +26,22 @@ export default defineEventHandler(async (event) => {
   const target = `${upstream}/api/${path}`
   const search = getRequestURL(event).search
 
+  const headers: Record<string, string> = resolveUpstreamAuth(
+    {
+      authorization: getHeader(event, 'authorization'),
+      apiKey: getHeader(event, 'x-api-key'),
+    },
+    config.apiKey,
+  )
+
   // Propagate the request id so one trace id spans the Nuxt hop and the Go
   // hop: the Go middleware reads the same header, so both services' logs and
   // spans correlate on it.
-  const headers: Record<string, string> = {}
   const requestId = getHeader(event, 'x-request-id')
   if (requestId) headers['x-request-id'] = requestId
 
-  // Forward the caller's credential if it supplied one, otherwise fall back to
-  // the server-side key.
+  // Forward the caller's API credential if it supplied one, otherwise fall back
+  // to the server-side key.
   //
   // Both paths matter. A headless client (curl, an MCP host, a script) sends
   // its own key and it must survive the hop. The SPA does not: it holds no
@@ -41,19 +49,16 @@ export default defineEventHandler(async (event) => {
   // API. That key is server-only runtimeConfig, so it is never serialised into
   // the client bundle.
   //
+  // resolveUpstreamAuth also decides what must NOT be forwarded. Behind a TLS
+  // edge every browser request carries `Authorization: Basic …` for the edge's
+  // own user gate; forwarding that upstream both broke the API and shipped the
+  // perimeter password into the Go service's request log. See the module.
+  //
   // Note the consequence: anyone who can load the UI can use the API through
   // it. The key's job is to protect the Go service's own surface (it is
   // reachable by anything that gets past the reverse proxy in front of Nuxt),
   // not to be the app's user authentication. See docs/AUTHENTICATION.md.
-  const incomingAuth = getHeader(event, 'authorization')
-  const incomingKey = getHeader(event, 'x-api-key')
-  if (incomingAuth) {
-    headers['authorization'] = incomingAuth
-  } else if (incomingKey) {
-    headers['x-api-key'] = incomingKey
-  } else if (config.apiKey) {
-    headers['x-api-key'] = config.apiKey
-  }
+  // (Built above, before the request id, so the two never collide.)
 
   // Forward the body only for methods that can carry one. GET/HEAD/DELETE are
   // passed through without a body to avoid Content-Length mismatches.

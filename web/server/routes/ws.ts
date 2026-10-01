@@ -12,6 +12,7 @@
  * arrived, so the wiring below is hook-based on purpose.
  */
 import { defineWebSocketHandler } from 'h3'
+import { resolveUpstreamAuth } from '../utils/upstreamAuth'
 
 /**
  * Read from runtimeConfig rather than process.env directly: Nuxt only
@@ -26,33 +27,32 @@ function upstreamWs(): string {
 /**
  * Credentials for the upstream handshake.
  *
- * A caller's own key is forwarded as-is; the SPA has no key, so the server-only
- * NUXT_API_KEY is injected instead. Because the handshake is dialled
+ * A caller's own API key is forwarded as-is; the SPA has no key, so the
+ * server-only NUXT_API_KEY is injected instead. Because the handshake is dialled
  * server-to-server, the key never reaches the browser and never appears in the
  * upstream request line.
  *
  * The incoming credential is read from the upgrade request carried on the peer
  * (crossws exposes it there; there is no h3 event inside a WebSocket hook).
  *
+ * The selection rules — and the credential that must NOT be forwarded — live in
+ * server/utils/upstreamAuth. Briefly: behind a TLS edge the browser presents
+ * `Authorization: Basic …` to the edge, and that header reaches this hook too.
+ * Forwarding it would hand the Go service the edge's password instead of a key.
+ *
  * The parameter is typed structurally rather than as crossws's `Peer` so this
  * file does not depend on a transitive package's exported type surface. Only
  * `request.headers` is used.
  */
 function upstreamAuthHeaders(peer: { request?: { headers?: Headers } }): Record<string, string> {
-  const headers: Record<string, string> = {}
   const incoming = peer.request?.headers
-
-  const authz = incoming?.get?.('authorization')
-  const apiKey = incoming?.get?.('x-api-key')
-  const presented = authz ?? apiKey
-
-  if (presented) {
-    headers['x-api-key'] = presented
-  } else {
-    const configured = useRuntimeConfig().apiKey
-    if (configured) headers['x-api-key'] = configured
-  }
-  return headers
+  return resolveUpstreamAuth(
+    {
+      authorization: incoming?.get?.('authorization'),
+      apiKey: incoming?.get?.('x-api-key'),
+    },
+    useRuntimeConfig().apiKey,
+  )
 }
 
 /**

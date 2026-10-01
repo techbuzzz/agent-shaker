@@ -1,16 +1,22 @@
 # Production topology for Agent Shaker.
 #
-#   browser ──► web (Nuxt SSR, :3000) ──► /api,/ws ──► mcp-server (:8080) ──► postgres
-#                     ▲                        (Nitro proxy)                     │
-#                     └──────────────── single public origin ───────────────────┘
+#   browser ──┐
+#             ├──► web (Nuxt SSR, :3000) ──/api,/ws──► mcp-server (:8080) ──► postgres
+#   MCP / A2A ┘        (Nitro proxy)                    ▲
+#                                                     └── via Caddy under the `tls` profile
 #
 # Why this shape:
-#   * The browser only ever talks to ONE origin (:3000). `useServerUrl` defaults
-#     to an empty server URL, which resolves apiBase to `/api` and wsBase to
-#     `/ws`; both are proxied server-side to the Go service. That means no CORS
+#   * The browser only ever talks to ONE origin. `useServerUrl` defaults to an
+#     empty server URL, which resolves apiBase to `/api` and wsBase to `/ws`;
+#     both are proxied server-side to the Go service. That means no CORS
 #     negotiation, no third-party cookies, and no internal hostname leak.
 #   * `mcp-server` publishes NO host port. It is only reachable on the internal
-#     compose network. Put TLS termination in front of `web`.
+#     compose network. Put TLS termination in front.
+#   * The `tls` profile adds Caddy as the sole public entrypoint. It splits
+#     traffic by caller: human traffic goes to `web`, machine traffic
+#     (`/mcp*`, `/a2a/*`, `/.well-known/*`) goes straight to `mcp-server`.
+#     See deploy/Caddyfile for why that split exists and why the machine
+#     branch is not behind basic auth.
 #   * Migrations run as a one-shot job before the API starts, so a fresh volume
 #     converges without a manual step.
 #
@@ -131,8 +137,11 @@ services:
     depends_on:
       mcp-server:
         condition: service_healthy
+    # The port is only bound to the loopback interface. When the `tls` profile
+    # is active Caddy owns the public entrypoint and nothing should be able to
+    # reach Nuxt directly from outside the host.
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
       interval: 15s
@@ -141,8 +150,56 @@ services:
       start_period: 20s
     networks: [internal]
 
+  # ---- TLS terminator + public perimeter ----------------------------------
+  # Opt-in via the `tls` profile:
+  #     docker compose --profile tls up -d
+  #
+  # Off by default so an existing reverse proxy, a load balancer, or a local
+  # laptop run is not forced to adopt Caddy. When it IS enabled it becomes the
+  # only published entrypoint and the Go service is told TLS is terminated, so
+  # HSTS is only advertised when a real certificate is in front of it.
+  edge:
+    image: caddy:2-alpine
+    profiles: [tls]
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      # Basic auth is mandatory under this profile: the API key is not a login,
+      # so the edge is the only access control in the topology. Required rather
+      # than defaulted, because a placeholder credential that happens to be
+      # guessable is worse than a refusal to start.
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER is required for the tls profile}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH is required for the tls profile}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persists the ACME account and certificates across restarts. Without
+      # this, every redeploy burns Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      web:
+        condition: service_healthy
+      # Listed explicitly even though `web` already gates on it: with the
+      # `tls` profile the edge proxies MCP/A2A straight to the Go service, so
+      # that dependency is real rather than transitive.
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
 
 networks:
   internal:

@@ -1,0 +1,136 @@
+# Caddy reverse proxy — the TLS terminator and the public perimeter.
+#
+# Topology:
+#
+#   browser ──┐
+#             ├──TLS──> caddy (this file) ──┬──HTTP──> web (Nuxt SSR :3000) ──> mcp-server :8080
+#   MCP / A2A ┘                              │         (Nitro proxy: /api, /ws)         │
+#                                            └──HTTP─────────────────────────> mcp-server :8080
+#                                                                          │       │
+#                                                                          └──> postgres
+#
+# Caddy owns the three things the application deliberately does not:
+#
+#   1. TLS. It obtains and renews a Let's Encrypt certificate automatically and
+#      redirects plain HTTP to HTTPS. The Go service sets HSTS only when
+#      TLS_TERMINATED=true (see docker-compose.yml) — advertising HSTS without
+#      a real certificate would be a lie the browser acts on.
+#
+#   2. The perimeter. The API key is NOT user authentication: anyone who can
+#      load the UI can use the API through it, because the proxy injects the
+#      key on their behalf (see docs/AUTHENTICATION.md). Basic auth here is the
+#      access control that closes that gap.
+#
+#   3. The machine-facing protocol surfaces. `/mcp`, `/mcp/message`, `/a2a/*`
+#      and the agent card are proxied straight to the Go service rather than
+#      through Nuxt. See the two-branch split below for why.
+#
+# ---------------------------------------------------------------------------
+# Why two branches, and why basic auth covers only one of them
+# ---------------------------------------------------------------------------
+#
+# The obvious move is to teach the Nitro proxy to forward MCP and A2A alongside
+# `/api`, keeping Nuxt as the single upstream. That does not work, for two
+# independent reasons:
+#
+#   * `/` is a registered MCP endpoint on the Go service (the legacy JSON-RPC
+#     alias), and it is also the SPA. They cannot share a path, and the SPA
+#     wins. A Nitro-only design would have to leave the root endpoint dead.
+#
+#   * MCP streamable-HTTP and `POST /a2a/v1/message:stream` reply with SSE. The
+#     Nitro proxy buffers the upstream body into an ArrayBuffer and writes it
+#     with `send()`, which is correct for JSON and fatal for a stream: events
+#     arrive only when the response closes. Streaming needs a real pass-through
+#     proxy, which is exactly what Caddy's `reverse_proxy` already is.
+#
+# So the split is drawn by *who calls*, not by *what protocol it is*:
+#
+#   HUMAN  (browser)   /, /api/*, /ws, /healthz      -> web:3000 + basic auth
+#   MACHINE (agents)   /mcp*, /a2a/*, /.well-known/* -> mcp-server:8080
+#
+# The machine branch deliberately does NOT get basic auth. MCP clients
+# authenticate with `Authorization: Bearer <key>`, and basic auth consumes the
+# same header — a client physically cannot send both, so requiring it here
+# would make the surface unusable rather than more secure. Those paths already
+# carry a real credential: the Go API key, enforced by `RequireAPIKey`. The
+# result is that every path requires *something*, and no path requires two
+# mutually exclusive things.
+#
+# `/` is therefore served by the SPA and the root MCP alias is not published.
+# `/mcp` and `/mcp/message` are the canonical MCP paths and are.
+#
+# `/metrics` is deliberately not routed anywhere: the catch-all sends it to Nuxt,
+# which 404s. Exposing Prometheus metrics at a public origin is a free
+# reconnaissance gift and it is not needed — scrape the Go service on the
+# internal network.
+
+{$PUBLIC_HOST:localhost} {
+	encode zstd gzip
+
+	# `route` pins evaluation to written order and disables Caddy's directive
+	# sorting. Without it, `header` and `basic_auth` would be hoisted and sorted
+	# ahead of the `handle` blocks, and basic auth would leak onto the machine
+	# branch that must not have it.
+	route {
+		header {
+			# HSTS at the edge, where the certificate actually terminates. The Go
+			# service also emits it when TLS_TERMINATED=true; a browser takes the
+			# strictest of the two, so setting both is deliberate.
+			Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "strict-origin-when-cross-origin"
+			# Do not advertise the server software.
+			-Server
+		}
+
+		# ---- Machine surface: straight to the Go service ------------------------
+		# Matched on path only, and matched FIRST so it wins over the catch-all.
+		# `/.well-known/*` is included because A2A clients fetch the agent card
+		# from there to discover the service; the Go handler derives the URLs it
+		# advertises from this request's X-Forwarded-* headers, so the card
+		# describes the public origin rather than the internal one.
+		@machine path /.well-known/* /mcp /mcp/* /a2a/*
+		handle @machine {
+			reverse_proxy mcp-server:8080 {
+				# Required for SSE: without it Caddy buffers, and
+				# `message:stream` and MCP responses would only materialise
+				# once the upstream closed the connection.
+				flush_interval -1
+			}
+		}
+
+		# ---- Human surface: through Nuxt ---------------------------------------
+		handle {
+			# Mandatory. Generate the hash once with:
+			#   docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+			#
+			# The block form takes "<username> <hash>" on a SINGLE line. Written
+			# as two lines, Caddy parses the first as the hash and fails with
+			# "unrecognized hash algorithm"; written inline, it parses the first
+			# as the hash for the same reason. The block form is the one that
+			# works.
+			#
+			# Compose refuses to start the `tls` profile without BASIC_AUTH_USER
+			# and BASIC_AUTH_HASH rather than defaulting them: a Caddyfile cannot
+			# branch on whether an env var is set, and a guessable placeholder
+			# credential is worse than a refusal to start.
+			basic_auth {
+				{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+			}
+
+			reverse_proxy web:3000 {
+				# Stream frames straight through instead of buffering them, so
+				# the SPA's live updates stay live.
+				flush_interval -1
+			}
+		}
+	}
+
+	log {
+		output stdout
+		format json
+		# Request URIs are logged, and a WebSocket client may authenticate with
+		# ?api_key=, so a query string would land in the log. The Go service
+		# applies the same rule for the same reason — see docs/AUTHENTICATION.md.
+	}
+}

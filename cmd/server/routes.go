@@ -131,8 +131,16 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	mux.Handle("OPTIONS /mcp/message", mcpHandler)
 
 	// A2A — agent card and task endpoints; CORS-wrapped.
+	//
 	// Sub-mux so each path uses its own {taskId} pattern and r.PathValue works
 	// in the handlers.
+	//
+	// StripPrefix is load-bearing, not cosmetic. Go's ServeMux does not rewrite
+	// the request path when it matches a subtree pattern, so the sub-mux would
+	// receive "/a2a/v1/tasks" while every pattern below is registered as
+	// "/tasks" — nothing would match and every A2A endpoint would 404. The
+	// symptom is easy to misread as "the edge is not routing A2A", so it is
+	// worth stating plainly: the prefix must be stripped here or nowhere.
 	a2aSub := http.NewServeMux()
 	a2aSub.HandleFunc("POST /message", d.a2aHandler.SendMessage)
 	a2aSub.HandleFunc("OPTIONS /message", d.a2aHandler.SendMessage)
@@ -152,7 +160,8 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 		a2aSub.HandleFunc("GET /artifacts/{artifactId}", d.artifactHandler.GetArtifact)
 		a2aSub.HandleFunc("OPTIONS /artifacts/{artifactId}", d.artifactHandler.GetArtifact)
 	}
-	a2aHandler := middleware.Apply(a2aSub,
+	a2aHandler := middleware.Apply(
+		http.StripPrefix("/a2a/v1", a2aSub),
 		middleware.Logger,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		d.auth,

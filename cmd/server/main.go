@@ -147,11 +147,25 @@ func main() {
 	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
 
-	// A2A Protocol Setup
-	baseURL := os.Getenv("BASE_URL")
+	// A2A Protocol Setup.
+	//
+	// BASE_URL is left empty when unset, on purpose. It is the origin the agent
+	// card and artifact URLs advertise to peer agents, and a hardcoded
+	// `http://localhost:8080` default is wrong the moment the service sits
+	// behind a reverse proxy: the public origin is the edge's, not this
+	// process's. With it empty, resolvePublicBaseURL derives the origin from
+	// the request (honouring X-Forwarded-Proto/Host), which is right for every
+	// deployment. Set BASE_URL explicitly only to express an origin that cannot
+	// be derived from a request — a separate API hostname, for instance.
+	baseURL := strings.TrimSpace(os.Getenv("BASE_URL"))
 	if baseURL == "" {
-		baseURL = "http://localhost:" + getPort()
+		slog.Info("BASE_URL not set; A2A discovery URLs will be derived per request from the request origin")
 	}
+
+	// Read once, here, because the A2A agent card is built below and it has to
+	// describe the credential a client must actually send. Declared early for
+	// that reason; the middleware itself is constructed further down.
+	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
 
 	// Create A2A task store. Default to MemoryStore for back-compat; opt into
 	// the Postgres-backed store via TASK_STORE=postgres (requires DATABASE_URL
@@ -187,7 +201,7 @@ func main() {
 	contextStorage := a2aserver.NewDatabaseContextStorage(db)
 
 	// Create A2A handlers
-	agentCardHandler := a2aserver.NewAgentCardHandler("1.0.0", baseURL)
+	agentCardHandler := a2aserver.NewAgentCardHandler("1.0.0", baseURL, authEnabled)
 	a2aHandler := a2aserver.NewA2AHandler(taskManager)
 	streamingHandler := a2aserver.NewStreamingHandler(taskManager)
 	artifactHandler := a2aserver.NewArtifactHandler(contextStorage, baseURL)
@@ -217,7 +231,6 @@ func main() {
 	// without downtime. Misconfiguration is fatal: booting "protected" with an
 	// empty key set is the failure mode that turns into an outage later, and
 	// booting with a default key is worse.
-	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
 	apiKeys := middleware.APIKeysFromEnv("API_KEYS")
 
 	authMW, err := middleware.RequireAPIKey(middleware.AuthConfig{

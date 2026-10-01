@@ -72,6 +72,14 @@ desktop.ini
 # encode one developer's shell, not a project-wide contract. `make` and CI are
 # the supported entry points.
 /.*.ps1
+/.verify-*.mjs
 
 # Scratch files (commit messages, ad-hoc probes)
 /.commit-msg.tmp
+
+# Scratch env files. These get written when testing a compose profile by hand and
+# routinely contain real material — a bcrypt hash, an API key. Never commit one
+# by accident; `git add -A` should not be able to pick them up.
+/.*.env.tmp
+/*.env.tmp
+/*.tmp
