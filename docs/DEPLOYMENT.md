@@ -141,14 +141,6 @@ Things that do **not** work, all verified against this Compose version:
 `API_KEYS` and `POSTGRES_PASSWORD` are unaffected — they contain no `$`. Only
 bcrypt hashes hit this.
 
-### `TLS_TERMINATED` is a manual pairing
-
-Compose cannot set one environment variable based on whether a profile is
-active, so when you enable the `tls` profile you must also set
-`TLS_TERMINATED=true` in `.env`. It does not enable TLS; it tells the Go service
-that a proxy in front terminated it, so it emits HSTS. Advertising HSTS without
-a real certificate is a lie the browser acts on.
-
 ## Why the edge splits traffic by caller
 
 The alternative design is to teach the Nitro proxy to forward MCP and A2A
@@ -259,17 +251,28 @@ govern this topology:
 | `HTTPS_PORT` / `HTTP_PORT` | `443` / `80` | |
 | `WEB_BIND` | `127.0.0.1` | loopback-only, so Nuxt is not reachable around the edge |
 | `WEB_PORT` | `3000` | |
-| `TLS_TERMINATED` | `false` | **set to `true` under the `tls` profile** — see below |
+| `TLS_TERMINATED` | `false` | override only — HSTS is per-request. See below |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000` | usually irrelevant; single origin |
 | `CORS_ALLOW_CREDENTIALS` | `false` | decoupled from `AUTH_ENABLED` on purpose |
 
-### `TLS_TERMINATED` is a manual pairing
+### HSTS needs no configuration
 
-Compose cannot set one environment variable based on whether a profile is
-active, so when you enable the `tls` profile you must also set
-`TLS_TERMINATED=true` in `.env`. It does not enable TLS; it tells the Go service
-that a proxy in front terminated it, so it emits HSTS. Advertising HSTS without
-a real certificate is a lie the browser acts on.
+HSTS is decided **per request**, from `r.TLS` or `X-Forwarded-Proto`. Caddy sets
+the latter, so enabling the `tls` profile gives you HSTS with no extra step.
+
+This used to require `TLS_TERMINATED=true` set by hand alongside the profile.
+Because compose cannot set an env var based on whether a profile is active,
+that made it a second flag to remember — and omitting it was a *silent*
+downgrade: the service started healthy, served traffic, and never sent the
+header. That failure shape is now unreachable through configuration.
+
+Set `TLS_TERMINATED=true` only if a fronting proxy does not set
+`X-Forwarded-Proto` (a raw TCP passthrough, or a hand-rolled one). It does not
+enable TLS; it only tells the API to assume the client-facing hop is encrypted.
+
+A client that forges `X-Forwarded-Proto: https` on a cleartext request gains
+nothing: per RFC 6797 a browser only honours HSTS received over a secure
+transport, so the header is inert and cannot be used to downgrade anything.
 
 ## Verifying a deployment
 

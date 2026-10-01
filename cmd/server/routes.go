@@ -44,8 +44,12 @@ type routeDeps struct {
 	maxBodyBytes         int64
 	corsOrigins          []string
 	corsAllowCreds       bool
-	isTLS                bool
-	rateLimitShutdown    func(context.Context)
+	// assumeTLS is an operator override, not the primary mechanism. HSTS is
+	// decided per request from r.TLS / X-Forwarded-Proto; see
+	// middleware.SecurityHeaders. Set only when the fronting proxy does not set
+	// X-Forwarded-Proto.
+	assumeTLS         bool
+	rateLimitShutdown func(context.Context)
 	// auth guards the REST, WebSocket, MCP and A2A surfaces. Probes stay open
 	// because an orchestrator has no credential and locking it out of /healthz
 	// turns a config error into a restart loop.
@@ -231,7 +235,7 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 		),
 		d.obs.Instrument,
 		middleware.Recovery,
-		middleware.SecurityHeaders(d.isTLS, ""),
+		middleware.SecurityHeaders(d.assumeTLS, ""),
 	), nil
 }
 

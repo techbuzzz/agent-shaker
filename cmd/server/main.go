@@ -261,11 +261,19 @@ func main() {
 	slog.Info("api authentication", "config", middleware.DescribeAuthConfig(authEnabled, apiKeys))
 
 	// TLS normally terminates at a reverse proxy in front of this service.
-	// This flag does not enable TLS — it tells SecurityHeaders whether the
-	// client-facing hop is encrypted, so HSTS is only advertised when the
-	// browser will actually honour it. Behind a TLS-terminating proxy, set
-	// TLS_TERMINATED=true.
-	isTLS := os.Getenv("TLS_TERMINATED") == "true"
+	// This flag does not enable TLS.
+	//
+	// It used to be the only way HSTS could be sent, which made it a second
+	// flag an operator had to remember when enabling the TLS edge — and
+	// forgetting it failed silently, with the service healthy and simply not
+	// emitting the header. SecurityHeaders now derives that per request from
+	// r.TLS and X-Forwarded-Proto, so the bundled Caddy edge gets HSTS with no
+	// configuration at all.
+	//
+	// What remains here is an explicit override, for a proxy that does not set
+	// X-Forwarded-Proto (a raw TCP passthrough, or a hand-rolled one). Leave it
+	// unset in every supported topology.
+	assumeTLS := os.Getenv("TLS_TERMINATED") == "true"
 
 	deps := routeDeps{
 		db:                   db,
@@ -289,7 +297,7 @@ func main() {
 		maxBodyBytes:         parseMaxBodyBytes(),
 		corsOrigins:          corsOrigins,
 		corsAllowCreds:       corsAllowCreds,
-		isTLS:                isTLS,
+		assumeTLS:            assumeTLS,
 		auth:                 authMW,
 		wsAuth:               wsAuthMW,
 		rateLimitShutdown:    rateShutdown,

@@ -81,7 +81,14 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # WebSocket origin check. Must list the public origin that serves the UI.
       WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost:3000}
-      # Set true only when a proxy in front terminates TLS, so HSTS is honest.
+      # HSTS is derived per request from r.TLS and X-Forwarded-Proto, so Caddy
+      # (which sets that header) gets it with no configuration at all. This is
+      # only an override for a fronting proxy that does NOT set
+      # X-Forwarded-Proto. Leave it false in every supported topology.
+      #
+      # It used to be a required second flag to pair with the `tls` profile,
+      # because compose cannot set an env var based on whether a profile is
+      # active — and forgetting to disabled HSTS silently, with no error.
       TLS_TERMINATED: ${TLS_TERMINATED:-false}
       # Compose already runs migrations as the one-shot `migrate` job above;
       # running them again in-process would mean two processes racing on the
