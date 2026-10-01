@@ -195,12 +195,16 @@ jobs:
           API_KEYS: ci-only-not-a-secret
 
       - name: compose config is valid (tls profile)
+        # This step only proves compose interpolation resolves for the tls
+        # profile — it is not a credential and is deliberately not shaped like
+        # one, so secret scanners do not flag this file. The Caddyfile is
+        # validated for real, with a freshly generated hash, in the next step.
         run: docker compose --profile tls config --quiet
         env:
           POSTGRES_PASSWORD: ci-only-not-a-secret
           API_KEYS: ci-only-not-a-secret
           BASIC_AUTH_USER: ci
-          BASIC_AUTH_HASH: $2a$14$ciOnlyThrowawayHashNotADeployedCredential000000000
+          BASIC_AUTH_HASH: ci-only-not-a-hash
 
       - name: caddyfile is valid and formatted
         # `caddy fmt --diff` prints a diff and EXITS 1 when the file needs
