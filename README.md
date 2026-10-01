@@ -49,7 +49,9 @@ open http://localhost:3000
 ```
 
 Migrations run as a one-shot job before the API starts, so a fresh volume
-converges without a manual step.
+converges without a manual step — and it converges **empty**. No demo rows are
+seeded; see [docs/MIGRATIONS.md](docs/MIGRATIONS.md) if you want the sample
+dataset.
 
 ### With TLS and the MCP/A2A surfaces published
 

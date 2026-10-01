@@ -125,8 +125,17 @@ migrate-up: ## Apply all pending migrations (DATABASE_URL required)
 migrate-version: ## Print the current schema version
 	go run ./cmd/migrate -cmd version
 
-migrate-force: ## Force the schema version (recover from a half-applied migration)
-	go run ./cmd/migrate -cmd force -version $(VERSION)
+# MIGRATION_VERSION, not VERSION. VERSION is build metadata and expands to
+# something like `v0.3.5-68-g85cbbf7-dirty`, which the -version int flag
+# cannot parse — so this target used to fail on every invocation, including
+# the one case it exists for: recovering from a half-applied migration.
+MIGRATION_VERSION ?=
+
+migrate-force: ## Force the recorded schema version. MIGRATION_VERSION=8
+	@test -n "$(MIGRATION_VERSION)" || { echo "usage: make migrate-force MIGRATION_VERSION=8"; exit 2; }
+	@test "$(MIGRATION_VERSION)" -eq "$(MIGRATION_VERSION)" 2>/dev/null \
+		|| { echo "MIGRATION_VERSION must be an integer (got '$(MIGRATION_VERSION)')"; exit 2; }
+	go run ./cmd/migrate -cmd force -version $(MIGRATION_VERSION)
 
 # ------------------------------------------------------------------- backups
 #

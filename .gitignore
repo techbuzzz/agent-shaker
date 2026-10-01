@@ -80,6 +80,7 @@ desktop.ini
 # the supported entry points.
 /.*.ps1
 **/.verify-*.mjs
+**/.verify-*.sh
 
 # Scratch files (commit messages, ad-hoc probes)
 /.commit-msg.tmp

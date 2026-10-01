@@ -56,12 +56,17 @@ docker compose --profile tls ps
 docker compose --profile tls logs -f edge
 ```
 
+The first run starts with an **empty** database — migrations create the schema
+and nothing else. Sample projects are not seeded; load them deliberately with
+`scripts/seed_demo_data.sql` if you want them. See
+[MIGRATIONS.md](./MIGRATIONS.md#demo-data-is-not-a-migration).
+
 Validate before you deploy:
 
 ```bash
 make docker-config     # both compose profiles
-make caddy-validate   # the Caddyfile parses
-make caddy-fmt-check  # the Caddyfile is in canonical form
+make caddy-validate    # the Caddyfile parses
+make caddy-fmt-check   # the Caddyfile is in canonical form
 ```
 
 CI runs all three on every push.
@@ -97,7 +102,7 @@ FATAL: the tls profile requires BASIC_AUTH_USER and BASIC_AUTH_HASH.
   ...
 ```
 
-### Do not put the bcrypt hash in `.env`
+### Why interpolation destroys it
 
 This is the single easiest way to deploy a locked-out edge, so it is worth
 stating bluntly.
