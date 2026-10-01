@@ -1,7 +1,6 @@
 package main
 
 import (
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,17 +10,6 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/observability"
 )
-
-// hijackableRecorder is a ResponseWriter that supports hijacking, standing in
-// for the one net/http hands a real server.
-type hijackableRecorder struct {
-	*httptest.ResponseRecorder
-	hijacked bool
-}
-
-func (h *hijackableRecorder) Hijack() (net.Conn, *http.ResponseController, error) {
-	return nil, nil, nil
-}
 
 // probeHandler reports whether the ResponseWriter it receives still exposes
 // http.Hijacker. That is the exact capability gorilla/websocket's Upgrader

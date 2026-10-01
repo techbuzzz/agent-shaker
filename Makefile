@@ -29,7 +29,7 @@ GO_FILES   := $(shell find cmd internal tests -name '*.go' 2>/dev/null)
 GO_DIRS    := $(sort $(dir $(GO_FILES)))
 WEB_DIR    := web
 
-.PHONY: help check check-all workflow-lint fmt fmt-check vet lint test test-race build run clean \
+.PHONY: help check check-all workflow-lint fmt fmt-check vet lint build run clean \
         test test-race test-integration cover \
         web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \

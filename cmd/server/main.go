@@ -419,7 +419,10 @@ func runMigrations(db *database.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to get dedicated connection: %w", err)
 	}
-	defer conn.Close()
+	// Advisory locks are session-scoped, so the connection that took the lock
+	// must be the one that releases it. Closing it is deferred cleanup with
+	// nothing left to report to.
+	defer func() { _ = conn.Close() }()
 
 	// Try to acquire advisory lock (non-blocking)
 	var lockAcquired bool
@@ -562,12 +565,4 @@ func runMigrations(db *database.DB) error {
 	}
 
 	return nil
-}
-
-func getPort() string {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	return port
 }

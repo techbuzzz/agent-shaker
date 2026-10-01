@@ -34,12 +34,39 @@ type RateLimitConfig struct {
 	TrustedProxy bool
 }
 
-// ipEntry is one row of the per-IP limiter store. It is package-level so the
-// eviction helper can see it; the store is still scoped to a single
-// RateLimit() invocation via a sync.Map captured by closure.
+// ipEntry is one row of the per-IP limiter store.
+//
+// lastSeen is guarded by mu. sync.Map makes the *map* safe, but the value is a
+// shared *ipEntry, and every request for the same IP mutates lastSeen
+// concurrently — so the field needs its own lock. It is a time.Time rather
+// than an int64 so the monotonic reading survives, which is what keeps the
+// eviction comparison correct across a wall-clock adjustment.
+//
+// The race was not theoretical: `go test -race` reported concurrent unsynchronised
+// writes to this field from two in-flight requests, and a torn time.Time read
+// can make now.Sub(lastSeen) jump by centuries, evicting IPs that are actively
+// being served.
 type ipEntry struct {
-	lim      *rate.Limiter
+	lim *rate.Limiter
+
+	mu       sync.Mutex
 	lastSeen time.Time
+}
+
+// touch records activity for this IP.
+func (e *ipEntry) touch(t time.Time) {
+	e.mu.Lock()
+	e.lastSeen = t
+	e.mu.Unlock()
+}
+
+// seen returns the last recorded activity. A copy, not the field: time.Time
+// carries an internal pointer to its monotonic source, and handing that out
+// without the lock would reintroduce the race one level up.
+func (e *ipEntry) seen() time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastSeen
 }
 
 // RateLimit returns a Middleware that enforces a per-IP token bucket plus a
@@ -97,9 +124,25 @@ func RateLimit(cfg RateLimitConfig) (Middleware, func(context.Context)) {
 			}
 
 			now := time.Now()
-			v, _ := store.LoadOrStore(ip, &ipEntry{lim: rate.NewLimiter(cfg.Limit, cfg.Burst), lastSeen: now})
-			entry := v.(*ipEntry)
-			entry.lastSeen = now
+			// Load first, then LoadOrStore: constructing the candidate entry
+			// allocates, and doing that on every request in the hot path is
+			// waste when the IP is almost always already present.
+			v, ok := store.Load(ip)
+			if !ok {
+				v, _ = store.LoadOrStore(ip, &ipEntry{lim: rate.NewLimiter(cfg.Limit, cfg.Burst), lastSeen: now})
+			}
+			// The store is private to this closure and only ever written with
+			// *ipEntry, so this cannot fail today. The comma-ok is here because
+			// an unchecked assertion is a panic in the request path, and the
+			// cost of being wrong here is a crash rather than a bad metric.
+			entry, ok := v.(*ipEntry)
+			if !ok {
+				slog.Error("rate limit store holds an unexpected value; skipping limiter",
+					"client_ip", ip, "path", r.URL.Path)
+				next.ServeHTTP(w, r)
+				return
+			}
+			entry.touch(now)
 			if !entry.lim.Allow() {
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
@@ -115,8 +158,12 @@ func RateLimit(cfg RateLimitConfig) (Middleware, func(context.Context)) {
 func evict(store *sync.Map, now time.Time, idleAfter time.Duration, maxEntries int) {
 	// Pass 1: drop idle entries.
 	store.Range(func(k, v any) bool {
-		e := v.(*ipEntry)
-		if now.Sub(e.lastSeen) > idleAfter {
+		e, ok := v.(*ipEntry)
+		if !ok {
+			store.Delete(k)
+			return true
+		}
+		if now.Sub(e.seen()) > idleAfter {
 			store.Delete(k)
 		}
 		return true
@@ -137,7 +184,15 @@ func evict(store *sync.Map, now time.Time, idleAfter time.Duration, maxEntries i
 	}
 	var oldest []cand
 	store.Range(func(k, v any) bool {
-		oldest = append(oldest, cand{key: k.(string), ts: v.(*ipEntry).lastSeen})
+		key, ok := k.(string)
+		if !ok {
+			return true
+		}
+		e, ok := v.(*ipEntry)
+		if !ok {
+			return true
+		}
+		oldest = append(oldest, cand{key: key, ts: e.seen()})
 		return true
 	})
 	// Partial sort is fine; we only need to remove (count - maxEntries).

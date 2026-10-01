@@ -8,11 +8,18 @@
 # (the latter holds the Nitro proxy routes the production topology depends on).
 /mcp-server
 /server
+# Stale name from before the binary moved into bin/. It was a committed
+# Windows PE executable of 11 MB — the single largest object in the repo.
+/mcp-tracker
 /bin/
 /web/dist/
 /web/.output/
 /web/.nuxt/
 /web/node_modules/
+# Root-level node_modules holds a Vite dep-optimizer cache. Without this rule
+# three files under node_modules/.vite/ were committed, and `git add -A` after
+# a dev-server run would keep re-adding whatever the cache had just rewritten.
+/node_modules/
 /web/_out_old/
 /cover.out
 /cover.html
