@@ -27,7 +27,7 @@ WEB_DIR    := web
 .PHONY: help check fmt fmt-check vet lint build run clean \
         test test-race test-integration cover \
         web-install web-build web-typecheck web-dev \
-        migrate-up migrate-down migrate-version migrate-force \
+        migrate-up migrate-version migrate-force \
         docker-build docker-up docker-down docker-logs docker-config \
         dev demo deps
 
@@ -105,13 +105,10 @@ web-dev: web-install ## Run the Nuxt dev server with HMR
 migrate-up: ## Apply all pending migrations (DATABASE_URL required)
 	go run ./cmd/migrate -cmd up
 
-migrate-down: ## Roll back one migration
-	go run ./cmd/migrate -cmd down -steps 1
-
 migrate-version: ## Print the current schema version
 	go run ./cmd/migrate -cmd version
 
-migrate-force: ## Force the schema version (use with care)
+migrate-force: ## Force the schema version (recover from a half-applied migration)
 	go run ./cmd/migrate -cmd force -version $(VERSION)
 
 # -------------------------------------------------------------------- docker

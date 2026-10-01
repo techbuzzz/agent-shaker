@@ -58,7 +58,7 @@ func (h *MilestoneHandler) CreateMilestone(w http.ResponseWriter, r *http.Reques
 		req.Status = models.MilestonePlanned
 	}
 	if !models.ValidMilestoneStatuses[req.Status] {
-		httpx.WriteError(w, r, fmt.Errorf("validation: invalid status %q", req.Status))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid status %q", httpx.ErrBadRequest, req.Status))
 		return
 	}
 
@@ -85,7 +85,7 @@ func (h *MilestoneHandler) CreateMilestone(w http.ResponseWriter, r *http.Reques
 func (h *MilestoneHandler) ListMilestones(w http.ResponseWriter, r *http.Request) {
 	pidStr := r.URL.Query().Get("project_id")
 	if pidStr == "" {
-		httpx.WriteError(w, r, fmt.Errorf("project_id query parameter is required"))
+		httpx.WriteError(w, r, fmt.Errorf("%w: project_id query parameter is required", httpx.ErrBadRequest))
 		return
 	}
 	pid, err := uuid.Parse(pidStr)
@@ -135,7 +135,7 @@ func (h *MilestoneHandler) UpdateMilestoneStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	if !models.ValidMilestoneStatuses[req.Status] {
-		httpx.WriteError(w, r, fmt.Errorf("validation: invalid status %q", req.Status))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid status %q", httpx.ErrBadRequest, req.Status))
 		return
 	}
 

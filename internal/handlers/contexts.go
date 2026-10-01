@@ -67,7 +67,7 @@ func (h *ContextHandler) ListContexts(w http.ResponseWriter, r *http.Request) {
 	}
 	projectIDStr := r.URL.Query().Get("project_id")
 	if projectIDStr == "" {
-		httpx.WriteError(w, r, fmt.Errorf("project_id query parameter is required"))
+		httpx.WriteError(w, r, fmt.Errorf("%w: project_id query parameter is required", httpx.ErrBadRequest))
 		return
 	}
 	projectID, err := uuid.Parse(projectIDStr)

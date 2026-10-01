@@ -63,7 +63,7 @@ func (h *ProjectRepoHandler) CreateRepo(w http.ResponseWriter, r *http.Request) 
 func (h *ProjectRepoHandler) ListRepos(w http.ResponseWriter, r *http.Request) {
 	pidStr := r.URL.Query().Get("project_id")
 	if pidStr == "" {
-		httpx.WriteError(w, r, fmt.Errorf("project_id query parameter is required"))
+		httpx.WriteError(w, r, fmt.Errorf("%w: project_id query parameter is required", httpx.ErrBadRequest))
 		return
 	}
 	pid, err := uuid.Parse(pidStr)

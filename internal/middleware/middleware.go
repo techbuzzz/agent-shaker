@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -84,6 +87,32 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	rw.bytes += n
 	return n, err
 }
+
+// Hijack delegates to the wrapped writer so WebSocket upgrades still work when
+// this wrapper is in the chain. Without it the Upgrader fails with
+// "response does not implement http.Hijacker".
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errNotHijacker
+	}
+	// A hijacked connection never emits an HTTP status; record the 101 so the
+	// access log does not report every WebSocket as a 2xx.
+	rw.statusCode = http.StatusSwitchingProtocols
+	return hj.Hijack()
+}
+
+// Flush delegates to the wrapped writer when it supports flushing.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
+var errNotHijacker = errors.New("middleware: underlying http.ResponseWriter does not implement http.Hijacker")
 
 // Logger middleware logs each HTTP request using slog. The log line carries
 // method, path, status, duration, remote addr, and the request id when present.

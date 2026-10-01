@@ -186,13 +186,35 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	// matters: RequestID first (innermost attribute), then the OTel server
 	// span (which reads the inbound traceparent), then Prometheus, then
 	// recovery, then security headers.
+	//
+	// otelhttp is filtered away from /ws. Its response wrapper does not
+	// implement http.Hijacker, so wrapping the WebSocket route makes the
+	// upgrade fail with "response does not implement http.Hijacker". A
+	// rejecting filter makes otelhttp pass the original writer straight
+	// through, which is exactly what the Upgrader needs. The /ws handler opens
+	// its own span, so the connection is still traced.
 	return middleware.Apply(mux,
 		middleware.RequestID,
-		otelhttp.NewMiddleware("agent-shaker.http"),
+		otelhttp.NewMiddleware("agent-shaker.http",
+			otelhttp.WithFilter(skipWebSocketTrace),
+		),
 		d.obs.Instrument,
 		middleware.Recovery,
 		middleware.SecurityHeaders(d.isTLS, ""),
 	), nil
+}
+
+// skipWebSocketTrace keeps the WebSocket route out of otelhttp.
+//
+// otelhttp wraps the ResponseWriter in a type that does not implement
+// http.Hijacker, so the gorilla/websocket Upgrader fails the handshake with
+// "response does not implement http.Hijacker" and /ws never connects. A
+// rejecting filter makes otelhttp pass the original writer straight through,
+// which is exactly what the Upgrader needs. The /ws handler opens its own
+// span, so the connection is still traced — only the automatic per-request
+// server span is skipped.
+func skipWebSocketTrace(r *http.Request) bool {
+	return r.URL.Path != "/ws"
 }
 
 // spaHandler returns a handler that serves files from distDir and falls back

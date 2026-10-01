@@ -2,6 +2,15 @@
 # Linux CI runner produce byte-identical files. Without this, `core.autocrlf=true`
 # on Windows rewrites LF to CRLF on checkout, and `gofmt -l` (which requires LF)
 # then flags every Go file locally while the same commit is clean in CI.
+#
+# Windows contributors: ALSO run this once, in the repo —
+#
+#     git config core.autocrlf false
+#
+# `.gitattributes` governs what is stored and what CI sees (always LF), but a
+# global `core.autocrlf=true` can still materialise CRLF in your working tree on
+# some Git for Windows versions, which makes `make check` fail locally for no
+# real reason. Setting it locally removes the ambiguity.
 * text=auto eol=lf
 
 # Windows-only scripts must keep CRLF to remain double-clickable.

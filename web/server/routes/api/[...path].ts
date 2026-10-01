@@ -1,3 +1,5 @@
+import { send } from 'h3'
+
 /**
  * Server-side reverse proxy for the Go MCP backend.
  *
@@ -59,5 +61,10 @@ export default defineEventHandler(async (event) => {
   setResponseStatus(event, upstream_.status)
   const contentType = upstream_.headers.get('content-type')
   if (contentType) setResponseHeader(event, 'content-type', contentType)
-  return upstream_.arrayBuffer()
+
+  // `send` is required: returning the ArrayBuffer directly makes Nitro treat
+  // it as a payload value and JSON-stringify it, which turns every upstream
+  // response into the literal `{}`. Writing the bytes as the response body
+  // keeps the upstream JSON byte-for-byte intact.
+  return send(event, Buffer.from(await upstream_.arrayBuffer()))
 })

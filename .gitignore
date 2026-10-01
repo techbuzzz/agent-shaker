@@ -72,3 +72,6 @@ desktop.ini
 # encode one developer's shell, not a project-wide contract. `make` and CI are
 # the supported entry points.
 /.*.ps1
+
+# Scratch files (commit messages, ad-hoc probes)
+/.commit-msg.tmp
