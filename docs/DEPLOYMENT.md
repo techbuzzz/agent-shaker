@@ -56,7 +56,14 @@ know exactly what it touches. The steps it performs are, equivalently:
 ```bash
 # 1. Required configuration
 cp .env.example .env
-$EDITOR .env          # POSTGRES_PASSWORD, API_KEYS, PUBLIC_HOST
+$EDITOR .env          # POSTGRES_PASSWORD, API_KEYS, PUBLIC_HOST, ACME_EMAIL
+
+# 1b. PUBLIC_HOST must be the real domain, not empty and not localhost.
+#     Both compose and the Caddyfile default it to localhost, and Caddy issues
+#     no certificate for localhost: it serves plain HTTP, reports itself
+#     healthy, and puts your basic-auth password on the wire in cleartext.
+#     Nothing errors and nothing appears in any log.
+grep '^PUBLIC_HOST=' .env
 
 # 2. Export the basic-auth credential (see the warning below for why it is
 #    not in .env)
