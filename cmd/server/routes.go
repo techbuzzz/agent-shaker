@@ -46,6 +46,15 @@ type routeDeps struct {
 	corsAllowCreds       bool
 	isTLS                bool
 	rateLimitShutdown    func(context.Context)
+	// auth guards the REST, WebSocket, MCP and A2A surfaces. Probes stay open
+	// because an orchestrator has no credential and locking it out of /healthz
+	// turns a config error into a restart loop.
+	auth middleware.Middleware
+	// wsAuth is the same check but also accepts ?api_key=, which is the only
+	// way a browser can authenticate a WebSocket handshake. Used for /ws
+	// alone; the credential is never accepted from a query string on any other
+	// route, where it would be written to access logs.
+	wsAuth middleware.Middleware
 }
 
 // hubLike is the minimal interface we need from the WebSocket hub. Defined
@@ -93,16 +102,24 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 		_, _ = w.Write([]byte("OK"))
 	})
 
-	// WebSocket: no middleware besides the global chain; the handler manages
-	// its own origin check.
-	mux.HandleFunc("GET /ws", d.wsHandler.HandleWebSocket)
+	// WebSocket. Auth is applied here rather than in the global chain because
+	// it is the one route that also accepts ?api_key=, since a browser cannot
+	// attach a header to a handshake. The handler still does its own origin
+	// check — origin and credential are independent controls.
+	mux.Handle("GET /ws", middleware.Apply(
+		http.HandlerFunc(d.wsHandler.HandleWebSocket),
+		d.wsAuth,
+	))
 
 	// MCP — registered under three paths so the same handler serves all of
 	// them. CORS-wrapped because external clients (VS Code) hit these.
+	// MCP clients conventionally send `Authorization: Bearer`, which
+	// RequireAPIKey accepts, so they work unchanged once auth is on.
 	mcpHandler := middleware.Apply(
 		http.HandlerFunc(d.mcpHandler.HandleMCP),
 		middleware.Logger,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
+		d.auth,
 	)
 	mux.Handle("GET /{$}", mcpHandler)
 	mux.Handle("POST /{$}", mcpHandler)
@@ -138,14 +155,18 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	a2aHandler := middleware.Apply(a2aSub,
 		middleware.Logger,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
+		d.auth,
 	)
 	mux.Handle("/a2a/v1/", a2aHandler)
 
 	// Agent card lives at /.well-known/agent-card.json (outside /a2a/v1/).
+	// It advertises the server's own base URL, so it is guarded too — an
+	// open discovery document is reconnaissance.
 	mux.Handle("GET /.well-known/agent-card.json", middleware.Apply(
 		http.HandlerFunc(d.agentCardHandler.ServeHTTP),
 		middleware.Logger,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
+		d.auth,
 	))
 	mux.Handle("OPTIONS /.well-known/agent-card.json", middleware.Apply(
 		http.HandlerFunc(d.agentCardHandler.ServeHTTP),
@@ -153,11 +174,12 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 	))
 
-	// REST API — CORS-wrapped + body-size limited.
+	// REST API — CORS-wrapped + body-size limited + authenticated.
 	apiHandler := middleware.Apply(d.apiRouter(),
 		middleware.Logger,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		middleware.RequestSizeLimit(d.maxBodyBytes),
+		d.auth,
 	)
 	mux.Handle("/api/", apiHandler)
 

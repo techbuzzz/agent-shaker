@@ -23,7 +23,108 @@ function upstreamWs(): string {
   return configured.replace(/^http/, 'ws').replace(/\/+$/, '')
 }
 
+/**
+ * Credentials for the upstream handshake.
+ *
+ * A caller's own key is forwarded as-is; the SPA has no key, so the server-only
+ * NUXT_API_KEY is injected instead. Because the handshake is dialled
+ * server-to-server, the key never reaches the browser and never appears in the
+ * upstream request line.
+ *
+ * The incoming credential is read from the upgrade request carried on the peer
+ * (crossws exposes it there; there is no h3 event inside a WebSocket hook).
+ *
+ * The parameter is typed structurally rather than as crossws's `Peer` so this
+ * file does not depend on a transitive package's exported type surface. Only
+ * `request.headers` is used.
+ */
+function upstreamAuthHeaders(peer: { request?: { headers?: Headers } }): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const incoming = peer.request?.headers
+
+  const authz = incoming?.get?.('authorization')
+  const apiKey = incoming?.get?.('x-api-key')
+  const presented = authz ?? apiKey
+
+  if (presented) {
+    headers['x-api-key'] = presented
+  } else {
+    const configured = useRuntimeConfig().apiKey
+    if (configured) headers['x-api-key'] = configured
+  }
+  return headers
+}
+
+/**
+ * Reject handshakes from origins we do not serve.
+ *
+ * The Go service runs its own Origin check, but that check is bypassed for
+ * browser traffic: this proxy dials upstream server-to-server with no Origin
+ * header, and the Go handler treats an absent Origin as same-origin. Combined
+ * with the credential being injected here for any caller, that would leave the
+ * endpoint open to cross-site WebSocket hijacking — a page on any site could
+ * open ws://<this-host>/ws?project_id=… and receive another user's project
+ * events.
+ *
+ * So the browser-facing hop is validated here instead. Configure with
+ * NUXT_WS_ALLOWED_ORIGINS; an empty value falls back to the request's own Host,
+ * i.e. same-origin only, which is the correct default for this topology.
+ */
+function originAllowed(origin: string, host: string): boolean {
+  const allowed = useRuntimeConfig().wsAllowedOrigins
+  const list = (allowed || '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+
+  if (list.length === 0) {
+    // Same-origin fallback: no explicit list means only this host may connect.
+    if (!host) return false
+    try {
+      return new URL(origin).host === host
+    } catch {
+      return false
+    }
+  }
+
+  if (list.includes('*')) return true
+  const lowered = origin.toLowerCase()
+  return list.some((allowed) => {
+    const a = allowed.toLowerCase()
+    // Accept a sub-port form too: allow "https://app.example.com" to match
+    // "https://app.example.com:8443", mirroring the Go-side allow-list.
+    return lowered === a || lowered.startsWith(`${a}:`)
+  })
+}
+
 export default defineWebSocketHandler({
+  // `upgrade` runs before the socket exists.
+  //
+  // crossws turns a rejected upgrade into a real HTTP response only when this
+  // hook *returns* a Response: its wrapper reads `res.ok === false` and passes
+  // it to `sendResponse`. Throwing does not work here — the catch block only
+  // converts a throw that is `instanceof Response` (or has a `.response` that
+  // is), and an h3 `createError` is an H3Error, so it would be re-thrown and
+  // leave the socket hanging instead of refusing the handshake.
+  upgrade(request) {
+    const origin = request.headers.get('origin')
+    const host = request.headers.get('host') ?? ''
+
+    // A missing Origin means a non-browser client (CLI, test harness). Those
+    // must present a credential, which the Go service enforces, and there is
+    // no ambient cookie to ride on, so there is no hijacking surface here.
+    if (!origin) return
+
+    if (!originAllowed(origin, host)) {
+      // No statusMessage: the DOM ResponseInit type omits it even though
+      // undici honours it, and the 403 status line is what the client sees.
+      return new Response('Forbidden', {
+        status: 403,
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      })
+    }
+  },
+
   open(peer) {
     const requestUrl = peer.request?.url ?? '/ws'
     const url = new URL(requestUrl, 'http://localhost')
@@ -39,7 +140,18 @@ export default defineWebSocketHandler({
 
     let upstream: WebSocket
     try {
-      upstream = new WebSocket(target)
+      // Node's global WebSocket (undici) accepts a WHATWG options dictionary as
+      // its second argument, so `headers` is honoured at runtime. The bundled
+      // DOM lib still types that parameter as the subprotocol list, so the
+      // cast is confined to this single call rather than weakening the file.
+      //
+      // Injecting the credential on the handshake — rather than as a query
+      // parameter — keeps the key out of upstream access logs. A caller-supplied
+      // key still wins, so a headless client can use its own credential.
+      upstream = new WebSocket(
+        target,
+        { headers: upstreamAuthHeaders(peer) } as unknown as string[],
+      )
     } catch (err) {
       peer.send(JSON.stringify({ type: 'error', message: `upstream dial failed: ${(err as Error).message}` }))
       peer.close(1011, 'upstream dial failed')

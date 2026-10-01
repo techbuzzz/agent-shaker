@@ -86,6 +86,12 @@ services:
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-200}
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-10485760}
+      # API-key authentication. The server refuses to boot when AUTH_ENABLED is
+      # true and API_KEYS is empty, so a half-configured deployment fails loudly
+      # instead of serving unauthenticated or rejecting every caller.
+      # Comma-separated so several clients can rotate independently.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      API_KEYS: ${API_KEYS:?API_KEYS is required when AUTH_ENABLED=true}
       # Tracing stays off unless an OTLP endpoint is supplied.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.05}
@@ -110,6 +116,15 @@ services:
       NITRO_PORT: "3000"
       # Server-only upstream for the Nitro proxy. Never exposed to the browser.
       NUXT_API_UPSTREAM: "http://mcp-server:8080"
+      # Injected by the proxy into upstream requests when the caller did not
+      # supply its own credential. Server-only runtimeConfig, so the key never
+      # enters the client bundle. Must be one of the values in API_KEYS.
+      NUXT_API_KEY: ${API_KEYS:?API_KEYS is required when AUTH_ENABLED=true}
+      # Origin allow-list for the /ws handshake. Empty means same-origin only,
+      # which is correct when the UI and this service share an origin. Set it
+      # explicitly if the UI is served from a different origin than the one
+      # that terminates TLS.
+      NUXT_WS_ALLOWED_ORIGINS: ${NUXT_WS_ALLOWED_ORIGINS:-}
       # Public bases stay EMPTY so the SPA uses same-origin /api and /ws.
       NUXT_PUBLIC_API_BASE: ""
       NUXT_PUBLIC_WS_BASE: ""

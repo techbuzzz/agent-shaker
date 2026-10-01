@@ -45,6 +45,23 @@ export default defineNuxtConfig({
     // hostname (e.g. http://mcp-server:8080) is never shipped to the browser.
     // Set at deploy time via NUXT_API_UPSTREAM.
     apiUpstream: process.env.NUXT_API_UPSTREAM || 'http://127.0.0.1:8080',
+
+    // Server-only API key injected into upstream requests when the caller did
+    // not supply one of their own. This is what lets the SPA reach an
+    // authenticated Go service without the key ever entering the browser
+    // bundle. Server-only for the same reason as apiUpstream: a key under
+    // `public` would be readable by anyone who loads the page.
+    apiKey: process.env.NUXT_API_KEY || '',
+
+    // Server-only origin allow-list for the /ws handshake, enforced in
+    // server/routes/ws.ts. Comma-separated. Empty means same-origin only.
+    //
+    // This exists because the proxy injects the API key for every caller: the
+    // Go-side Origin check is bypassed for browser traffic (the upstream dial
+    // carries no Origin), so without this the endpoint would be open to
+    // cross-site WebSocket hijacking.
+    wsAllowedOrigins: process.env.NUXT_WS_ALLOWED_ORIGINS || '',
+
     public: {
       // Leave EMPTY in production. An empty value makes useServerUrl resolve a
       // same-origin `/api` and `/ws`, both served by the Nitro proxy. That

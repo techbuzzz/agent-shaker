@@ -134,10 +134,23 @@ export function useApi(): UseApi {
 
   async function checkHealth(): Promise<boolean> {
     try {
-      // Hit /health directly (outside /api) so the dashboard can probe before any project load.
-      await $fetch('/health', {
-        baseURL: apiBase.value.replace(/\/api$/, ''),
-        method: 'GET'
+      // Probe an *authenticated* endpoint, not /health.
+      //
+      // /health is intentionally unauthenticated so orchestrators and load
+      // balancers can reach it. Probing it from the browser therefore cannot
+      // tell the user whether their credential is accepted: with a bad key the
+      // indicator would read "connected" while every page silently rendered
+      // empty, which is a far more confusing failure than a clear
+      // "disconnected".
+      //
+      // /api/projects is the cheapest authenticated route and exercises the
+      // same path the app uses for everything else, credential injection
+      // included.
+      await $fetch('/projects', {
+        baseURL: apiBase.value,
+        method: 'GET',
+        // An empty project list is a valid response; do not treat it as failure.
+        timeout: 5000,
       })
       isConnected.value = true
       lastCheckedAt.value = Date.now()

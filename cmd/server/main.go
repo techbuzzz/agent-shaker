@@ -203,7 +203,49 @@ func main() {
 	defer rateShutdown(context.Background())
 
 	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
-	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
+
+	// CORS credentials are independent of authentication. The single-origin
+	// topology does not need them, and enabling them forces every origin in
+	// the allow-list to be exact (no wildcards), so this stays opt-in under its
+	// own name rather than piggybacking on AUTH_ENABLED.
+	corsAllowCreds := os.Getenv("CORS_ALLOW_CREDENTIALS") == "true"
+
+	// API-key authentication.
+	//
+	// Enabled only when AUTH_ENABLED=true. Keys come from API_KEYS as a
+	// comma-separated list, so several clients can rotate independently
+	// without downtime. Misconfiguration is fatal: booting "protected" with an
+	// empty key set is the failure mode that turns into an outage later, and
+	// booting with a default key is worse.
+	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
+	apiKeys := middleware.APIKeysFromEnv("API_KEYS")
+
+	authMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
+		Enabled: authEnabled,
+		Keys:    apiKeys,
+		// Probes stay reachable: an orchestrator or load balancer has no
+		// credential, and a 401 there becomes a crash-restart loop instead of
+		// a clear configuration error.
+		Skip: []string{"/healthz", "/readyz", "/metrics", "/health"},
+	})
+	if err != nil {
+		slog.Error("authentication is misconfigured; refusing to start", "error", err)
+		os.Exit(2)
+	}
+
+	// Same check, plus the ?api_key= fallback used only by /ws.
+	wsAuthMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
+		Enabled:       authEnabled,
+		Keys:          apiKeys,
+		AllowQueryKey: true,
+		Skip:          []string{"/healthz", "/readyz", "/metrics", "/health"},
+	})
+	if err != nil {
+		slog.Error("authentication is misconfigured; refusing to start", "error", err)
+		os.Exit(2)
+	}
+
+	slog.Info("api authentication", "config", middleware.DescribeAuthConfig(authEnabled, apiKeys))
 
 	// TLS normally terminates at a reverse proxy in front of this service.
 	// This flag does not enable TLS — it tells SecurityHeaders whether the
@@ -235,6 +277,8 @@ func main() {
 		corsOrigins:          corsOrigins,
 		corsAllowCreds:       corsAllowCreds,
 		isTLS:                isTLS,
+		auth:                 authMW,
+		wsAuth:               wsAuthMW,
 		rateLimitShutdown:    rateShutdown,
 	}
 
