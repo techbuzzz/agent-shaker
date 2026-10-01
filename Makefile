@@ -29,7 +29,7 @@ GO_FILES   := $(shell find cmd internal tests -name '*.go' 2>/dev/null)
 GO_DIRS    := $(sort $(dir $(GO_FILES)))
 WEB_DIR    := web
 
-.PHONY: help check check-all workflow-lint fmt fmt-check vet lint build run clean \
+.PHONY: help check check-all workflow-lint fmt fmt-check vet lint test test-race build run clean \
         test test-race test-integration cover \
         web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \
@@ -53,7 +53,7 @@ check: fmt-check vet test ## Run the full pre-commit gate (fmt, vet, tests)
 
 # The whole gate, including the frontend. `check` stays Go-only so it stays fast
 # enough to run on every save; this is the one to run before pushing.
-check-all: check workflow-lint web-typecheck web-test ## Full gate: Go + workflow schema + frontend typecheck + frontend tests
+check-all: check workflow-lint test-race web-typecheck web-test ## Full gate: Go + race + workflow schema + frontend typecheck + frontend tests
 	@echo "✓ check-all passed"
 
 # Validates .github/workflows against GitHub's own schema, not just YAML
@@ -77,13 +77,18 @@ fmt-check: ## Fail if any Go file needs gofmt
 vet: ## Run go vet
 	go vet ./...
 
-lint: ## Run golangci-lint v2 (fails on findings)
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.0 run
+lint: ## Run golangci-lint (fails on findings)
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run
 
 test: ## Run all unit tests
 	go test -count=1 ./...
 
-test-race: ## Run all tests under the race detector
+# -race needs cgo, which a checkout without a C toolchain does not have. The
+# guard exists so the failure is a one-line explanation rather than Go's
+# "go: -race requires cgo; enable cgo by setting CGO_ENABLED=1".
+test-race: ## Run all tests under the race detector (needs a C compiler)
+	@command -v gcc >/dev/null 2>&1 || command -v clang >/dev/null 2>&1 \
+		|| { echo "-race needs cgo: install gcc or clang, or skip this target"; exit 1; }
 	go test -race -count=1 ./...
 
 test-integration: ## Run integration-tagged tests (DATABASE_URL required)

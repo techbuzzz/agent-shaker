@@ -205,13 +205,21 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      # v2 is required for Go 1.26+ module graph handling; the pinned v1 line
-      # cannot parse the current go directive.
+      # The linter must be built with a Go at least as new as the module's `go`
+      # directive, or it refuses to load anything:
+      #
+      #   can't load config: the Go language version (go1.24) used to build
+      #   golangci-lint is lower than the targeted Go version (1.26.0)
+      #
+      # v2.1 hit this — it is built with Go 1.24 against a go 1.26.0 module — and
+      # failed in about a second, before linting a single file. So the major
+      # version alone is not the constraint; the build Go is. When Go moves
+      # again, bump this to the first release built with Go >= the new directive.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.1
-          args: --timeout=5m
+          version: v2.14.0
+          args: --timeout=10m
 
   # --------------------------------------------------------- Nuxt 4 frontend
   frontend:
