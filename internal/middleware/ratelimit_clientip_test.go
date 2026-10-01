@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 func TestClientIP(t *testing.T) {
@@ -115,6 +117,20 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// Rate limits below are deliberately far slower than any test needs.
+//
+// These tests were written with Limit: 1 — one token per second — which gave
+// each one a budget of roughly a second to finish. That is not a margin, it is
+// a race against the wall clock: under `-race` on a loaded CI runner, ten
+// concurrent requests plus goroutine scheduling can cross a second, a token
+// returns, one request is admitted with a 200, and the test fails. It passed
+// locally 55/55 and failed in CI, on the same commit, in two different runs.
+//
+// A refill of 0.01/s means one token every 100 seconds. The test still proves
+// what it is meant to prove — that forged prefixes share one bucket — but its
+// outcome no longer depends on how fast the machine is.
+const frozenLimit rate.Limit = 0.01
+
 // TestRateLimitForgedXFFCannotMintBuckets is the behaviour that matters at the
 // limiter's level rather than the parser's: many clients forging different
 // XFF prefixes must still share the one bucket the proxy created for them.
@@ -123,8 +139,8 @@ func TestClientIP(t *testing.T) {
 func TestRateLimitForgedXFFCannotMintBuckets(t *testing.T) {
 	t.Parallel()
 
-	const limit, burst = 1, 2
-	mw, shutdown := RateLimit(RateLimitConfig{Limit: limit, Burst: burst, TrustedProxy: true})
+	const burst = 2
+	mw, shutdown := RateLimit(RateLimitConfig{Limit: frozenLimit, Burst: burst, TrustedProxy: true})
 	defer shutdown(t.Context())
 
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -177,7 +193,7 @@ func TestRateLimitForgedXFFCannotMintBuckets(t *testing.T) {
 func TestRateLimitSeparatesDistinctClients(t *testing.T) {
 	t.Parallel()
 
-	mw, shutdown := RateLimit(RateLimitConfig{Limit: 1, Burst: 1, TrustedProxy: true})
+	mw, shutdown := RateLimit(RateLimitConfig{Limit: frozenLimit, Burst: 1, TrustedProxy: true})
 	defer shutdown(t.Context())
 
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -209,7 +225,7 @@ func TestRateLimitSkipPaths(t *testing.T) {
 	t.Parallel()
 
 	mw, shutdown := RateLimit(RateLimitConfig{
-		Limit: 1, Burst: 1,
+		Limit: frozenLimit, Burst: 1,
 		Skip:         SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
 		TrustedProxy: true,
 	})
