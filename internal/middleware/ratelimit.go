@@ -152,13 +152,39 @@ func evict(store *sync.Map, now time.Time, idleAfter time.Duration, maxEntries i
 	}
 }
 
+// clientIP returns the bucket key for a request.
+//
+// trustedProxy controls whether X-Forwarded-For is consulted at all. It is off
+// by default and must stay off whenever the service is reachable other than
+// through a proxy you control, because a client can then choose its own bucket
+// by rotating the header and the limiter stops meaning anything.
+//
+// ## Why the RIGHTMOST entry, not the leftmost
+//
+// Reverse proxies APPEND to X-Forwarded-For. Given a client that sends
+//
+//	X-Forwarded-For: 1.2.3.4
+//
+// Caddy rewrites it to
+//
+//	X-Forwarded-For: 1.2.3.4, <the address Caddy actually saw>
+//
+// The leftmost entry is therefore whatever the client felt like sending, and
+// trusting it hands the limiter's identity straight to the caller: rotate a
+// forged value and every request lands in a fresh, empty bucket. That is not a
+// subtle weakness, it disables rate limiting entirely with one header.
+//
+// The rightmost entry is the one the trusted proxy itself appended, i.e. the
+// peer it really observed. For a single trusted proxy in front — the topology
+// this project ships — that is exactly the client.
+//
+// With a longer proxy chain the rightmost entry is the proxy nearest the
+// service rather than the client. That is why TrustedProxy is an explicit
+// operator decision and not something inferred: the operator knows their chain.
 func clientIP(r *http.Request, trustedProxy bool) string {
 	if trustedProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-			if first != "" {
-				return first
-			}
+		if ip := rightmostForwardedFor(r.Header.Get("X-Forwarded-For")); ip != "" {
+			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -166,4 +192,21 @@ func clientIP(r *http.Request, trustedProxy bool) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// rightmostForwardedFor returns the last entry of an X-Forwarded-For list, or
+// "" if the header is absent or contains nothing usable.
+func rightmostForwardedFor(v string) string {
+	if v == "" {
+		return ""
+	}
+	parts := strings.Split(v, ",")
+	last := strings.TrimSpace(parts[len(parts)-1])
+	// Strip an optional port so the bucket key is the address alone; a client
+	// cannot change its source port anyway, and keeping it would let one client
+	// mint unlimited buckets by varying the port.
+	if host, _, err := net.SplitHostPort(last); err == nil {
+		return host
+	}
+	return last
 }

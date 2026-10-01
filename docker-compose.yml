@@ -98,6 +98,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
       RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-200}
+      # Read the client address from X-Forwarded-For. Safe HERE specifically
+      # because this service publishes no host port: every request arrives over
+      # the internal network from `edge` (or `web`), never from a client
+      # directly. Without it, every caller shares one bucket keyed on the proxy
+      # container's IP and a single noisy client throttles the whole deployment.
+      #
+      # The rightmost X-Forwarded-For entry is the one Caddy appended, so a
+      # client that forges the header cannot mint its own bucket.
+      TRUSTED_PROXY: "true"
       MAX_BODY_BYTES: ${MAX_BODY_BYTES:-10485760}
       # API-key authentication. The server refuses to boot when AUTH_ENABLED is
       # true and API_KEYS is empty, so a half-configured deployment fails loudly

@@ -185,6 +185,13 @@ Never edit a key in place on a running container — restart with a different
 - **Rate limiting** still applies to authenticated requests, keyed by client IP.
   Excluded paths are unchanged: `/ws`, `/healthz`, `/readyz`, `/metrics`.
 
+  Behind the bundled edge, `TRUSTED_PROXY=true` makes the key come from
+  `X-Forwarded-For` — otherwise every caller would share the proxy container's
+  IP and one client could throttle the rest. The **rightmost** entry is read, not
+  the leftmost, because proxies append: a client that forges the header gets
+  entries that are ignored rather than a bucket of its own to rotate. See
+  [DEPLOYMENT.md](./DEPLOYMENT.md#rate-limiting-behind-the-edge).
+
 ## Verifying it is actually enforced
 
 ```bash

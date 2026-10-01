@@ -212,6 +212,47 @@ made, for both `/api/*` and `/ws`.
 API-key auth. An orchestrator has no credential, and a 401 there becomes a
 crash-restart loop instead of a legible configuration error.
 
+## Rate limiting behind the edge
+
+`mcp-server` sets `TRUSTED_PROXY=true`, and the reason is specific to this
+topology.
+
+Without it, every request reaches the Go service from the **Caddy container's
+own IP**. The "per-IP" buckets collapse into one, so `RATE_LIMIT_RPS=100`
+becomes a cap for the entire deployment rather than for each caller — a single
+noisy client throttles everyone, including the UI.
+
+The flag is safe here and only here: `mcp-server` publishes no host port, so
+every request provably arrives over the internal network. For a bare binary on
+a public host, leave it unset.
+
+### Why the rightmost `X-Forwarded-For` entry, not the leftmost
+
+This is the part worth copying if you put another proxy in front. Reverse
+proxies **append** to `X-Forwarded-For`. A client that sends its own header:
+
+```
+X-Forwarded-For: 1.2.3.4
+```
+
+comes out of Caddy as:
+
+```
+X-Forwarded-For: 1.2.3.4, <the address Caddy actually saw>
+```
+
+Reading the **leftmost** entry hands the caller their own bucket identity.
+Rotating a forged value per request then defeats rate limiting completely with
+one header — the opposite of the point of having it.
+
+The service reads the **rightmost** entry, the one the trusted proxy itself
+appended, i.e. the peer it actually observed. The port is stripped as well, so
+varying the source port cannot mint buckets either.
+
+Verified through the running edge: 600 concurrent requests carrying a rotating
+forged `X-Forwarded-For` are throttled into the same bucket the honest requests
+use, not into fresh ones.
+
 ## A2A discovery
 
 The agent card is served at `/.well-known/agent-card.json` and is reachable

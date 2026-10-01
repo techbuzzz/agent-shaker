@@ -209,12 +209,30 @@ func main() {
 	// Build the route table and middleware chain. See cmd/server/routes.go
 	// for the actual route registrations.
 	obs := observability.New()
+	// Per-IP rate limiting, keyed on the client the *trusted proxy* observed.
+	//
+	// Behind the bundled Caddy edge every request arrives from the Caddy
+	// container's own address, so without TRUSTED_PROXY=true the "per-IP"
+	// buckets collapse into a single global one: one noisy client throttles
+	// everyone, and 100 rps becomes a cap for the whole deployment rather than
+	// for each caller.
+	//
+	// It is off by default on purpose. Trusting X-Forwarded-For is only sound
+	// when nothing can reach this service except through a proxy you control —
+	// which the compose topology guarantees (mcp-server publishes no host port)
+	// and a bare binary on a public host does not. See clientIP for why the
+	// rightmost entry is read rather than the leftmost.
+	trustedProxy := os.Getenv("TRUSTED_PROXY") == "true"
 	rateMW, rateShutdown := middleware.RateLimit(middleware.RateLimitConfig{
-		Limit: middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
-		Burst: middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
-		Skip:  middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
+		Limit:        middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
+		Burst:        middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
+		Skip:         middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
+		TrustedProxy: trustedProxy,
 	})
 	defer rateShutdown(context.Background())
+	if trustedProxy {
+		slog.Info("rate limiting trusts X-Forwarded-For; ensure no proxy can reach this service directly")
+	}
 
 	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
 
