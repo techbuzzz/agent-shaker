@@ -33,6 +33,7 @@ WEB_DIR    := web
         test test-race test-integration cover \
         web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \
+        db-backup db-backups db-restore \
         docker-build docker-up docker-down docker-logs docker-config \
         caddy-validate caddy-fmt caddy-fmt-check \
         edge-up edge-down \
@@ -126,6 +127,78 @@ migrate-version: ## Print the current schema version
 
 migrate-force: ## Force the schema version (recover from a half-applied migration)
 	go run ./cmd/migrate -cmd force -version $(VERSION)
+
+# ------------------------------------------------------------------- backups
+#
+# A live deployment holds real project, agent and task data, and
+# `docker compose down -v` deletes all of it. These targets are the only
+# supported way in or out of that state.
+#
+# The dump is written to the HOST, never into the container: a file on the
+# postgres volume dies with the volume it was meant to protect you from.
+# `backups/` is git-ignored, because a dump is the entire dataset in plaintext
+# (base64 inside -Fc, which is not encryption).
+
+BACKUP_DIR ?= backups
+PG_SERVICE  ?= postgres
+
+db-backup: ## Dump the database to backups/<timestamp>.dump (host-local, git-ignored)
+	@mkdir -p $(BACKUP_DIR)
+	@ts=$$(date -u +%Y%m%dT%H%M%SZ); \
+	file=$(BACKUP_DIR)/agent-shaker-$$ts.dump; \
+	echo "→ dumping to $$file"; \
+	docker compose exec -T $(PG_SERVICE) \
+		pg_dump -U "$${POSTGRES_USER:-mcp}" -d "$${POSTGRES_DB:-mcp_tracker}" -Fc > "$$file"; \
+	# A truncated dump is worse than no dump: it fails at restore time, when
+	# you are already out of options. Fail here instead.
+	if [ ! -s "$$file" ]; then echo "✗ dump is empty"; exit 1; fi
+	sha256sum "$$file" > "$$file.sha256"
+	@ls -lh "$$file" | awk '{print "✓ $$5  " $$9}'
+	@echo "  checksum: $$(cut -d" " -f1 < "$$file.sha256")"
+
+db-backups: ## List local backups, newest first
+	@ls -1t $(BACKUP_DIR)/*.dump 2>/dev/null || { echo "no backups in $(BACKUP_DIR)/"; exit 0; }
+
+# Restoring REPLACES the database contents. It is not a merge. The guard is
+# deliberate friction: a restore typed with the wrong filename, or run twice
+# by accident, is how an otherwise good backup becomes the thing that lost the
+# data.
+db-restore: ## Replace the database from a dump. FILE=backups/<name>.dump
+	@test -n "$(FILE)" || { echo "usage: make db-restore FILE=backups/<name>.dump"; exit 2; }
+	@test -f "$(FILE)" || { echo "✗ no such file: $(FILE)"; exit 1; }
+	# Compare the hash of the file being restored against the recorded one.
+	#
+	# Deliberately NOT `sha256sum -c`: that verifies whatever FILENAME the
+	# .sha256 file names, not the file passed to this target. Move or rename a
+	# dump and it either errors confusingly or, worse, cheerfully verifies a
+	# different, intact file and lets a corrupt one through. Comparing the two
+	# hashes directly is unambiguous.
+	@if [ -f "$(FILE).sha256" ]; then \
+		want=$$(cut -d' ' -f1 < "$(FILE).sha256" | tr -d '*[:space:]'); \
+		got=$$(sha256sum "$(FILE)" | cut -d' ' -f1 | tr -d '*[:space:]'); \
+		if [ -n "$$want" ] && [ "$$want" = "$$got" ]; then \
+			echo "✓ checksum verified"; \
+		else \
+			echo "✗ checksum mismatch — refusing to restore a corrupt dump"; \
+			echo "  expected $$want"; \
+			echo "  actual   $$got"; \
+			exit 1; \
+		fi; \
+	else \
+		echo "! no .sha256 alongside $(FILE); restoring unverified"; \
+	fi
+	@echo "→ this DROPS and recreates the schema and all data in the database."
+	@echo "→ press Ctrl-C now to abort."
+	@sleep 3
+	docker compose exec -T $(PG_SERVICE) \
+		psql -U "$${POSTGRES_USER:-mcp}" -d "$${POSTGRES_DB:-mcp_tracker}" \
+		-v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' >/dev/null
+	docker compose cp - $(PG_SERVICE):/tmp/restore.dump < "$(FILE)"
+	docker compose exec -T $(PG_SERVICE) \
+		pg_restore -U "$${POSTGRES_USER:-mcp}" -d "$${POSTGRES_DB:-mcp_tracker}" \
+		--no-owner --no-privileges /tmp/restore.dump
+	docker compose exec -T $(PG_SERVICE) rm -f /tmp/restore.dump
+	@echo "✓ restored from $(FILE)"
 
 # -------------------------------------------------------------------- docker
 

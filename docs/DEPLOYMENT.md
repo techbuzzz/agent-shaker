@@ -271,6 +271,50 @@ Each line carries both:
 Joining a `429` to the request that caused it is `remote`, and that join works
 only because both subsystems resolve the same value.
 
+## Backups
+
+A live deployment holds real projects, agents, tasks and contexts, and
+`docker compose down -v` deletes all of it. These targets are the supported
+way in and out of that state.
+
+```bash
+make db-backup                      # -> backups/agent-shaker-<ts>.dump + .sha256
+make db-backups                     # list, newest first
+make db-restore FILE=backups/<name>.dump
+```
+
+The dump is written to the **host**, never into the container. A file on the
+postgres volume dies with the volume it was meant to protect you from.
+
+`backups/` is git-ignored, and it must stay that way. A dump is the entire
+dataset; `-Fc` is compression, not encryption.
+
+### `db-restore` replaces, it does not merge
+
+It drops and recreates the public schema, then replays the dump. Everything
+created since the dump is gone. The target prints what it is about to do and
+sleeps three seconds so an accidental invocation can be interrupted.
+
+### Why the checksum is compared by hand
+
+Each backup writes a `.sha256` alongside the dump, and `db-restore` refuses to
+proceed on a mismatch. The comparison is done by extracting the recorded hash
+and hashing the file being restored — deliberately **not** `sha256sum -c`.
+
+`sha256sum -c` verifies whatever *filename* the checksum file names, not the
+file you passed in. Move or rename a dump and it either fails confusingly or,
+worse, cheerfully verifies a different intact file while the corrupt one you
+actually asked to restore sails through.
+
+The case that matters is invisible: a corrupt dump of the same length as the
+original, with a `.sha256` naming some other intact file. A size check misses
+it, `sha256sum -c` passes it, and the restore destroys the live database with
+garbage. The direct comparison catches it.
+
+Verified: same-length byte corruption and a truncated dump are both refused; an
+intact dump passes; and a full backup → delete → restore cycle brings the data
+back with the app healthy.
+
 ## A2A discovery
 
 The agent card is served at `/.well-known/agent-card.json` and is reachable

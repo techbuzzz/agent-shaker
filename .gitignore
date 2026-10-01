@@ -49,6 +49,13 @@ postgres_data/
 *.sqlite3
 *.db
 
+# Database dumps. `make db-backup` writes here on purpose — a dump must land on
+# the host, not on the volume it protects. It is the entire dataset, and -Fc is
+# compression, not encryption, so nothing here may ever be committed.
+backups/
+*.dump
+*.dump.sha256
+
 # ---- Logs ----
 *.log
 /logs/
