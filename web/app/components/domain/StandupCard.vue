@@ -8,7 +8,7 @@ const { formatDate } = useFormatters()
 </script>
 
 <template>
-  <UCard :ui="{ body: { padding: 'p-5' } }">
+  <UCard :ui="{ body: 'p-5' }">
     <div class="flex items-start justify-between gap-3 mb-3">
       <div>
         <h3 class="font-semibold flex items-center gap-2">

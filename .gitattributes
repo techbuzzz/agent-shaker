@@ -1,0 +1,38 @@
+# Normalise line endings in the repository so that a Windows checkout and a
+# Linux CI runner produce byte-identical files. Without this, `core.autocrlf=true`
+# on Windows rewrites LF to CRLF on checkout, and `gofmt -l` (which requires LF)
+# then flags every Go file locally while the same commit is clean in CI.
+#
+# Windows contributors: ALSO run this once, in the repo —
+#
+#     git config core.autocrlf false
+#
+# `.gitattributes` governs what is stored and what CI sees (always LF), but a
+# global `core.autocrlf=true` can still materialise CRLF in your working tree on
+# some Git for Windows versions, which makes `make check` fail locally for no
+# real reason. Setting it locally removes the ambiguity.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to remain double-clickable.
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# Binary assets — never touched by EOL normalisation.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webmanifest binary
+*.woff  binary
+*.woff2 binary
+*.exe   binary
+*.zip   binary
+*.gz    binary
+
+# Keep generated/vendored trees out of language tooling and diffs.
+web/node_modules/   binary
+web/.nuxt/          binary
+web/.output/        binary
+web/_out_old/       binary

@@ -39,7 +39,7 @@ const colorMode = useColorMode()
 
 <template>
   <div class="min-h-screen flex items-center justify-center p-6">
-    <UCard class="w-full max-w-2xl" :ui="{ body: { padding: 'p-6 sm:p-8' } }">
+    <UCard class="w-full max-w-2xl" :ui="{ body: 'p-6 sm:p-8' }">
       <template #header>
         <div class="flex items-center gap-3">
           <NuxtLink to="/" class="flex items-center gap-2 text-sm text-muted hover:text-primary">

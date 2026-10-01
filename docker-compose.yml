@@ -1,48 +1,241 @@
+# Production topology for Agent Shaker.
+#
+#   browser ──┐
+#             ├──► web (Nuxt SSR, :3000) ──/api,/ws──► mcp-server (:8080) ──► postgres
+#   MCP / A2A ┘        (Nitro proxy)                    ▲
+#                                                     └── via Caddy under the `tls` profile
+#
+# Why this shape:
+#   * The browser only ever talks to ONE origin. `useServerUrl` defaults to an
+#     empty server URL, which resolves apiBase to `/api` and wsBase to `/ws`;
+#     both are proxied server-side to the Go service. That means no CORS
+#     negotiation, no third-party cookies, and no internal hostname leak.
+#   * `mcp-server` publishes NO host port. It is only reachable on the internal
+#     compose network. Put TLS termination in front.
+#   * The `tls` profile adds Caddy as the sole public entrypoint. It splits
+#     traffic by caller: human traffic goes to `web`, machine traffic
+#     (`/mcp*`, `/a2a/*`, `/.well-known/*`) goes straight to `mcp-server`.
+#     See deploy/Caddyfile for why that split exists and why the machine
+#     branch is not behind basic auth.
+#   * Migrations run as a one-shot job before the API starts, so a fresh volume
+#     converges without a manual step.
+#
+# Required env (see .env.example):
+#   POSTGRES_PASSWORD  — required; compose refuses to start without it.
+name: agent-shaker
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: mcp_tracker
-      POSTGRES_USER: mcp
-      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ${POSTGRES_DB:-mcp_tracker}
+      POSTGRES_USER: ${POSTGRES_USER:-mcp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      # Deterministic collation so ORDER BY does not change between hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5433:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mcp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mcp} -d ${POSTGRES_DB:-mcp_tracker}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
+    # No published port by default. Uncomment for local `psql` access.
+    # ports:
+    #   - "127.0.0.1:5433:5432"
+    networks: [internal]
 
-  mcp-server:
-    build: .
-    ports:
-      - "8080:8080"
+  # One-shot: apply migrations, then exit. `service_completed_successfully`
+  # gates the API on it, so the API never starts against a stale schema.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./migrate", "-cmd", "up", "-dir", "migrations"]
     environment:
-      DATABASE_URL: postgres://mcp:secret@postgres:5432/mcp_tracker?sslmode=disable
-      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-mcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_tracker}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
+    networks: [internal]
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-mcp}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mcp_tracker}?sslmode=disable
+      PORT: "8080"
+      ENV: production
+      # Single-origin deployment: the browser only ever sends requests to the
+      # Nuxt origin, so the Go service needs no cross-origin allow-list. The
+      # Nitro proxy is server-to-server and CORS does not apply.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # WebSocket origin check. Must list the public origin that serves the UI.
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # HSTS is derived per request from r.TLS and X-Forwarded-Proto, so Caddy
+      # (which sets that header) gets it with no configuration at all. This is
+      # only an override for a fronting proxy that does NOT set
+      # X-Forwarded-Proto. Leave it false in every supported topology.
+      #
+      # It used to be a required second flag to pair with the `tls` profile,
+      # because compose cannot set an env var based on whether a profile is
+      # active — and forgetting to disabled HSTS silently, with no error.
+      TLS_TERMINATED: ${TLS_TERMINATED:-false}
+      # Compose already runs migrations as the one-shot `migrate` job above;
+      # running them again in-process would mean two processes racing on the
+      # same schema. Disable it here explicitly.
+      RUN_MIGRATIONS_ON_START: "false"
+      TASK_STORE: ${TASK_STORE:-postgres}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-100}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-200}
+      # Read the client address from X-Forwarded-For. Safe HERE specifically
+      # because this service publishes no host port: every request arrives over
+      # the internal network from `edge` (or `web`), never from a client
+      # directly. Without it, every caller shares one bucket keyed on the proxy
+      # container's IP and a single noisy client throttles the whole deployment.
+      #
+      # The rightmost X-Forwarded-For entry is the one Caddy appended, so a
+      # client that forges the header cannot mint its own bucket.
+      TRUSTED_PROXY: "true"
+      MAX_BODY_BYTES: ${MAX_BODY_BYTES:-10485760}
+      # API-key authentication. The server refuses to boot when AUTH_ENABLED is
+      # true and API_KEYS is empty, so a half-configured deployment fails loudly
+      # instead of serving unauthenticated or rejecting every caller.
+      # Comma-separated so several clients can rotate independently.
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      API_KEYS: ${API_KEYS:?API_KEYS is required when AUTH_ENABLED=true}
+      # Tracing stays off unless an OTLP endpoint is supplied.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.05}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    expose:
+      - "8080"
+    networks: [internal]
 
   web:
     build:
       context: ./web
       dockerfile: Dockerfile
-    ports:
-      - "80:3000"
+    restart: unless-stopped
     environment:
-      # Internal proxy target (the MCP backend is reachable at this hostname inside the compose network)
-      NUXT_API_UPSTREAM: "http://mcp-server:8080/api"
-      NUXT_API_UPSTREAM_WS: "ws://mcp-server:8080"
-      NUXT_PUBLIC_API_BASE: "http://mcp-server:8080"
-      NUXT_PUBLIC_WS_BASE: "ws://mcp-server:8080"
+      NODE_ENV: production
+      PORT: "3000"
+      NITRO_HOST: "0.0.0.0"
+      NITRO_PORT: "3000"
+      # Server-only upstream for the Nitro proxy. Never exposed to the browser.
+      NUXT_API_UPSTREAM: "http://mcp-server:8080"
+      # Injected by the proxy into upstream requests when the caller did not
+      # supply its own credential. Server-only runtimeConfig, so the key never
+      # enters the client bundle. Must be one of the values in API_KEYS.
+      NUXT_API_KEY: ${API_KEYS:?API_KEYS is required when AUTH_ENABLED=true}
+      # Origin allow-list for the /ws handshake. Empty means same-origin only,
+      # which is correct when the UI and this service share an origin. Set it
+      # explicitly if the UI is served from a different origin than the one
+      # that terminates TLS.
+      NUXT_WS_ALLOWED_ORIGINS: ${NUXT_WS_ALLOWED_ORIGINS:-}
+      # Public bases stay EMPTY so the SPA uses same-origin /api and /ws.
+      NUXT_PUBLIC_API_BASE: ""
+      NUXT_PUBLIC_WS_BASE: ""
     depends_on:
       mcp-server:
-        condition: service_started
+        condition: service_healthy
+    # The port is only bound to the loopback interface. When the `tls` profile
+    # is active Caddy owns the public entrypoint and nothing should be able to
+    # reach Nuxt directly from outside the host.
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
+
+  # ---- TLS terminator + public perimeter ----------------------------------
+  # Opt-in via the `tls` profile:
+  #     docker compose --profile tls up -d
+  #
+  # Off by default so an existing reverse proxy, a load balancer, or a local
+  # laptop run is not forced to adopt Caddy. When it IS enabled it becomes the
+  # only published entrypoint and the Go service is told TLS is terminated, so
+  # HSTS is only advertised when a real certificate is in front of it.
+  edge:
+    image: caddy:2-alpine
+    profiles: [tls]
     restart: unless-stopped
+    # The requirement that basic auth exists is enforced HERE, at edge startup,
+    # rather than with compose's `:?` syntax. Compose interpolates the whole
+    # file regardless of which profiles are active, so `:?` on this service
+    # would make BASIC_AUTH_USER/BASIC_AUTH_HASH mandatory for a plain
+    # `docker compose up -d` — forcing every developer without a TLS edge to
+    # invent a bcrypt hash. Guarding in the command keeps the requirement
+    # scoped to the profile that needs it, and produces an actionable message
+    # instead of Caddy's "unrecognized hash algorithm" parse error.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if [ -z "$$BASIC_AUTH_USER" ] || [ -z "$$BASIC_AUTH_HASH" ]; then
+          echo "FATAL: the tls profile requires BASIC_AUTH_USER and BASIC_AUTH_HASH." >&2
+          echo "  The API key is not a login, so the edge is the only access" >&2
+          echo "  control in this topology. Generate a hash with:" >&2
+          echo "    docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'" >&2
+          echo "  then export it — see docs/DEPLOYMENT.md for why it must NOT" >&2
+          echo "  go in .env." >&2
+          exit 1
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+      # Optional here, mandatory for the edge to boot (see the command above).
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persists the ACME account and certificates across restarts. Without
+      # this, every redeploy burns Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      web:
+        condition: service_healthy
+      # Listed explicitly even though `web` already gates on it: with the
+      # `tls` profile the edge proxies MCP/A2A straight to the Go service, so
+      # that dependency is real rather than transitive.
+      mcp-server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [internal]
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

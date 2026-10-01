@@ -14,6 +14,15 @@ import (
 )
 
 // StandupsStore is the typed query layer for the standups + agent_heartbeats
+// tables.
+//
+// The physical table is `daily_standups` (created by
+// migrations/003_daily_standups.up.sql) even though the HTTP surface is
+// /api/standups. The two names diverged and every standup query used
+// `standups`, so the whole feature failed at runtime with
+// `relation "standups" does not exist`. Keep these statements pointed at
+// daily_standups, or add a migration that renames the table — do not silently
+// change one side only.
 // tables. The model has more than CRUD (heartbeat tracking) so this store
 // is wider than the others.
 type StandupsStore struct {
@@ -29,7 +38,7 @@ func (s *StandupsStore) Available() bool { return s.q != nil }
 
 func (s *StandupsStore) CreateStandup(ctx context.Context, st *models.DailyStandup) error {
 	_, err := s.q.ExecContext(ctx, `
-		INSERT INTO standups (id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at)
+		INSERT INTO daily_standups (id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, st.ID, st.AgentID, st.ProjectID, st.StandupDate, st.Did, st.Doing, st.Done, st.Blockers, st.Challenges, st.ReferenceLinks, st.CreatedAt, st.UpdatedAt)
 	if err != nil {
@@ -40,7 +49,7 @@ func (s *StandupsStore) CreateStandup(ctx context.Context, st *models.DailyStand
 
 func (s *StandupsStore) ListStandups(ctx context.Context, projectID *uuid.UUID) ([]models.DailyStandup, error) {
 	args := []any{}
-	q := `SELECT id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at FROM standups`
+	q := `SELECT id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at FROM daily_standups`
 	if projectID != nil {
 		q += " WHERE project_id = $1"
 		args = append(args, *projectID)
@@ -69,7 +78,7 @@ func (s *StandupsStore) GetStandup(ctx context.Context, id uuid.UUID) (*models.D
 	var st models.DailyStandup
 	err := s.q.QueryRowContext(ctx, `
 		SELECT id, agent_id, project_id, standup_date, did, doing, done, blockers, challenges, reference_links, created_at, updated_at
-		FROM standups WHERE id = $1
+		FROM daily_standups WHERE id = $1
 	`, id).Scan(&st.ID, &st.AgentID, &st.ProjectID, &st.StandupDate, &st.Did, &st.Doing, &st.Done, &st.Blockers, &st.Challenges, &st.ReferenceLinks, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -82,7 +91,7 @@ func (s *StandupsStore) GetStandup(ctx context.Context, id uuid.UUID) (*models.D
 
 func (s *StandupsStore) UpdateStandup(ctx context.Context, st *models.DailyStandup) error {
 	_, err := s.q.ExecContext(ctx, `
-		UPDATE standups
+		UPDATE daily_standups
 		SET did = $1, doing = $2, done = $3, blockers = $4, challenges = $5, reference_links = $6, updated_at = $7
 		WHERE id = $8
 	`, st.Did, st.Doing, st.Done, st.Blockers, st.Challenges, st.ReferenceLinks, st.UpdatedAt, st.ID)
@@ -93,7 +102,7 @@ func (s *StandupsStore) UpdateStandup(ctx context.Context, st *models.DailyStand
 }
 
 func (s *StandupsStore) DeleteStandup(ctx context.Context, id uuid.UUID) error {
-	tag, err := s.q.ExecContext(ctx, `DELETE FROM standups WHERE id = $1`, id)
+	tag, err := s.q.ExecContext(ctx, `DELETE FROM daily_standups WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete standup: %w", err)
 	}

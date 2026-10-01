@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -85,25 +88,71 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Logger middleware logs each HTTP request using slog. The log line carries
-// method, path, status, duration, remote addr, and the request id when present.
-func Logger(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+// Hijack delegates to the wrapped writer so WebSocket upgrades still work when
+// this wrapper is in the chain. Without it the Upgrader fails with
+// "response does not implement http.Hijacker".
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errNotHijacker
+	}
+	// A hijacked connection never emits an HTTP status; record the 101 so the
+	// access log does not report every WebSocket as a 2xx.
+	rw.statusCode = http.StatusSwitchingProtocols
+	return hj.Hijack()
+}
 
-		next.ServeHTTP(wrapped, r)
+// Flush delegates to the wrapped writer when it supports flushing.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
 
-		slog.InfoContext(r.Context(), "http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"bytes", wrapped.bytes,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"remote", r.RemoteAddr,
-			"request_id", RequestIDFromContext(r.Context()),
-		)
-	})
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (rw *responseWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
+var errNotHijacker = errors.New("middleware: underlying http.ResponseWriter does not implement http.Hijacker")
+
+// Logger is the default access logger. It reports the socket peer, which is
+// the right answer only when nothing proxies this service.
+//
+// Behind a reverse proxy every request arrives from the proxy's own address, so
+// every line reads identically and the log cannot tell you who did what — the
+// one thing an access log exists to answer. Use LoggerClientIP in that case.
+var Logger = LoggerClientIP(false)
+
+// LoggerClientIP returns an access logger that reports the client address as
+// the rate limiter resolves it, so the two agree.
+//
+// The two must agree on purpose: an operator correlating a 429 with the request
+// that caused it is joining on the client address, and two different values for
+// the same request makes that join impossible. Both read the rightmost
+// X-Forwarded-For entry for the same reason — see clientIP.
+//
+// Set trustedProxy only when nothing can reach the service except through a
+// proxy you control. Otherwise the header is caller-controlled and the log
+// records whatever the caller felt like sending, which is worse than useless.
+func LoggerClientIP(trustedProxy bool) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+			next.ServeHTTP(wrapped, r)
+
+			slog.InfoContext(r.Context(), "http request",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", wrapped.statusCode,
+				"bytes", wrapped.bytes,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"remote", clientIP(r, trustedProxy),
+				"peer", r.RemoteAddr,
+				"request_id", RequestIDFromContext(r.Context()),
+			)
+		})
+	}
 }
 
 // RequestSizeLimit middleware limits request body size.

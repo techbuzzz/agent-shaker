@@ -35,7 +35,7 @@ function cancel() { emit('cancel'); emit('update:modelValue', false) }
     :title="title"
     :description="description"
     :icon="icon"
-    @update:model-value="(v) => emit('update:modelValue', v)"
+    @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <template #footer>
       <div class="flex justify-end gap-2 w-full">

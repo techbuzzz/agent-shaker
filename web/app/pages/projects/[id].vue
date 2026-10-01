@@ -115,6 +115,8 @@ const deletingRepoOpen = computed({
   set: (v: boolean) => { if (!v) deletingRepo.value = null }
 })
 
+const showMcpSetup = ref(false)
+
 const showProjectGctx = ref(false)
 const deletingGctx = ref<GlobalContext | null>(null)
 const viewingGctx = ref<GlobalContext | null>(null)
@@ -243,6 +245,20 @@ const currentAgentIsPM = computed(() => {
         </div>
         <UButton to="/settings" variant="ghost" color="neutral" icon="i-lucide-settings" size="sm">Settings</UButton>
       </div>
+    </div>
+
+    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-default px-4 py-3">
+      <UIcon name="i-lucide-plug" class="w-4 h-4 text-primary" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm font-medium">Connect an AI agent</p>
+        <p class="text-xs text-muted">
+          Download a ready-made MCP configuration for this project. The files reference
+          <code class="font-mono">AGENT_SHAKER_API_KEY</code> rather than embedding a key, so they are safe to commit.
+        </p>
+      </div>
+      <UButton size="sm" color="primary" variant="outline" icon="i-lucide-download" @click="showMcpSetup = true">
+        Get config
+      </UButton>
     </div>
 
     <UTabs v-model="activeTab" :items="tabItems">
@@ -383,7 +399,7 @@ const currentAgentIsPM = computed(() => {
           </div>
           <EmptyState v-if="!standups?.length" icon="i-lucide-calendar-days" title="No standups yet" />
           <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <StandupCard v-for="s in standups" :key="s.id" :standup="s" :agent-name="agentsById[s.agent_id]" @delete="(s) => api.deleteStandup(s.id).then(refreshStandups)" />
+            <StandupCard v-for="s in standups" :key="s.id" :standup="s" :agent-name="agentsById[s.agent_id]" @delete="(s) => api.deleteStandup(s.id).then(() => refreshStandups())" />
           </div>
         </div>
       </template>
@@ -392,7 +408,7 @@ const currentAgentIsPM = computed(() => {
     <!-- Modals -->
     <AgentFormModal v-model="showAgent" :project-id="projectId" :initial="editingAgent" @submit="editingAgent ? api.updateAgentStatus(editingAgent.id, $event.status || 'active') : handleCreateAgent($event)" />
     <TaskFormModal v-model="showTask" :project-id="projectId" :agents="agentsForSelect" :milestones="milestones ?? []" :initial="editingTask" @submit="editingTask ? handleUpdateTask(editingTask.id, $event) : handleCreateTask($event)" />
-    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" @submit="editingContext ? api.updateContext(editingContext.id, $event).then(refreshContexts) : handleCreateContext($event)" />
+    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" @submit="editingContext ? api.updateContext(editingContext.id, $event).then(() => refreshContexts()) : handleCreateContext($event)" />
     <StandupFormModal v-model="showStandup" :project-id="projectId" :agents="agentsForSelect" @submit="handleCreateStandup" />
 
     <MilestoneFormModal
@@ -419,6 +435,14 @@ const currentAgentIsPM = computed(() => {
     />
 
     <ContextViewer v-model="viewingContextOpen" :context="viewingContext" :agent-name="viewingContext ? agentsById[viewingContext.agent_id] : undefined" />
+
+    <McpSetupModal
+      v-model="showMcpSetup"
+      :project-id="projectId"
+      :project-name="project?.name"
+      :agents="agentsForSelect"
+      :default-agent-id="settings.recentAgentId ?? ''"
+    />
     <ContextViewer v-model="viewingGctxOpen" :context="viewingGctx" :agent-name="viewingGctx ? agentsById[viewingGctx.agent_id] : undefined" />
 
     <ConfirmDialog v-model="deletingAgentOpen" :title="`Delete agent ${deletingAgent?.name}?`" confirm-label="Delete" @confirm="deleteAgent" />

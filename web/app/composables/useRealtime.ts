@@ -7,9 +7,15 @@
  *
  * Replaces web/src/composables/useWebSocket.js.
  */
-import type { WsEvent, WsEventType, WsEventHandler } from '~/types/ws'
+import type { WsEvent, WsEventType, WsEventHandler, WsEventFor } from '~/types/ws'
 
-type AnyHandler = WsEventHandler<WsEvent>
+/**
+ * Internal, type-erased listener. The public `on`/`off` surface is generic
+ * over the event name; the registry itself stores erased handlers because a
+ * `Map` cannot be keyed by handler type.
+ */
+type AnyHandler = (event: WsEvent) => void
+
 
 interface State {
   socket: WebSocket | null
@@ -32,7 +38,7 @@ export interface UseRealtime {
   connect: (projectId: string) => void
   disconnect: () => void
   send: (data: unknown) => void
-  on: <E extends WsEvent = WsEvent>(type: WsEventType | '*', handler: WsEventHandler<E>) => () => void
+  on: <T extends WsEventType>(type: T | '*', handler: WsEventHandler<T>) => () => void
   off: (type: WsEventType | '*', handler: AnyHandler) => void
 }
 
@@ -60,9 +66,9 @@ export function useRealtime(): UseRealtime {
 
   function notify(event: WsEvent) {
     const set = listeners.get(event.type)
-    if (set) for (const h of set) try { (h as WsEventHandler<typeof event>)(event) } catch (e) { console.error(e) }
+    if (set) for (const h of set) try { h(event) } catch (e) { console.error(e) }
     const wild = listeners.get('*')
-    if (wild) for (const h of wild) try { (h as WsEventHandler<typeof event>)(event) } catch (e) { console.error(e) }
+    if (wild) for (const h of wild) try { h(event) } catch (e) { console.error(e) }
   }
 
   function clearTimers() {
@@ -137,13 +143,17 @@ export function useRealtime(): UseRealtime {
     s.reconnectTimer = setTimeout(openSocket, delay)
   }
 
-  function connect(projectId: string) {
-    if (s.projectId === projectId && s.socket) return
+  // The parameter must NOT be named `projectId`: it would shadow the
+  // module-level `projectId` ref, and `projectId.value = projectId` would then
+  // be a no-op write onto a string primitive instead of updating the ref that
+  // the rest of the composable (and its consumers) reads.
+  function connect(id: string) {
+    if (s.projectId === id && s.socket) return
     disconnect()
     if (!isClient()) return
-    s.projectId = projectId
+    s.projectId = id
     s.reconnectAttempt = 0
-    projectId.value = projectId
+    projectId.value = id
     openSocket()
   }
 
@@ -167,7 +177,7 @@ export function useRealtime(): UseRealtime {
     }
   }
 
-  function on<E extends WsEvent = WsEvent>(type: WsEventType | '*', handler: WsEventHandler<E>) {
+  function on<T extends WsEventType>(type: T | '*', handler: WsEventHandler<T>) {
     const key = type
     if (!listeners.has(key)) listeners.set(key, new Set())
     listeners.get(key)!.add(handler as AnyHandler)

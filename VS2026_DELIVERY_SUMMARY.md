@@ -1,3 +1,17 @@
+> ⚠️ **SUPERSEDED — do not follow this document.**
+>
+> This describes an earlier attempt that targeted the pre-Nuxt `web/src/` tree,
+> which no longer exists. The files it references (`web/src/composables/useMcpSetup.js`,
+> `web/src/views/ProjectDetail.vue`) were removed in the Nuxt 4 migration, and
+> even at the time it was written the backend endpoint and the UI were listed as
+> "To Do" — the "✅ Complete" marks apply only to a composable that never
+> reached a running application.
+>
+> The feature is now actually implemented. See **[MCP_SETUP.md](./MCP_SETUP.md)**.
+
+---
+
+# Visual Studio 2026 MCP Configuration Setup
 # ✨ VS 2026 MCP Integration - Complete!
 
 ## 🎯 What Was Delivered

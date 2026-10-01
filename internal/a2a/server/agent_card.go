@@ -11,13 +11,41 @@ import (
 type AgentCardHandler struct {
 	version string
 	baseURL string
+	// authRequired mirrors the state of the API-key middleware. The card is a
+	// discovery document: a client reads it to learn what credential it must
+	// send, so it must not claim "none" on a deployment that returns 401.
+	authRequired bool
 }
 
 // NewAgentCardHandler creates a new AgentCardHandler
-func NewAgentCardHandler(version, baseURL string) *AgentCardHandler {
+func NewAgentCardHandler(version, baseURL string, authRequired bool) *AgentCardHandler {
 	return &AgentCardHandler{
-		version: version,
-		baseURL: baseURL,
+		version:      version,
+		baseURL:      baseURL,
+		authRequired: authRequired,
+	}
+}
+
+// authSchemes describes the credentials a client must present.
+//
+// This used to advertise `none` unconditionally, which was accurate while every
+// surface was open and became a lie the moment API-key auth landed: a client
+// that trusted the card would send nothing and get a 401 on every call. The
+// scheme is now derived from the actual middleware state.
+func (h *AgentCardHandler) authSchemes() []models.AuthScheme {
+	if !h.authRequired {
+		return []models.AuthScheme{
+			{
+				Scheme:      "none",
+				Description: "Public endpoints require no authentication (suitable for development and testing)",
+			},
+		}
+	}
+	return []models.AuthScheme{
+		{
+			Scheme:      "apiKey",
+			Description: "Send the key in the X-API-Key header, or as an Authorization: Bearer <key> token.",
+		},
 	}
 }
 
@@ -28,7 +56,7 @@ func (h *AgentCardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	card := h.generateAgentCard()
+	card := h.generateAgentCard(resolvePublicBaseURL(h.baseURL, r))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -40,8 +68,13 @@ func (h *AgentCardHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// generateAgentCard creates the agent card following the official A2A schema v1.0
-func (h *AgentCardHandler) generateAgentCard() models.AgentCard {
+// generateAgentCard creates the agent card following the official A2A schema v1.0.
+//
+// baseURL is the origin to advertise, already resolved by
+// resolvePublicBaseURL for the request being served. It may be empty, in which
+// case the URLs are root-relative and still resolve correctly for a client that
+// reached the server on the same origin.
+func (h *AgentCardHandler) generateAgentCard(baseURL string) models.AgentCard {
 	return models.AgentCard{
 		// Required fields (official schema v1.0)
 		SchemaVersion:   "1.0",
@@ -49,7 +82,7 @@ func (h *AgentCardHandler) generateAgentCard() models.AgentCard {
 		AgentVersion:    h.version,
 		Name:            "Agent Shaker",
 		Description:     "MCP-compatible context management server with A2A support for AI agent coordination, task management, and real-time collaboration",
-		URL:             h.baseURL + "/a2a/v1",
+		URL:             baseURL + "/a2a/v1",
 
 		Provider: models.Provider{
 			Name:           "techbuzzz",
@@ -64,13 +97,7 @@ func (h *AgentCardHandler) generateAgentCard() models.AgentCard {
 			SupportsPushNotifications: true,
 		},
 
-		AuthSchemes: []models.AuthScheme{
-			{
-				Scheme:      "none",
-				Description: "Public endpoints require no authentication (suitable for development and testing)",
-			},
-			// TODO: Add apiKey, oauth2, or bearer schemes for production deployments
-		},
+		AuthSchemes: h.authSchemes(),
 
 		// Optional fields
 		Skills: []models.Skill{
@@ -122,7 +149,10 @@ func (h *AgentCardHandler) generateAgentCard() models.AgentCard {
 
 		PrivacyPolicyURL:  "https://github.com/techbuzzz/agent-shaker/blob/main/docs/PRIVACY.md",
 		TermsOfServiceURL: "https://github.com/techbuzzz/agent-shaker/blob/main/LICENSE",
-		IconURL:           h.baseURL + "/images/icon.png",
+		// /favicon.ico rather than the old /images/icon.png: the SPA is what
+		// serves the public origin, and it ships exactly this file. The old path
+		// resolved to nothing anywhere in the topology.
+		IconURL: baseURL + "/favicon.ico",
 
 		// Legacy fields for backward compatibility
 		Version: h.version,

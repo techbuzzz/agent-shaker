@@ -74,7 +74,7 @@ async function confirmDelete() {
     />
 
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      <UCard v-for="a in filtered" :key="a.id" :ui="{ body: { padding: 'p-5' } }">
+      <UCard v-for="a in filtered" :key="a.id" :ui="{ body: 'p-5' }">
         <div class="flex items-start justify-between gap-3">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2">

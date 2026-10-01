@@ -26,6 +26,14 @@ export class ApiConnectionError extends Error {
 }
 
 export interface UseApi {
+  /**
+   * Reactive API base (`/api` for same-origin, or an absolute URL when the
+   * user points the app at a different backend from Settings). Pages pass this
+   * straight into `useFetch({ baseURL })`, so it must stay a ref: a plain
+   * string would go stale the moment the server-URL cookie changes.
+   */
+  apiBase: Ref<string>
+  /** Snapshot of `apiBase` at call time. Prefer `apiBase` in new code. */
   base: string
   isConnected: Ref<boolean>
   lastCheckedAt: Ref<number | null>
@@ -103,8 +111,15 @@ export function useApi(): UseApi {
 
   async function request<T>(path: string, opts: Record<string, unknown> = {}): Promise<T> {
     try {
-      // Nuxt's $fetch on the server uses Nitro's devProxy; on the client the proxy is also wired.
-      return await $fetch<T>(path, { baseURL: apiBase.value, ...opts })
+      // Nuxt's $fetch on the server uses Nitro's devProxy; on the client the
+      // proxy is also wired.
+      //
+      // `as T` is required because ofetch narrows the return to
+      // TypedInternalResponse<...> which TypeScript cannot prove is assignable
+      // to an unconstrained generic T. The call site controls T, so the cast
+      // is sound — the alternative (an explicit cast to unknown first) adds
+      // noise without adding safety.
+      return await $fetch(path, { baseURL: apiBase.value, ...opts }) as T
     } catch (err: unknown) {
       // $fetch errors: FetchError with status/data/cause; on network error, status undefined.
       const fe = err as { status?: number; statusCode?: number; data?: { message?: string }; cause?: unknown; message?: string }
@@ -119,10 +134,23 @@ export function useApi(): UseApi {
 
   async function checkHealth(): Promise<boolean> {
     try {
-      // Hit /health directly (outside /api) so the dashboard can probe before any project load.
-      await $fetch('/health', {
-        baseURL: apiBase.value.replace(/\/api$/, ''),
-        method: 'GET'
+      // Probe an *authenticated* endpoint, not /health.
+      //
+      // /health is intentionally unauthenticated so orchestrators and load
+      // balancers can reach it. Probing it from the browser therefore cannot
+      // tell the user whether their credential is accepted: with a bad key the
+      // indicator would read "connected" while every page silently rendered
+      // empty, which is a far more confusing failure than a clear
+      // "disconnected".
+      //
+      // /api/projects is the cheapest authenticated route and exercises the
+      // same path the app uses for everything else, credential injection
+      // included.
+      await $fetch('/projects', {
+        baseURL: apiBase.value,
+        method: 'GET',
+        // An empty project list is a valid response; do not treat it as failure.
+        timeout: 5000,
       })
       isConnected.value = true
       lastCheckedAt.value = Date.now()
@@ -135,6 +163,7 @@ export function useApi(): UseApi {
   }
 
   return {
+    apiBase,
     base: apiBase.value,
     isConnected,
     lastCheckedAt,

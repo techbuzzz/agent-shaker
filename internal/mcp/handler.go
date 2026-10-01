@@ -340,7 +340,12 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (i
 		ClientInfo      map[string]interface{} `json:"clientInfo"`
 	}
 	if params != nil {
-		json.Unmarshal(params, &clientParams)
+		// Best-effort: clientParams feeds a log line and nothing that changes
+		// the handshake result, so a malformed params object must not fail
+		// initialize. Say so rather than discarding the error silently.
+		if err := json.Unmarshal(params, &clientParams); err != nil {
+			log.Printf("MCP Initialize - unparseable params, continuing with defaults: %v", err)
+		}
 	}
 
 	log.Printf("MCP Initialize - Client: %v, Protocol: %s, Project: %s, Agent: %s",
@@ -1237,7 +1242,9 @@ func (h *MCPHandler) executeListTasks(args map[string]interface{}) (string, bool
 		if status, ok := args["status"].(string); ok && status != "" {
 			query += fmt.Sprintf(" AND status = $%d", argNum)
 			queryArgs = append(queryArgs, status)
-			argNum++
+			// No argNum++ here: this is the last optional filter, so the next
+			// placeholder number is never computed. The increment only matters
+			// for filters that follow it.
 		}
 	}
 	query += " ORDER BY created_at DESC"
@@ -1534,9 +1541,13 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 		preview = preview[:200] + "..."
 	}
 
-	// Get agent name for better feedback
+	// Get agent name for better feedback. A miss is expected — the agent may
+	// have been deleted, or the row may not exist yet — and the fallback below
+	// covers it, so the error itself only needs to be visible in the log.
 	var agentName string
-	h.db.QueryRow(`SELECT name FROM agents WHERE id = $1`, agentID).Scan(&agentName)
+	if err := h.db.QueryRow(`SELECT name FROM agents WHERE id = $1`, agentID).Scan(&agentName); err != nil {
+		log.Printf("MCP context: could not resolve agent name for %s: %v", agentID, err)
+	}
 	if agentName == "" {
 		agentName = "Unknown Agent"
 	}
@@ -1556,6 +1567,22 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 	return string(result), false
 }
 
+// countRows returns the result of a COUNT(*) query, or 0 when it fails.
+//
+// This dashboard used to do `h.db.QueryRow(...).Scan(&n)` eight times with the
+// error discarded. A failed scan leaves n at its previous value while the rest
+// of the response is assembled from the others, so a transient database error
+// rendered as a confident, internally inconsistent dashboard — some counters
+// fresh, some silently stale — rather than as an error the caller could see.
+func countRows(db *database.DB, query string, args ...any) int {
+	var n int
+	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+		log.Printf("MCP dashboard count failed: %v (query=%s)", err, query)
+		return 0
+	}
+	return n
+}
+
 func (h *MCPHandler) executeGetDashboard() (string, bool) {
 	if h.db == nil {
 		return `{"error": "Database not connected"}`, true
@@ -1564,15 +1591,15 @@ func (h *MCPHandler) executeGetDashboard() (string, bool) {
 	var projectCount, agentCount, taskCount, contextCount int
 	var pendingTasks, inProgressTasks, doneTasks, blockedTasks int
 
-	h.db.QueryRow("SELECT COUNT(*) FROM projects").Scan(&projectCount)
-	h.db.QueryRow("SELECT COUNT(*) FROM agents").Scan(&agentCount)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks").Scan(&taskCount)
-	h.db.QueryRow("SELECT COUNT(*) FROM contexts").Scan(&contextCount)
+	projectCount = countRows(h.db, "SELECT COUNT(*) FROM projects")
+	agentCount = countRows(h.db, "SELECT COUNT(*) FROM agents")
+	taskCount = countRows(h.db, "SELECT COUNT(*) FROM tasks")
+	contextCount = countRows(h.db, "SELECT COUNT(*) FROM contexts")
 
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'pending'").Scan(&pendingTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'in_progress'").Scan(&inProgressTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'done'").Scan(&doneTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE status = 'blocked'").Scan(&blockedTasks)
+	pendingTasks = countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE status = 'pending'")
+	inProgressTasks = countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE status = 'in_progress'")
+	doneTasks = countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE status = 'done'")
+	blockedTasks = countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE status = 'blocked'")
 
 	result, _ := json.MarshalIndent(map[string]interface{}{
 		"projects":          projectCount,
@@ -2401,7 +2428,11 @@ func (h *MCPHandler) executeGetMyIdentity(ctx MCPContext) (string, bool) {
 		}
 	}
 
-	if !identity["configured"].(bool) {
+	// `configured` is set on every path that builds `identity`, but the value
+	// comes out of a map literal that is assembled in several branches above.
+	// An unchecked assertion on it is a panic in the middle of a tool call, so
+	// treat "missing or not a bool" the same as "not configured".
+	if configured, ok := identity["configured"].(bool); !ok || !configured {
 		identity["message"] = "No project_id or agent_id configured in MCP connection URL. Add ?project_id=UUID&agent_id=UUID to the URL."
 	}
 
@@ -2427,15 +2458,13 @@ func (h *MCPHandler) executeGetMyProject(ctx MCPContext) (string, bool) {
 	}
 
 	// Get agents count
-	var agentCount int
-	h.db.QueryRow("SELECT COUNT(*) FROM agents WHERE project_id = $1", ctx.ProjectID).Scan(&agentCount)
+	agentCount := countRows(h.db, "SELECT COUNT(*) FROM agents WHERE project_id = $1", ctx.ProjectID)
 
 	// Get tasks summary
-	var pendingTasks, inProgressTasks, doneTasks, blockedTasks int
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'pending'", ctx.ProjectID).Scan(&pendingTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'in_progress'", ctx.ProjectID).Scan(&inProgressTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'done'", ctx.ProjectID).Scan(&doneTasks)
-	h.db.QueryRow("SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'blocked'", ctx.ProjectID).Scan(&blockedTasks)
+	pendingTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'pending'", ctx.ProjectID)
+	inProgressTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'in_progress'", ctx.ProjectID)
+	doneTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'done'", ctx.ProjectID)
+	blockedTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'blocked'", ctx.ProjectID)
 
 	result, _ := json.MarshalIndent(map[string]interface{}{
 		"id":          id,

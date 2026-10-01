@@ -76,7 +76,7 @@ async function confirmDelete() {
         <GlobalContextCard
           v-for="g in globals" :key="g.id" :context="g" :agent-name="agentNames[g.agent_id]"
           @view="(g) => viewing = { id: g.id, project_id: g.project_id ?? '', agent_id: g.agent_id, title: g.title, content: g.content, tags: g.tags, created_at: g.created_at }"
-          @delete="(g) => api.deleteGlobalContext(g.id).then(refreshGlobal)"
+          @delete="(g) => api.deleteGlobalContext(g.id).then(() => refreshGlobal())"
         />
       </div>
     </div>

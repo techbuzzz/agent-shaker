@@ -1,0 +1,39 @@
+# Keep the Nuxt build context small. Without this, node_modules and .nuxt from
+# the host get copied into the image and bust the `npm ci` layer cache.
+
+node_modules
+.nuxt
+.output
+.data
+dist
+_out_old
+_deps
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# VCS / tooling
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Dockerfiles and compose files are not needed inside the image
+Dockerfile
+.dockerignore
+
+# Logs and caches
+*.log
+npm-debug.log*
+.yarn/cache
+.pnpm-store
+
+# Editor
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

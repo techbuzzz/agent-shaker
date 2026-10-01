@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -25,6 +26,20 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
+// Build metadata, injected at link time. See the Dockerfile ARG block and the
+// `build` target in the Makefile:
+//
+//	go build -ldflags "-X main.version=... -X main.commit=... -X main.buildTime=..."
+//
+// The defaults are deliberately honest: a plain `go build ./...` produces a
+// binary that reports itself as a development build rather than claiming a
+// release version.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
 func main() {
 	// Root context for startup. The server lifecycle owns its own context.
 	ctx := context.Background()
@@ -33,7 +48,7 @@ func main() {
 	// is available when NewLogger is constructed (otherwise log lines would
 	// lack trace_id correlation). InitTracing is a no-op when
 	// OTEL_EXPORTER_OTLP_ENDPOINT is unset.
-	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", "0.1.0")
+	tracingShutdown, err := observability.InitTracing(ctx, "agent-shaker", version)
 	if err != nil {
 		slog.Error("tracing init failed", "error", err)
 		os.Exit(1)
@@ -49,6 +64,10 @@ func main() {
 	// Structured logging is the default for everything in this binary.
 	slog.SetDefault(observability.NewLogger())
 
+	// Emit build info once at boot so any log aggregator can answer "which
+	// commit is this container" without an extra endpoint call.
+	slog.Info("build", "version", version, "commit", commit, "built", buildTime, "go", runtime.Version())
+
 	// Get database URL from environment
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -56,10 +75,21 @@ func main() {
 	}
 
 	// Production safety guard: refuse to boot when sslmode=disable would
-	// silently send credentials and data over an unencrypted connection.
+	// silently send credentials and data over a link that leaves the host.
+	//
+	// The distinction that matters is whether the database is reachable only
+	// over a private/loopback path. `docker compose` puts Postgres on an
+	// internal bridge network where sslmode=disable is correct and safe, while
+	// a managed instance on a public hostname with sslmode=disable is a real
+	// credential leak. So the guard fires only on a public host.
 	if os.Getenv("ENV") == "production" && strings.Contains(databaseURL, "sslmode=disable") {
-		slog.Error("refusing to start in production with sslmode=disable")
-		os.Exit(2)
+		if host := databaseHost(databaseURL); !isPrivateHost(host) {
+			slog.Error("refusing to start: production with sslmode=disable against a non-private database host",
+				"host", host,
+				"hint", "use sslmode=require/verify-full, or point DATABASE_URL at a private host")
+			os.Exit(2)
+		}
+		slog.Info("production with sslmode=disable accepted: database host is private", "host", databaseHost(databaseURL))
 	}
 
 	// Connect to database. Pool tuning happens inside NewDB; see
@@ -117,11 +147,25 @@ func main() {
 	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
 
-	// A2A Protocol Setup
-	baseURL := os.Getenv("BASE_URL")
+	// A2A Protocol Setup.
+	//
+	// BASE_URL is left empty when unset, on purpose. It is the origin the agent
+	// card and artifact URLs advertise to peer agents, and a hardcoded
+	// `http://localhost:8080` default is wrong the moment the service sits
+	// behind a reverse proxy: the public origin is the edge's, not this
+	// process's. With it empty, resolvePublicBaseURL derives the origin from
+	// the request (honouring X-Forwarded-Proto/Host), which is right for every
+	// deployment. Set BASE_URL explicitly only to express an origin that cannot
+	// be derived from a request — a separate API hostname, for instance.
+	baseURL := strings.TrimSpace(os.Getenv("BASE_URL"))
 	if baseURL == "" {
-		baseURL = "http://localhost:" + getPort()
+		slog.Info("BASE_URL not set; A2A discovery URLs will be derived per request from the request origin")
 	}
+
+	// Read once, here, because the A2A agent card is built below and it has to
+	// describe the credential a client must actually send. Declared early for
+	// that reason; the middleware itself is constructed further down.
+	authEnabled := os.Getenv("AUTH_ENABLED") == "true"
 
 	// Create A2A task store. Default to MemoryStore for back-compat; opt into
 	// the Postgres-backed store via TASK_STORE=postgres (requires DATABASE_URL
@@ -157,7 +201,7 @@ func main() {
 	contextStorage := a2aserver.NewDatabaseContextStorage(db)
 
 	// Create A2A handlers
-	agentCardHandler := a2aserver.NewAgentCardHandler("1.0.0", baseURL)
+	agentCardHandler := a2aserver.NewAgentCardHandler("1.0.0", baseURL, authEnabled)
 	a2aHandler := a2aserver.NewA2AHandler(taskManager)
 	streamingHandler := a2aserver.NewStreamingHandler(taskManager)
 	artifactHandler := a2aserver.NewArtifactHandler(contextStorage, baseURL)
@@ -165,15 +209,89 @@ func main() {
 	// Build the route table and middleware chain. See cmd/server/routes.go
 	// for the actual route registrations.
 	obs := observability.New()
+	// Per-IP rate limiting, keyed on the client the *trusted proxy* observed.
+	//
+	// Behind the bundled Caddy edge every request arrives from the Caddy
+	// container's own address, so without TRUSTED_PROXY=true the "per-IP"
+	// buckets collapse into a single global one: one noisy client throttles
+	// everyone, and 100 rps becomes a cap for the whole deployment rather than
+	// for each caller.
+	//
+	// It is off by default on purpose. Trusting X-Forwarded-For is only sound
+	// when nothing can reach this service except through a proxy you control —
+	// which the compose topology guarantees (mcp-server publishes no host port)
+	// and a bare binary on a public host does not. See clientIP for why the
+	// rightmost entry is read rather than the leftmost.
+	trustedProxy := os.Getenv("TRUSTED_PROXY") == "true"
 	rateMW, rateShutdown := middleware.RateLimit(middleware.RateLimitConfig{
-		Limit: middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
-		Burst: middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
-		Skip:  middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
+		Limit:        middleware.RateFromEnv("RATE_LIMIT_RPS", 100),
+		Burst:        middleware.IntFromEnv("RATE_LIMIT_BURST", 200),
+		Skip:         middleware.SkipPaths("/ws", "/healthz", "/readyz", "/metrics"),
+		TrustedProxy: trustedProxy,
 	})
 	defer rateShutdown(context.Background())
+	if trustedProxy {
+		slog.Info("rate limiting trusts X-Forwarded-For; ensure no proxy can reach this service directly")
+	}
 
 	corsOrigins := middleware.CORSOriginsFromEnv("CORS_ALLOWED_ORIGINS", "http://localhost", "http://127.0.0.1")
-	corsAllowCreds := os.Getenv("AUTH_ENABLED") == "true"
+
+	// CORS credentials are independent of authentication. The single-origin
+	// topology does not need them, and enabling them forces every origin in
+	// the allow-list to be exact (no wildcards), so this stays opt-in under its
+	// own name rather than piggybacking on AUTH_ENABLED.
+	corsAllowCreds := os.Getenv("CORS_ALLOW_CREDENTIALS") == "true"
+
+	// API-key authentication.
+	//
+	// Enabled only when AUTH_ENABLED=true. Keys come from API_KEYS as a
+	// comma-separated list, so several clients can rotate independently
+	// without downtime. Misconfiguration is fatal: booting "protected" with an
+	// empty key set is the failure mode that turns into an outage later, and
+	// booting with a default key is worse.
+	apiKeys := middleware.APIKeysFromEnv("API_KEYS")
+
+	authMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
+		Enabled: authEnabled,
+		Keys:    apiKeys,
+		// Probes stay reachable: an orchestrator or load balancer has no
+		// credential, and a 401 there becomes a crash-restart loop instead of
+		// a clear configuration error.
+		Skip: []string{"/healthz", "/readyz", "/metrics", "/health"},
+	})
+	if err != nil {
+		slog.Error("authentication is misconfigured; refusing to start", "error", err)
+		os.Exit(2)
+	}
+
+	// Same check, plus the ?api_key= fallback used only by /ws.
+	wsAuthMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
+		Enabled:       authEnabled,
+		Keys:          apiKeys,
+		AllowQueryKey: true,
+		Skip:          []string{"/healthz", "/readyz", "/metrics", "/health"},
+	})
+	if err != nil {
+		slog.Error("authentication is misconfigured; refusing to start", "error", err)
+		os.Exit(2)
+	}
+
+	slog.Info("api authentication", "config", middleware.DescribeAuthConfig(authEnabled, apiKeys))
+
+	// TLS normally terminates at a reverse proxy in front of this service.
+	// This flag does not enable TLS.
+	//
+	// It used to be the only way HSTS could be sent, which made it a second
+	// flag an operator had to remember when enabling the TLS edge — and
+	// forgetting it failed silently, with the service healthy and simply not
+	// emitting the header. SecurityHeaders now derives that per request from
+	// r.TLS and X-Forwarded-Proto, so the bundled Caddy edge gets HSTS with no
+	// configuration at all.
+	//
+	// What remains here is an explicit override, for a proxy that does not set
+	// X-Forwarded-Proto (a raw TCP passthrough, or a hand-rolled one). Leave it
+	// unset in every supported topology.
+	assumeTLS := os.Getenv("TLS_TERMINATED") == "true"
 
 	deps := routeDeps{
 		db:                   db,
@@ -197,7 +315,10 @@ func main() {
 		maxBodyBytes:         parseMaxBodyBytes(),
 		corsOrigins:          corsOrigins,
 		corsAllowCreds:       corsAllowCreds,
-		isTLS:                false,
+		assumeTLS:            assumeTLS,
+		accessLog:            middleware.LoggerClientIP(trustedProxy),
+		auth:                 authMW,
+		wsAuth:               wsAuthMW,
 		rateLimitShutdown:    rateShutdown,
 	}
 
@@ -298,7 +419,10 @@ func runMigrations(db *database.DB) error {
 	if err != nil {
 		return fmt.Errorf("failed to get dedicated connection: %w", err)
 	}
-	defer conn.Close()
+	// Advisory locks are session-scoped, so the connection that took the lock
+	// must be the one that releases it. Closing it is deferred cleanup with
+	// nothing left to report to.
+	defer func() { _ = conn.Close() }()
 
 	// Try to acquire advisory lock (non-blocking)
 	var lockAcquired bool
@@ -441,12 +565,4 @@ func runMigrations(db *database.DB) error {
 	}
 
 	return nil
-}
-
-func getPort() string {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	return port
 }

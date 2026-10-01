@@ -15,7 +15,7 @@ import (
 )
 
 func TestAgentCardEndpoint(t *testing.T) {
-	handler := a2aserver.NewAgentCardHandler("1.0.0", "http://localhost:8080")
+	handler := a2aserver.NewAgentCardHandler("1.0.0", "http://localhost:8080", true)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
 	rec := httptest.NewRecorder()

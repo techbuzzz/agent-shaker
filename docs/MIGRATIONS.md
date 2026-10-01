@@ -1,328 +1,193 @@
-# Database Migration System
+# Migrations
 
-## Overview
+Schema changes are applied by [`golang-migrate`](https://github.com/golang-migrate/migrate)
+through the thin wrapper in [`cmd/migrate`](../cmd/migrate/main.go). This document
+describes what that code actually does; an earlier version of this file described
+a custom runner that no longer exists, and following it would have led to
+migrations that silently never applied.
 
-Agent Shaker uses a custom, lightweight migration system that tracks and applies database schema changes automatically. Migrations are executed on server startup and are idempotent (safe to run multiple times).
+## How migrations run
 
-## Features
+Migrations are a **one-shot job**, not a startup step:
 
-✅ **Automatic Migration Tracking** - Maintains `schema_migrations` table  
-✅ **Transactional Execution** - Each migration runs in a transaction  
-✅ **Ordered Execution** - Migrations run in alphabetical order  
-✅ **Skip Applied Migrations** - Won't re-run already applied migrations  
-✅ **Docker Compatible** - Works seamlessly in containerized environments  
-✅ **Zero Dependencies** - No external migration tools required  
-
-## How It Works
-
-1. On startup, server creates `schema_migrations` table (if not exists)
-2. Reads all `.sql` files from `migrations/` directory
-3. Compares with already-applied migrations
-4. Executes pending migrations in order within transactions
-5. Records each successful migration
-
-## Migration File Format
-
-Migrations follow this naming convention:
 ```
-NNN_descriptive_name.sql
+postgres (healthy) ──► migrate (runs, exits 0) ──► mcp-server (healthy) ──► web
 ```
 
-- **NNN**: 3-digit number (001, 002, 003, etc.)
-- **descriptive_name**: Lowercase with underscores
-- **.sql**: Standard SQL file extension
-
-### Examples
-```
-001_init.sql
-002_sample_data.sql
-003_daily_standups.sql
-004_add_user_roles.sql
-```
-
-## Creating a New Migration
-
-### Using PowerShell Script (Recommended)
-
-```powershell
-./scripts/create-migration.ps1 "Add User Roles"
-```
-
-This creates: `migrations/004_add_user_roles.sql` with a template.
-
-### Manual Creation
-
-1. Find the highest numbered migration in `migrations/`
-2. Create new file with next number: `00X_your_change.sql`
-3. Write your SQL statements
-
-## Migration Best Practices
-
-### ✅ DO
-
-- **Use transactions implicitly** - Each migration file runs in a transaction
-- **Make migrations idempotent** when possible:
-  ```sql
-  CREATE TABLE IF NOT EXISTS users (...);
-  ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TEXT;
-  ```
-- **Test migrations locally first** before deploying
-- **Keep migrations small and focused** - One logical change per file
-- **Add comments** explaining complex changes:
-  ```sql
-  -- Migration: Add user authentication
-  -- Created: 2026-01-27
-  -- Description: Adds users table and authentication columns
-  ```
-- **Use semantic naming** - `add_user_roles.sql` not `migration_4.sql`
-
-### ❌ DON'T
-
-- **Don't modify existing migrations** that have been deployed
-- **Don't delete data** without backup/confirmation
-- **Don't use database-specific syntax** unless necessary (prefer standard SQL)
-- **Don't include DROP DATABASE** or other destructive global commands
-- **Don't include transaction statements** (BEGIN/COMMIT) - handled automatically
-
-## Migration Workflow
-
-### Development
+`docker-compose.yml` gates `mcp-server` on `migrate` completing successfully, so
+the API never starts against a stale schema. `mcp-server` sets
+`RUN_MIGRATIONS_ON_START=false` so the two cannot race on the same tables.
 
 ```bash
-# 1. Create migration
-./scripts/create-migration.ps1 "Your Change"
-
-# 2. Edit the generated SQL file
-code migrations/00X_your_change.sql
-
-# 3. Test locally
-go run cmd/server/main.go
-
-# 4. Verify migration applied
-# Check logs for: "✓ Applied migration: 00X_your_change.sql"
+make migrate-up         # ./cmd/migrate -cmd up -dir migrations
+make migrate-version    # version=<n> dirty=<bool>
 ```
 
-### Docker Deployment
+Outside Docker, `DATABASE_URL` must be set and the schema must already exist.
 
-Migrations run automatically on container startup:
+## File naming is strict
 
-```bash
-docker-compose up -d
-docker-compose logs -f agent-shaker
-# Watch for migration messages
-```
-
-The system ensures:
-- Existing databases won't be affected (only new migrations run)
-- Multiple containers won't conflict (each checks applied migrations)
-- Failed migrations won't leave partial changes (transaction rollback)
-
-## Troubleshooting
-
-### Migration Failed
+The driver parses filenames with:
 
 ```
-Error: pq: duplicate column "status"
+^([0-9]+)_(.*)\.(down|up)\.(.*)$
 ```
 
-**Solution:** Check if migration was partially applied. Either:
-1. Fix the SQL to be idempotent (use `IF NOT EXISTS`)
-2. Manually rollback the partial change
-3. Remove the migration from `schema_migrations` table
-
-### Migration Skipped
+so **both infixes are required**:
 
 ```
-No pending migrations
+001_init.up.sql          ✓
+008_remove_sample_data.up.sql   ✓
+001_init.sql             ✗ silently rejected
 ```
 
-**Check:**
-```sql
-SELECT * FROM schema_migrations ORDER BY applied_at DESC;
+A file that does not match makes the driver report `first .: file does not exist`,
+which reads like a missing directory rather than a naming mistake. `cmd/migrate`
+therefore scans the directory first and fails by filename, before handing
+anything to the driver:
+
+```
+migrations dir "migrations" contains 1 file(s) golang-migrate cannot parse: notes.sql
+every file must be named <version>_<title>.sql (e.g. 008_add_widget.sql)
 ```
 
-If wrongly marked as applied, delete the record:
-```sql
-DELETE FROM schema_migrations WHERE version = '00X_filename.sql';
+One-off and manual SQL does not belong in `migrations/` — it goes in
+`scripts/`, as `bootstrap_existing_db.sql` and `seed_demo_data.sql` do.
+
+## Migrations are forward-only
+
+`-cmd down` is refused outright:
+
+```
+-cmd down is not supported: this project's migrations are forward-only
+(no .down.sql files are shipped on purpose). Use -cmd force -version N to
+resynchronise the recorded version after a failed run.
 ```
 
-### Migration Won't Run
+Shipping untested `.down.sql` files would be worse than refusing: a wrong or
+no-op down migration either destroys data, or marks a version as reverted while
+leaving the schema in place. Neither is recoverable by the operator. To undo
+something, write a new forward migration.
 
-**Possible causes:**
-- File not in `migrations/` directory
-- File doesn't have `.sql` extension
-- Permissions issue reading the file
-- Database connection failed
+## The state table
 
-**Debug:**
-```bash
-# Check files
-ls migrations/
-
-# Check database connection
-psql $DATABASE_URL -c "SELECT version FROM schema_migrations;"
-```
-
-## Database Schema Tracking
-
-The `schema_migrations` table structure:
+golang-migrate owns one table, and it does **not** look like what a hand-rolled
+runner would use:
 
 ```sql
 CREATE TABLE schema_migrations (
-    version VARCHAR(255) PRIMARY KEY,      -- Filename (e.g., "001_init.sql")
-    applied_at TIMESTAMP DEFAULT NOW(),    -- When migration was applied
-    checksum VARCHAR(64)                   -- Reserved for future checksum validation
+    version bigint  NOT NULL PRIMARY KEY,
+    dirty   boolean NOT NULL
 );
 ```
 
-### Viewing Applied Migrations
+A **single row** holding one integer. There is no `applied_at`, no `checksum`,
+and no row per migration file. The highest number in `migrations/` is the
+target; the row says how far the database got.
+
+`dirty = true` means a migration half-applied. golang-migrate refuses to run
+anything until the version is forced, which is the correct behaviour — the
+schema is in an unknown state and guessing is worse than stopping.
 
 ```sql
--- List all applied migrations
-SELECT version, applied_at 
-FROM schema_migrations 
-ORDER BY version;
-
--- Check if specific migration applied
-SELECT EXISTS(
-    SELECT 1 FROM schema_migrations 
-    WHERE version = '003_daily_standups.sql'
-);
+SELECT version, dirty FROM schema_migrations;
 ```
 
-## Advanced Usage
-
-### Manual Migration Execution (if needed)
+## Recovering from a failed migration
 
 ```bash
-# Connect to database
-psql $DATABASE_URL
+make migrate-version
+# version=8 dirty=true
 
-# Run migration manually
-\i migrations/00X_your_migration.sql
+# inspect what actually landed, then decide the true version:
+docker compose exec -T postgres psql -U mcp -d mcp_tracker -c '\dt'
 
-# Mark as applied
-INSERT INTO schema_migrations (version) VALUES ('00X_your_migration.sql');
+make migrate-force MIGRATION_VERSION=8
 ```
 
-### Rollback (Manual Process)
+`MIGRATION_VERSION` is a plain integer. The target deliberately does not reuse
+`VERSION`, which is build metadata and expands to something like
+`v0.3.5-68-g85cbbf7-dirty` — a value the `-version` int flag cannot parse. That
+collision made the target fail on every invocation, including the one case it
+exists for.
 
-Since migrations don't have automatic rollback:
+Force records a version; it does not run anything. Forcing past a migration that
+did not apply leaves the schema short, so inspect first.
 
-1. Write reverse SQL manually
-2. Execute in database
-3. Remove from `schema_migrations`
+## Adopting an existing database
 
-```sql
--- Example rollback for "ADD COLUMN"
-ALTER TABLE tasks DROP COLUMN IF EXISTS priority;
-DELETE FROM schema_migrations WHERE version = '00X_add_priority.sql';
-```
-
-## Future Enhancements
-
-Planned improvements:
-- [ ] Checksum validation to detect modified migrations
-- [ ] Down migrations (rollback SQL files)
-- [ ] Dry-run mode (`--dry-run` flag)
-- [ ] Migration status CLI command
-- [ ] Migration locking for distributed systems
-
-## Examples
-
-### Example 1: Add New Table
-
-`004_add_notifications.sql`:
-```sql
--- Migration: Add notifications system
--- Created: 2026-01-27
-
-CREATE TABLE IF NOT EXISTS notifications (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    message TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'info',
-    read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    CHECK (type IN ('info', 'warning', 'error', 'success'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read) WHERE NOT read;
-```
-
-### Example 2: Alter Existing Table
-
-`005_add_task_priority.sql`:
-```sql
--- Migration: Add priority field to tasks
--- Created: 2026-01-27
-
--- Add column if it doesn't exist
-DO $$ 
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'tasks' AND column_name = 'priority'
-    ) THEN
-        ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'medium';
-        ALTER TABLE tasks ADD CONSTRAINT tasks_priority_check 
-            CHECK (priority IN ('low', 'medium', 'high', 'urgent'));
-    END IF;
-END $$;
-
--- Set default priority for existing tasks
-UPDATE tasks SET priority = 'medium' WHERE priority IS NULL;
-```
-
-### Example 3: Data Migration
-
-`006_migrate_agent_status.sql`:
-```sql
--- Migration: Standardize agent status values
--- Created: 2026-01-27
-
--- Normalize status values
-UPDATE agents 
-SET status = 'active' 
-WHERE LOWER(status) IN ('online', 'available', 'ready');
-
-UPDATE agents 
-SET status = 'inactive' 
-WHERE LOWER(status) IN ('offline', 'unavailable', 'away');
-
-UPDATE agents 
-SET status = 'busy' 
-WHERE LOWER(status) IN ('working', 'occupied', 'in-progress');
-```
-
-## Configuration
-
-### Environment Variables
+For a database that already has the schema but was never tracked:
 
 ```bash
-# Database connection
-DATABASE_URL=postgres://user:pass@host:5432/dbname?sslmode=disable
+docker compose cp scripts/bootstrap_existing_db.sql postgres:/tmp/boot.sql
+docker compose exec -T postgres psql -U mcp -d mcp_tracker \
+  -v ON_ERROR_STOP=1 -f /tmp/boot.sql
 
-# Optional: Custom migrations directory (default: ./migrations)
-MIGRATIONS_DIR=./db/migrations
+make migrate-force MIGRATION_VERSION=<highest already applied>
 ```
 
-### Docker Compose
+`ON_ERROR_STOP=1` is required. Without it psql reports each error, continues,
+and exits 0 as long as the last statement succeeded — so a failed adoption
+reports success.
 
-```yaml
-services:
-  agent-shaker:
-    environment:
-      - DATABASE_URL=postgres://user:pass@db:5432/dbname
-    volumes:
-      - ./migrations:/app/migrations:ro  # Mount as read-only
+Set the version to the highest migration **already present**, not the next one.
+Too high skips migrations and leaves the schema short; too low replays one.
+Both fail quietly, which is why the script stops at creating the table and
+leaves the choice to you.
+
+## Demo data is not a migration
+
+`002_sample_data.up.sql` inserted 3 projects, 9 agents, 9 tasks and 4 contexts
+into every database. It was a development affordance that ended up in the
+forward-only chain, so a fresh **production** database came up pre-loaded with
+fiction, rendered by the UI exactly like real work.
+
+`008_remove_sample_data.up.sql` undoes it, keyed on the exact UUIDs 002 inserted
+— never on name or on "everything in the table" — so a real project that happens
+to be called "E-Commerce Platform" is untouched. 002 itself is left alone: it
+has been applied in existing environments, and editing an applied migration
+makes environments diverge.
+
+The dataset is preserved, opt-in:
+
+```bash
+docker compose cp scripts/seed_demo_data.sql postgres:/tmp/seed.sql
+docker compose exec -T postgres psql -U mcp -d mcp_tracker \
+  -v ON_ERROR_STOP=1 -f /tmp/seed.sql
 ```
 
-## Support
+Every statement is `ON CONFLICT DO NOTHING`, so it is safe to run twice and
+will not clobber real data.
 
-For issues or questions:
-- GitHub Issues: https://github.com/techbuzzz/agent-shaker/issues
-- Documentation: https://github.com/techbuzzz/agent-shaker/docs
+## Writing a migration
+
+1. Find the highest number in `migrations/`.
+2. Create `<next>_<descriptive_name>.up.sql`.
+3. Write idempotent SQL where you can:
+
+   ```sql
+   CREATE TABLE IF NOT EXISTS notifications (...);
+   ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority TEXT;
+   CREATE INDEX IF NOT EXISTS idx_notifications_project ON notifications(project_id);
+   ```
+
+4. Do not wrap it in `BEGIN`/`COMMIT` — the driver handles that.
+5. Do not include `DROP DATABASE` or other global destructive statements.
+6. Run it: `make migrate-up`.
+
+`./scripts/create-migration.ps1 "<Title>"` will name the file for you.
+
+## Verification
+
+A fresh database is the case worth checking, because it is the one a new
+deployer hits:
+
+```bash
+docker compose down -v
+docker compose up -d
+docker compose exec -T postgres psql -U mcp -d mcp_tracker -c "SELECT version, dirty FROM schema_migrations;"
+curl -s http://127.0.0.1:3000/api/projects   # []
+```
+
+An empty array is the expected result. If it lists projects, a migration is
+seeding data again.

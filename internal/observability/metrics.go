@@ -4,6 +4,9 @@
 package observability
 
 import (
+	"bufio"
+	"errors"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -104,3 +107,37 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.wroteHeader = true
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Hijack delegates to the wrapped writer so WebSocket upgrades keep working
+// while this middleware is in the chain.
+//
+// Embedding http.ResponseWriter alone hides the optional http.Hijacker
+// interface, and gorilla/websocket's Upgrader fails the handshake with
+// "response does not implement http.Hijacker". Asserting the interface here —
+// rather than skipping the route — means /ws is still counted and timed.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errNotHijacker
+	}
+	// Once the connection is hijacked no HTTP status will ever be written, so
+	// record the 101 ourselves; otherwise the request lands in the 2xx bucket
+	// and the duration histogram misreports every WebSocket as an error.
+	s.statusCode = http.StatusSwitchingProtocols
+	s.wroteHeader = true
+	return hj.Hijack()
+}
+
+// Flush delegates to the wrapped writer when it supports flushing, which
+// streaming handlers rely on to flush each chunk.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController (Go 1.20+),
+// which uses it for deadlines and for hijacking-aware writes.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+var errNotHijacker = errors.New("middleware: underlying http.ResponseWriter does not implement http.Hijacker")

@@ -79,7 +79,7 @@ func (h *GlobalContextHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *GlobalContextHandler) List(w http.ResponseWriter, r *http.Request) {
 	scope := models.GlobalContextScope(r.URL.Query().Get("scope"))
 	if scope != "" && !models.ValidGlobalContextScopes[scope] {
-		httpx.WriteError(w, r, fmt.Errorf("validation: invalid scope %q", scope))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid scope %q", httpx.ErrBadRequest, scope))
 		return
 	}
 	var pid *uuid.UUID

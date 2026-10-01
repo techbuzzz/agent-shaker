@@ -1,42 +1,100 @@
 # If you prefer the allow list template instead of the deny list, see community template:
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
-# Binaries for programs and plugins
+
+# ---- Build artifacts ----
+# NOTE: these patterns must be anchored with a leading slash. A bare `server`
+# matches at *any* depth, which silently swallowed cmd/server/ and web/server/
+# (the latter holds the Nitro proxy routes the production topology depends on).
+/mcp-server
+/server
+# Stale name from before the binary moved into bin/. It was a committed
+# Windows PE executable of 11 MB — the single largest object in the repo.
+/mcp-tracker
+/bin/
+/web/dist/
+/web/.output/
+/web/.nuxt/
+/web/node_modules/
+# Root-level node_modules holds a Vite dep-optimizer cache. Without this rule
+# three files under node_modules/.vite/ were committed, and `git add -A` after
+# a dev-server run would keep re-adding whatever the cache had just rewritten.
+/node_modules/
+/web/_out_old/
+/cover.out
+/cover.html
+
+# Coverage + test output
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+*.test
+
+# Compiled objects
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-mcp-server
-server
+*.o
+*.a
 
-# Test binary, built with `go test -c`
-*.test
-
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
+# Go workspace
 go.work
 go.work.sum
 
-# env file
+# ---- Secrets ----
 .env
+.env.local
+.env.*.local
+!.env.example
 
-# Database
+# ---- Database ----
 postgres_data/
+*.sqlite
+*.sqlite3
+*.db
 
-# Editor/IDE
+# Database dumps. `make db-backup` writes here on purpose — a dump must land on
+# the host, not on the volume it protects. It is the entire dataset, and -Fc is
+# compression, not encryption, so nothing here may ever be committed.
+backups/
+*.dump
+*.dump.sha256
+
+# ---- Logs ----
+*.log
+/logs/
+
+# ---- Editor / IDE ----
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 /.vs
-server
+/.history
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Local helper scripts ----
+# Machine-local build/verify helpers. Kept out of the repo deliberately: they
+# encode one developer's shell, not a project-wide contract. `make` and CI are
+# the supported entry points.
+/.*.ps1
+**/.verify-*.mjs
+**/.verify-*.sh
+
+# Scratch files (commit messages, ad-hoc probes)
+/.commit-msg.tmp
+
+# Scratch env files. These get written when testing a compose profile by hand and
+# routinely contain real material — a bcrypt hash, an API key. Never commit one
+# by accident; `git add -A` should not be able to pick them up.
+/.*.env.tmp
+/*.env.tmp
+/*.tmp

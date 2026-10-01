@@ -12,7 +12,7 @@ function handleHome() {
 
 <template>
   <div class="min-h-screen flex items-center justify-center bg-default text-default p-6">
-    <UCard class="max-w-md w-full" :ui="{ body: { padding: 'p-8' } }">
+    <UCard class="max-w-md w-full" :ui="{ body: 'p-8' }">
       <div class="text-center">
         <div class="text-6xl mb-2 font-bold bg-gradient-to-br from-indigo-500 to-violet-600 bg-clip-text text-transparent">
           {{ error?.statusCode || 500 }}

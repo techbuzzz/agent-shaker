@@ -1,0 +1,49 @@
+# Keep the Docker build context small and deterministic.
+# Without this, `COPY . .` in web/Dockerfile would ship a Windows/Linux
+# node_modules (often gigabytes, full of platform-specific binaries) into the
+# image and defeat layer caching.
+
+# ---- VCS / tooling ----
+.git
+.gitattributes
+.gitignore
+.github
+.vscode
+.idea
+*.md
+!web/README.md
+
+# ---- Build output ----
+web/.output/
+web/.nuxt/
+web/dist/
+web/_out_old/
+web/node_modules/
+node_modules/
+**/node_modules/
+
+# ---- Go build output ----
+bin/
+mcp-server
+migrate
+*.exe
+*.test
+cover.out
+cover.html
+
+# ---- Local env & secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Docs & scripts not needed at build time ----
+docs/
+scripts/
+web/nginx.conf
+web/tailwind.config.js
+web/postcss.config.js
+web/vite.config.js
+
+# ---- Runtime ----
+*.log
+postgres_data/
