@@ -72,10 +72,3 @@ func ArtifactToContext(artifact *models.Artifact) *ContextData {
 
 	return ctx
 }
-
-// TaskToA2ATask converts internal task models to A2A task format
-func TaskToA2ATask(t interface{}, baseURL string) *models.Task {
-	// This is a placeholder for converting between different task models
-	// Implementation depends on the internal task model structure
-	return nil
-}
