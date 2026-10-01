@@ -115,6 +115,8 @@ const deletingRepoOpen = computed({
   set: (v: boolean) => { if (!v) deletingRepo.value = null }
 })
 
+const showMcpSetup = ref(false)
+
 const showProjectGctx = ref(false)
 const deletingGctx = ref<GlobalContext | null>(null)
 const viewingGctx = ref<GlobalContext | null>(null)
@@ -243,6 +245,20 @@ const currentAgentIsPM = computed(() => {
         </div>
         <UButton to="/settings" variant="ghost" color="neutral" icon="i-lucide-settings" size="sm">Settings</UButton>
       </div>
+    </div>
+
+    <div class="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-default px-4 py-3">
+      <UIcon name="i-lucide-plug" class="w-4 h-4 text-primary" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm font-medium">Connect an AI agent</p>
+        <p class="text-xs text-muted">
+          Download a ready-made MCP configuration for this project. The files reference
+          <code class="font-mono">AGENT_SHAKER_API_KEY</code> rather than embedding a key, so they are safe to commit.
+        </p>
+      </div>
+      <UButton size="sm" color="primary" variant="outline" icon="i-lucide-download" @click="showMcpSetup = true">
+        Get config
+      </UButton>
     </div>
 
     <UTabs v-model="activeTab" :items="tabItems">
@@ -419,6 +435,14 @@ const currentAgentIsPM = computed(() => {
     />
 
     <ContextViewer v-model="viewingContextOpen" :context="viewingContext" :agent-name="viewingContext ? agentsById[viewingContext.agent_id] : undefined" />
+
+    <McpSetupModal
+      v-model="showMcpSetup"
+      :project-id="projectId"
+      :project-name="project?.name"
+      :agents="agentsForSelect"
+      :default-agent-id="settings.recentAgentId ?? ''"
+    />
     <ContextViewer v-model="viewingGctxOpen" :context="viewingGctx" :agent-name="viewingGctx ? agentsById[viewingGctx.agent_id] : undefined" />
 
     <ConfirmDialog v-model="deletingAgentOpen" :title="`Delete agent ${deletingAgent?.name}?`" confirm-label="Delete" @confirm="deleteAgent" />
