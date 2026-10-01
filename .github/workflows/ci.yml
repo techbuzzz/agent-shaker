@@ -71,13 +71,36 @@ jobs:
               --health-timeout 5s
               --health-retries 10
 
-      - name: migrations apply cleanly
+      - name: migrations apply cleanly and leave an empty database
         # Proves the migration chain is internally consistent: every file
         # applies in order against an empty database, and `up` is idempotent.
+        #
+        # It then asserts the database is EMPTY afterwards. That is a separate
+        # property and it was silently violated for the life of the project:
+        # 002_sample_data seeded 3 projects, 9 agents, 9 tasks and 4 contexts
+        # into every database, so a fresh production deployment came up with
+        # demo rows the UI rendered exactly like real work. Migrations that
+        # apply cleanly and migrations that seed data are not the same gate, so
+        # this one is asserted rather than assumed.
         run: |
           go run ./cmd/migrate -cmd version || true
           go run ./cmd/migrate -cmd up
           go run ./cmd/migrate -cmd up   # second run must be a no-change
+
+          pg=$(docker ps --filter ancestor=postgres:16-alpine --format '{{.Names}}' | head -1)
+          [ -n "$pg" ] || { echo "::error::could not find the postgres service container"; exit 1; }
+
+          rows=$(docker exec "$pg" psql -U mcp -d mcp_tracker -tAc \
+            "SELECT (SELECT count(*) FROM projects)
+                  + (SELECT count(*) FROM agents)
+                  + (SELECT count(*) FROM tasks)
+                  + (SELECT count(*) FROM contexts);")
+          if [ "$rows" != "0" ]; then
+            echo "::error::a fresh database is not empty: $rows row(s) across projects/agents/tasks/contexts"
+            echo "::error::some migration is seeding data again. Demo data belongs in scripts/seed_demo_data.sql"
+            exit 1
+          fi
+          echo "fresh database is empty across all four tables"
         env:
           DATABASE_URL: postgres://mcp:secret@localhost:5432/mcp_tracker?sslmode=disable
         services:
@@ -94,6 +117,61 @@ jobs:
               --health-interval 5s
               --health-timeout 5s
               --health-retries 10
+
+  # ------------------------------------------------------------ shell scripts
+  #
+  # scripts/deploy.sh is the production bootstrap: it resolves secrets, brings
+  # up the stack and is the last thing standing between an operator and a
+  # half-configured deployment. Nothing else in this workflow executes it, so a
+  # regression in it would not be caught anywhere.
+  scripts:
+    name: shell scripts (parse + shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: every tracked script parses
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files '*.sh')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "::error::no shell scripts found — the glob is wrong, not the repo"
+            exit 1
+          fi
+          echo "checking: ${scripts[*]}"
+          for s in "${scripts[@]}"; do
+            if ! bash -n "$s"; then
+              echo "::error::$s does not parse"
+              exit 1
+            fi
+          done
+
+      - name: shellcheck (warning and above)
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files '*.sh')
+          shellcheck -S warning "${scripts[@]}"
+
+      - name: deploy.sh refuses to run without a real host
+        # Guards the one precondition that cannot be checked by reading the
+        # script: ACME will not issue a certificate for localhost, so a deploy
+        # pointed at it fails after the whole stack is already built.
+        run: |
+          set -euo pipefail
+          if bash scripts/deploy.sh >/dev/null 2>&1; then
+            echo "::error::deploy.sh exited 0 with no --host"
+            exit 1
+          fi
+          if bash scripts/deploy.sh --host localhost >/dev/null 2>&1; then
+            echo "::error::deploy.sh accepted --host localhost"
+            exit 1
+          fi
+          bash scripts/deploy.sh --help >/dev/null
 
   # ------------------------------------------------------------------- linting
   lint:
