@@ -452,15 +452,22 @@ curl -s http://localhost:8080/a2a/v1/artifacts | jq .
 Enable verbose logging by checking server output:
 
 ```
-2026/01/23 10:00:00 Task abc123 completed with status completed
+2026/01/23 10:00:00 INFO task reached terminal state task_id=abc123 status=failed
 2026/01/23 10:00:01 MCP Tool Call: delegate_to_a2a_agent with args {...}
 ```
+
+A task that ends in `failed` here means no executor is configured, not that
+something went wrong at runtime. See [A2A_QUICKSTART_VSCODE.md](./A2A_QUICKSTART_VSCODE.md)
+for the inbound path.
 
 ## Security Considerations
 
 - A2A endpoints support CORS for browser-based clients
-- No authentication is currently required (add authentication middleware as needed)
-- Consider using HTTPS in production
+- Every A2A route, including the agent card, sits behind the API-key auth
+  middleware. The agent card is guarded too: an open discovery document is
+  reconnaissance
+- Terminate TLS at the edge in production; the Go service expects to run
+  behind a reverse proxy
 - Validate and sanitize all incoming message content
 
 ## Related Documentation

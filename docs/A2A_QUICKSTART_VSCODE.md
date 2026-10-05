@@ -103,23 +103,26 @@ $task | ConvertTo-Json -Depth 10
 ```json
 {
   "id": "8bc63d36-b2be-4ee8-8c8c-931448246fd8",
-  "status": "completed",
+  "status": "failed",
   "message": {
     "content": "Analyze the authentication patterns in this codebase",
     "format": "text"
   },
   "result": {
-    "content": "Task received: Analyze the authentication patterns...",
-    "format": "text",
-    "data": {
-      "original_message": "Analyze the authentication patterns...",
-      "processed_at": "2026-01-23T10:30:00Z"
-    }
+    "content": "no task executor configured: this deployment does not execute A2A tasks",
+    "format": "text"
   },
   "created_at": "2026-01-23T10:29:55Z",
   "completed_at": "2026-01-23T10:29:56Z"
 }
 ```
+
+The task fails, and that is the correct outcome. Agent Shaker does not run
+agents, so an inbound A2A message has nothing to execute against and the task
+records that as a failure rather than reporting a result that was never
+produced. Delegating *out* to a remote agent over `delegate_to_a2a_agent` is
+the direction that carries work; see [A2A_INTEGRATION.md](./A2A_INTEGRATION.md)
+for the split between the two.
 
 ## Step 5: Use MCP Tools to Discover External Agents (1 minute)
 
@@ -158,16 +161,21 @@ In Copilot Chat:
 
 **Copilot executes the `delegate_to_a2a_agent` MCP tool.**
 
+> Pointing `delegate_to_a2a_agent` at Agent Shaker's own A2A endpoint asks it to
+> execute a task, and it does not execute tasks. Delegate outward to an agent
+> that runs, or hand the work to a registered Shaker agent over MCP. The
+> failure below is the honest answer rather than a fabricated success.
+
 **Copilot response:**
 > "I've delegated the task to Agent Shaker:
 > 
 > **Task ID:** `321d5cd0-db4d-425e-8d0c-06d0774666f1`  
-> **Status:** pending → running → completed ✅
+> **Status:** pending → running → failed
 > 
 > **Result:**
-> Task received: Generate a summary of the current project structure and suggest improvements
+> no task executor configured: this deployment does not execute A2A tasks
 > 
-> The task completed successfully. You can check the full details at:
+> You can check the full details at:
 > http://localhost:8080/a2a/v1/tasks/321d5cd0-db4d-425e-8d0c-06d0774666f1"
 
 ## Step 7: Share Context as A2A Artifact (30 seconds)

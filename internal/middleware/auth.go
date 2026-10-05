@@ -1,8 +1,8 @@
 package middleware
 
 import (
+	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,13 +38,25 @@ var ErrAuthMisconfigured = errors.New("auth: AUTH_ENABLED is set but no API keys
 // AuthConfig configures API-key authentication.
 type AuthConfig struct {
 	// Enabled turns enforcement on. When false the returned middleware is a
-	// no-op, which keeps local development and the test suite free of
-	// credentials.
+	// pass-through that attaches an anonymous principal, which keeps local
+	// development and the test suite free of credentials without leaving
+	// handlers without an identity.
 	Enabled bool
 
-	// Keys is the set of accepted credentials. Any one grants access; this is
-	// a shared-secret scheme, not per-user identity, so there is no "who".
+	// Keys is the set of accepted credentials from the flat API_KEYS setting.
+	// Any one grants access; this is a shared-secret scheme, not per-user
+	// identity, so there is no "who" — the request carries the synthetic
+	// LegacyPrincipal instead.
+	//
+	// Ignored for matching when Resolver is set; it stays in the struct because
+	// the legacy secrets must keep working for the bootstrap paths that have
+	// not been reissued yet.
 	Keys []string
+
+	// Resolver turns a presented credential into a real principal backed by the
+	// api_keys table. When set it is the authority, and Keys is only a
+	// fallback for the routes wired with a resolver-less middleware.
+	Resolver KeyResolver
 
 	// AllowQueryKey permits ?api_key=... in addition to the headers. Set this
 	// only for routes a browser must reach over WebSocket.
@@ -57,14 +69,25 @@ type AuthConfig struct {
 	Skip []string
 }
 
-// RequireAPIKey returns a Middleware that rejects any request without a valid
-// credential, plus the error that prevented it from being constructed.
+// RequireAPIKey returns a Middleware that resolves the caller to a principal and
+// rejects any request without a usable credential, plus the error that
+// prevented it from being constructed.
 //
 // The second return value is non-nil exactly when configuration is unusable
-// (auth on, no keys). Callers must treat that as fatal at startup.
+// (auth on, no keys and no resolver). Callers must treat that as fatal at
+// startup.
 func RequireAPIKey(cfg AuthConfig) (Middleware, error) {
 	if !cfg.Enabled {
-		return func(next http.Handler) http.Handler { return next }, nil
+		// Not a bare pass-through: an authenticated surface hands every
+		// downstream handler a principal, and a handler that finds none has no
+		// way to tell "authentication is off" from "this route was wired
+		// without auth". The anonymous principal makes the first explicit.
+		anonymous := AnonymousPrincipal()
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), anonymous)))
+			})
+		}, nil
 	}
 
 	// Trim and drop empties so a trailing comma in the env var ("a,b,") does
@@ -75,7 +98,10 @@ func RequireAPIKey(cfg AuthConfig) (Middleware, error) {
 			keys = append(keys, k)
 		}
 	}
-	if len(keys) == 0 {
+	// A resolver makes an empty key set legitimate: the credentials live in the
+	// database now, and the operator legitimately has none in the environment.
+	// Without a resolver it is the misconfiguration the sentinel describes.
+	if len(keys) == 0 && cfg.Resolver == nil {
 		return nil, ErrAuthMisconfigured
 	}
 
@@ -92,14 +118,43 @@ func RequireAPIKey(cfg AuthConfig) (Middleware, error) {
 			}
 
 			presented := extractCredential(r, cfg.AllowQueryKey)
-			if presented == "" || !matchesAnyKey(presented, keys) {
-				rejectUnauthorized(w, r, presented == "")
+			if presented == "" {
+				rejectUnauthorized(w, r, true)
 				return
 			}
 
-			next.ServeHTTP(w, r)
+			principal, err := authenticate(r.Context(), presented, cfg, keys)
+			switch {
+			case err == nil:
+				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+			case errors.Is(err, ErrKeyStoreUnavailable):
+				rejectUnavailable(w, r, err)
+			default:
+				rejectUnauthorized(w, r, false)
+			}
 		})
 	}, nil
+}
+
+// authenticate maps a presented credential to a principal.
+//
+// The resolver is consulted first; the flat keys are the fallback, which is what
+// keeps an existing deployment working through the upgrade: a value in API_KEYS
+// is still accepted, it just carries the synthetic principal instead of a
+// database row.
+func authenticate(ctx context.Context, presented string, cfg AuthConfig, keys []string) (Principal, error) {
+	if cfg.Resolver != nil {
+		principal, err := cfg.Resolver.ResolveKey(ctx, presented)
+		if err != nil {
+			return Principal{}, err
+		}
+		return principal, nil
+	}
+
+	if !matchesAnyKey(presented, keys) {
+		return Principal{}, ErrKeyUnknown
+	}
+	return LegacyPrincipal(), nil
 }
 
 // extractCredential returns the credential the request presented, or "".
@@ -144,23 +199,18 @@ func matchesAnyKey(presented string, keys []string) bool {
 }
 
 func rejectUnauthorized(w http.ResponseWriter, r *http.Request, missing bool) {
-	// Per RFC 9110 the challenge is required on a 401.
-	w.Header().Set("WWW-Authenticate", `Bearer realm="agent-shaker"`)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-
-	code, msg := "unauthorized", "a valid API key is required"
+	msg := "a valid API key is required"
 	if missing {
 		msg = "missing API key: send it in the X-API-Key header or as 'Authorization: Bearer <key>'"
 	}
+
 	// Deliberately no reflection of the presented value and no hint about which
-	// keys exist.
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"code":       code,
-			"message":    msg,
-			"request_id": RequestIDFromContext(r.Context()),
-		},
+	// keys exist. A revoked key and a key that was never issued produce the
+	// same body, so this endpoint cannot be used to confirm that a given
+	// credential once worked.
+	writeAuthError(w, r, http.StatusUnauthorized, "unauthorized", msg, map[string]string{
+		// Per RFC 9110 the challenge is required on a 401.
+		"WWW-Authenticate": `Bearer realm="agent-shaker"`,
 	})
 
 	// Log the failure so operators can spot credential-stuffing, but never the
@@ -171,6 +221,23 @@ func rejectUnauthorized(w http.ResponseWriter, r *http.Request, missing bool) {
 		"client_ip", clientIP(r, false),
 		"credential_present", !missing,
 	)
+}
+
+// rejectUnavailable answers 503 when the credential could not be checked
+// because the backing store is unreachable.
+//
+// The distinction from 401 is the point of this function: a database outage
+// that answers 401 reads to every operator exactly like a credential attack,
+// and the first hour of the incident is spent looking for an intruder who does
+// not exist.
+func rejectUnavailable(w http.ResponseWriter, r *http.Request, cause error) {
+	slog.ErrorContext(r.Context(), "credential check failed: key store unavailable",
+		"path", r.URL.Path,
+		"method", r.Method,
+		"error", cause,
+	)
+	writeAuthError(w, r, http.StatusServiceUnavailable, "unavailable",
+		"the credential store is temporarily unavailable", nil)
 }
 
 // APIKeysFromEnv reads a comma-separated credential list from envName,

@@ -6,6 +6,7 @@ This directory contains all documentation for the MCP Multi-Agent Task Tracker s
 
 If you're new to the project, start here:
 
+- **[ROADMAP.md](ROADMAP.md)** - Where the product is going: milestones, task IDs and the current known gaps
 - **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick reference card for daily use
 - **[QUICKSTART.md](QUICKSTART.md)** - Basic setup and getting started
 - **[QUICKSTART_AGENT.md](QUICKSTART_AGENT.md)** - Agent setup guide

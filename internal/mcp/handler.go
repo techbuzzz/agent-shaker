@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,9 +13,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	a2aClient "github.com/techbuzzz/agent-shaker/internal/a2a/client"
 	a2aModels "github.com/techbuzzz/agent-shaker/internal/a2a/models"
 	"github.com/techbuzzz/agent-shaker/internal/database"
+	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
@@ -143,6 +148,22 @@ type Session struct {
 type MCPContext struct {
 	ProjectID string
 	AgentID   string
+	// Context is the request's own context. It is carried alongside the
+	// identifiers rather than replacing them: the identifiers are product
+	// data, while this is what lets a tool call open a span as a child of the
+	// HTTP request instead of a new root. It is never nil for contexts built
+	// by extractContext; zero-valued MCPContext in tests falls back to
+	// context.Background via requestContext.
+	Context context.Context
+}
+
+// requestContext returns a usable context even for a zero-valued MCPContext, so
+// callers never have to nil-check before starting a span.
+func (c MCPContext) requestContext() context.Context {
+	if c.Context != nil {
+		return c.Context
+	}
+	return context.Background()
 }
 
 func NewMCPHandler(db *database.DB, hub *websocket.Hub) *MCPHandler {
@@ -154,7 +175,7 @@ func NewMCPHandler(db *database.DB, hub *websocket.Hub) *MCPHandler {
 
 // extractContext extracts project_id and agent_id from URL params or headers
 func (h *MCPHandler) extractContext(r *http.Request) MCPContext {
-	ctx := MCPContext{}
+	ctx := MCPContext{Context: r.Context()}
 
 	// Try URL query parameters first
 	ctx.ProjectID = r.URL.Query().Get("project_id")
@@ -196,7 +217,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	// Extract context from URL/headers
 	ctx := h.extractContext(r)
 	if ctx.ProjectID != "" || ctx.AgentID != "" {
-		log.Printf("MCP Context: project_id=%s, agent_id=%s", ctx.ProjectID, ctx.AgentID)
+		slog.InfoContext(r.Context(), "mcp server info requested", "project_id", ctx.ProjectID, "agent_id", ctx.AgentID)
 	}
 
 	// Check for SSE request (GET with Accept: text/event-stream)
@@ -226,7 +247,7 @@ func (h *MCPHandler) handleServerInfo(w http.ResponseWriter, r *http.Request, ct
 	info := map[string]interface{}{
 		"name":            "agent-shaker",
 		"version":         "1.0.0",
-		"protocolVersion": "2024-11-05",
+		"protocolVersion": mcpProtocolVersion,
 		"capabilities": map[string]interface{}{
 			"tools":     map[string]bool{"listChanged": false},
 			"resources": map[string]bool{"subscribe": false, "listChanged": false},
@@ -268,7 +289,8 @@ func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request, ctx MCPCo
 	h.sessions.Store(sessionID, session)
 	defer h.sessions.Delete(sessionID)
 
-	log.Printf("MCP SSE connection established: %s (project=%s, agent=%s)", sessionID, ctx.ProjectID, ctx.AgentID)
+	slog.InfoContext(r.Context(), "mcp sse connection established",
+		"session_id", sessionID, "project_id", ctx.ProjectID, "agent_id", ctx.AgentID)
 
 	// Send initial endpoint message
 	endpointMsg := fmt.Sprintf("event: endpoint\ndata: /mcp/message?sessionId=%s\n\n", sessionID)
@@ -283,7 +305,7 @@ func (h *MCPHandler) handleSSE(w http.ResponseWriter, r *http.Request, ctx MCPCo
 	for {
 		select {
 		case <-done:
-			log.Printf("MCP SSE connection closed: %s", sessionID)
+			slog.InfoContext(r.Context(), "mcp sse connection closed", "session_id", sessionID)
 			return
 		case <-ticker.C:
 			// Send ping to keep connection alive
@@ -300,7 +322,8 @@ func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request, ctx M
 		return
 	}
 
-	log.Printf("MCP Request: method=%s, id=%v, project=%s, agent=%s", req.Method, req.ID, ctx.ProjectID, ctx.AgentID)
+	slog.InfoContext(r.Context(), "mcp request", "method", req.Method, "id", req.ID,
+		"project_id", ctx.ProjectID, "agent_id", ctx.AgentID)
 
 	var result interface{}
 	var rpcErr *JSONRPCError
@@ -344,15 +367,19 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (i
 		// the handshake result, so a malformed params object must not fail
 		// initialize. Say so rather than discarding the error silently.
 		if err := json.Unmarshal(params, &clientParams); err != nil {
-			log.Printf("MCP Initialize - unparseable params, continuing with defaults: %v", err)
+			slog.WarnContext(ctx.requestContext(), "mcp initialize params unparseable, continuing with defaults", "error", err)
 		}
 	}
 
-	log.Printf("MCP Initialize - Client: %v, Protocol: %s, Project: %s, Agent: %s",
-		clientParams.ClientInfo, clientParams.ProtocolVersion, ctx.ProjectID, ctx.AgentID)
+	slog.InfoContext(ctx.requestContext(), "mcp initialize",
+		"client", clientParams.ClientInfo,
+		"protocol_version", clientParams.ProtocolVersion,
+		"project_id", ctx.ProjectID,
+		"agent_id", ctx.AgentID,
+	)
 
 	result := InitializeResult{
-		ProtocolVersion: "2024-11-05",
+		ProtocolVersion: mcpProtocolVersion,
 		Capabilities: ServerCapabilities{
 			Tools: &ToolsCapability{
 				ListChanged: false,
@@ -600,7 +627,7 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 		},
 		{
 			Name:        "list_contexts",
-			Description: "List all documentation and contexts shared by agents in the project. Content is in markdown format for easy reading.",
+			Description: "List all documentation and contexts shared by agents in the project. Content is in markdown format for easy reading. Prefer search_contexts when you know what you are looking for: this returns everything in the project.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -609,6 +636,35 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 						"description": "Optional project ID to filter contexts (uses connection URL context if not provided)",
 					},
 				},
+			},
+		},
+		{
+			Name: "search_contexts",
+			Description: "Full-text search over a project's contexts, most relevant first. " +
+				"Use this instead of list_contexts when you are looking for specific knowledge: " +
+				"it returns only matching notes rather than the whole project. Matching is plain " +
+				"word matching with no stemming, so search for the word as it was written. " +
+				"Scoped to one project by design; pass the project explicitly if the connection " +
+				"does not already carry it.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "Words to look for in context titles and bodies. Multiple words all have to match.",
+					},
+					"project_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Project to search within. Required: a context belongs to a project and search never crosses that boundary.",
+					},
+					"limit": map[string]interface{}{
+						"type":        "integer",
+						"description": "Maximum number of results. Defaults to 20 and is capped at 100.",
+						"minimum":     1,
+						"maximum":     100,
+					},
+				},
+				Required: []string{"query", "project_id"},
 			},
 		},
 		{
@@ -878,7 +934,36 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		}
 	}
 
-	log.Printf("MCP Tool Call: %s with args %v (project=%s, agent=%s)", callParams.Name, callParams.Arguments, ctx.ProjectID, ctx.AgentID)
+	// One span per tool call, parented to the HTTP request so a tool call
+	// shows up inside the request that carried it instead of as a separate
+	// trace root.
+	//
+	// Attribute names carry the shaker. prefix on purpose. The gen_ai.* keys
+	// are all still at Development stability, so names borrowed from there
+	// would be free to change under us; db.system is the one borrowed name,
+	// and it is stable.
+	spanAttrs := []attribute.KeyValue{
+		attribute.String("shaker.mcp.tool", callParams.Name),
+		attribute.String("shaker.mcp.protocol_version", mcpProtocolVersion),
+	}
+	if ctx.ProjectID != "" {
+		spanAttrs = append(spanAttrs, attribute.String("shaker.project.id", ctx.ProjectID))
+	}
+	if ctx.AgentID != "" {
+		spanAttrs = append(spanAttrs, attribute.String("shaker.agent.id", ctx.AgentID))
+	}
+	spanCtx, span := mcpTracer.Start(ctx.requestContext(), "mcp.tools.call", trace.WithAttributes(spanAttrs...))
+	defer span.End()
+
+	// Log the shape of the call, not its payload. Tool arguments carry task
+	// titles, context bodies and standup text; writing them to the log stream
+	// duplicates customer content into wherever logs are shipped.
+	slog.InfoContext(spanCtx, "mcp tool call",
+		"tool", callParams.Name,
+		"project_id", ctx.ProjectID,
+		"agent_id", ctx.AgentID,
+		"argument_keys", argumentKeys(callParams.Arguments),
+	)
 
 	var resultText string
 	var isError bool
@@ -916,6 +1001,8 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		resultText, isError = h.executeUpdateTaskStatus(callParams.Arguments)
 	case "list_contexts":
 		resultText, isError = h.executeListContexts(callParams.Arguments)
+	case "search_contexts":
+		resultText, isError = h.executeSearchContexts(callParams.Arguments)
 	case "add_context":
 		resultText, isError = h.executeAddContext(callParams.Arguments, ctx)
 	case "get_dashboard":
@@ -943,11 +1030,21 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 	case "read_global_context":
 		resultText, isError = h.executeReadGlobalContext(callParams.Arguments)
 	default:
+		span.RecordError(fmt.Errorf("unknown tool: %s", callParams.Name))
+		span.SetStatus(codes.Error, "unknown tool")
 		return nil, &JSONRPCError{
 			Code:    -32601,
 			Message: "Unknown tool",
 			Data:    fmt.Sprintf("Tool not found: %s", callParams.Name),
 		}
+	}
+
+	// A tool that returns IsError is a failed call even though the JSON-RPC
+	// envelope is well formed, so the span has to say so. Otherwise a trace
+	// reads as a clean run while the tool was refusing the work.
+	span.SetAttributes(attribute.Bool("shaker.mcp.tool_error", isError))
+	if isError {
+		span.SetStatus(codes.Error, "tool reported an error")
 	}
 
 	return ToolResult{
@@ -1409,6 +1506,108 @@ func (h *MCPHandler) executeUpdateTaskStatus(args map[string]interface{}) (strin
 	return string(result), false
 }
 
+// executeSearchContexts runs a full-text search over a project's contexts.
+//
+// This exists because list_contexts forces a choice between two bad options
+// for an agent that needs one specific note: read every context in the project,
+// or guess. The search is always scoped to a single project — a context is a
+// project's knowledge, and a cross-project hit would put one team's notes into
+// another team's task.
+func (h *MCPHandler) executeSearchContexts(args map[string]interface{}) (string, bool) {
+	if h.db == nil {
+		return `{"error": "Database not connected"}`, true
+	}
+
+	rawQuery, _ := args["query"].(string)
+	trimmed := strings.TrimSpace(rawQuery)
+	if trimmed == "" {
+		// An empty query returns no results rather than the whole project.
+		// The store enforces the same rule, and both have to: an agent that
+		// calls this with no query should get an empty list, not every
+		// context it was trying to avoid reading.
+		return `{"contexts": [], "count": 0}`, false
+	}
+
+	projectID, _ := args["project_id"].(string)
+	if projectID == "" {
+		return `{"error": "project_id is required: context search is always scoped to one project"}`, true
+	}
+
+	limit := queries.DefaultSearchLimit
+	if raw, ok := args["limit"].(float64); ok {
+		limit = int(raw)
+	}
+	if limit <= 0 {
+		limit = queries.DefaultSearchLimit
+	}
+	if limit > queries.MaxSearchLimit {
+		limit = queries.MaxSearchLimit
+	}
+
+	// websearch_to_tsquery never raises on malformed input, which is the right
+	// behaviour here: the query text comes from an agent, and a stray quote
+	// should cost it results rather than produce an error it cannot parse.
+	const searchSQL = `
+		SELECT c.id, c.title, c.content, c.tags, c.created_at,
+		       a.name as agent_name,
+		       ts_rank(c.search_vector, websearch_to_tsquery('simple', $2)) as rank
+		FROM contexts c
+		LEFT JOIN agents a ON c.agent_id = a.id
+		WHERE c.project_id = $1
+		  AND c.search_vector @@ websearch_to_tsquery('simple', $2)
+		ORDER BY rank DESC, c.created_at DESC
+		LIMIT $3`
+
+	rows, err := h.db.Query(searchSQL, projectID, trimmed, limit)
+	if err != nil {
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+	defer rows.Close()
+
+	contexts := []map[string]interface{}{}
+	for rows.Next() {
+		var id, title, createdAt string
+		var content, agentName *string
+		var tags interface{}
+		var rank float64
+		if err := rows.Scan(&id, &title, &content, &tags, &createdAt, &agentName, &rank); err != nil {
+			return fmt.Sprintf(`{"error": "failed to read search result: %s"}`, err.Error()), true
+		}
+		entry := map[string]interface{}{
+			"id":         id,
+			"title":      title,
+			"created_at": createdAt,
+			"rank":       rank,
+		}
+		// Nullable columns are omitted rather than sent as JSON null: an agent
+		// reading this should not have to distinguish "no body" from "the
+		// read failed" by looking at a null.
+		if content != nil {
+			entry["content"] = *content
+		}
+		if agentName != nil {
+			entry["agent_name"] = *agentName
+		}
+		if tags != nil {
+			entry["tags"] = tags
+		}
+		contexts = append(contexts, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Sprintf(`{"error": "failed to read search results: %s"}`, err.Error()), true
+	}
+
+	result, err := json.MarshalIndent(map[string]interface{}{
+		"contexts": contexts,
+		"count":    len(contexts),
+		"query":    trimmed,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Sprintf(`{"error": "failed to encode results: %s"}`, err.Error()), true
+	}
+	return string(result), false
+}
+
 func (h *MCPHandler) executeListContexts(args map[string]interface{}) (string, bool) {
 	if h.db == nil {
 		return `{"error": "Database not connected"}`, true
@@ -1546,7 +1745,7 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 	// covers it, so the error itself only needs to be visible in the log.
 	var agentName string
 	if err := h.db.QueryRow(`SELECT name FROM agents WHERE id = $1`, agentID).Scan(&agentName); err != nil {
-		log.Printf("MCP context: could not resolve agent name for %s: %v", agentID, err)
+		slog.WarnContext(ctx.requestContext(), "could not resolve agent name for context", "agent_id", agentID, "error", err)
 	}
 	if agentName == "" {
 		agentName = "Unknown Agent"
@@ -1577,7 +1776,11 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 func countRows(db *database.DB, query string, args ...any) int {
 	var n int
 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
-		log.Printf("MCP dashboard count failed: %v (query=%s)", err, query)
+		// No context to correlate: countRows is a package-level helper with
+		// thirteen call sites, and threading one through every dashboard
+		// counter to enrich a swallowed error is not worth the signature churn.
+		// The queries are static COUNT(*) strings, so logging one leaks nothing.
+		slog.Error("mcp dashboard count failed", "error", err, "query", query)
 		return 0
 	}
 	return n
@@ -1746,7 +1949,7 @@ func (h *MCPHandler) landA2AArtifact(agentURL, taskID string, ctx context.Contex
 		_ = h.db.QueryRow(`SELECT id FROM agents WHERE role = 'pm' ORDER BY created_at LIMIT 1`).Scan(&agentID)
 	}
 	if agentID == "" {
-		log.Printf("landA2AArtifact: no agent available; skipping write for task %s", taskID)
+		slog.WarnContext(ctx, "landA2AArtifact: no agent available, skipping write", "task_id", taskID)
 		return
 	}
 
@@ -1767,7 +1970,7 @@ func (h *MCPHandler) landA2AArtifact(agentURL, taskID string, ctx context.Contex
 		VALUES ($1, 'global', NULL, $2, $3, $4, $5)
 	`, uuid.New().String(), agentID, title, body, pq.Array(tags))
 	if err != nil {
-		log.Printf("landA2AArtifact: insert failed for %s: %v", taskID, err)
+		slog.ErrorContext(ctx, "landA2AArtifact: insert failed", "task_id", taskID, "error", err)
 	}
 }
 
@@ -1837,7 +2040,7 @@ func pollTaskUntilComplete(ctx context.Context, client *a2aClient.HTTPClient, ag
 				return nil, err
 			}
 
-			if task.Status == a2aModels.TaskStatusCompleted || task.Status == a2aModels.TaskStatusFailed {
+			if task.Status.IsTerminal() {
 				return task, nil
 			}
 		}

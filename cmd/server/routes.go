@@ -305,6 +305,11 @@ func (d routeDeps) apiRouter() http.Handler {
 	// Contexts
 	mux.HandleFunc("GET /api/contexts", d.contextHandler.ListContexts)
 	mux.HandleFunc("POST /api/contexts", d.contextHandler.CreateContext)
+	// Registered alongside the {id} wildcard on purpose. Go 1.22+ ServeMux
+	// resolves the more specific literal pattern first, so "search" reaches
+	// this handler rather than being parsed as a context id — which is what
+	// would happen on a pre-1.22 mux and turn every search into a 400.
+	mux.HandleFunc("GET /api/contexts/search", d.contextHandler.SearchContexts)
 	mux.HandleFunc("GET /api/contexts/{id}", d.contextHandler.GetContext)
 	mux.HandleFunc("PUT /api/contexts/{id}", d.contextHandler.UpdateContext)
 	mux.HandleFunc("DELETE /api/contexts/{id}", d.contextHandler.DeleteContext)

@@ -68,6 +68,21 @@ const tabItems = [
 ]
 const activeTab = ref<string>('overview')
 
+// --- Context search (M7) ---
+//
+// The state machine lives in a composable so it can be tested without booting
+// Nuxt; this is just the wiring. Search is explicit rather than reactive: a
+// query bound to every keystroke would hit the server per character and the
+// result list would flicker while the user is still typing. The full list
+// stays loaded underneath, so clearing the box restores it with no request.
+const contextSearch = createContextSearch({
+  projectId: () => projectId.value,
+  search: api.searchContexts,
+  all: contexts,
+  limit: 50,
+  onError: (message) => toast.error(message)
+})
+
 // --- Modal state ---
 const showAgent = ref(false)
 const editingAgent = ref<Agent | null>(null)
@@ -382,10 +397,43 @@ const currentAgentIsPM = computed(() => {
             </div>
           </div>
 
-          <EmptyState v-if="!contexts?.length" icon="i-lucide-book-text" title="No contexts yet" description="Document decisions, notes, or APIs." />
+          <form class="mb-4 flex flex-wrap items-center gap-2" @submit.prevent="contextSearch.run">
+            <UInput
+              v-model="contextSearch.query.value"
+              icon="i-lucide-search"
+              placeholder="Search context titles and bodies"
+              size="sm"
+              class="max-w-xs"
+              aria-label="Search contexts"
+            />
+            <UButton type="submit" size="sm" color="primary" :loading="contextSearch.searching.value" :disabled="!contextSearch.query.value.trim()">Search</UButton>
+            <UButton
+              v-if="contextSearch.isActive.value"
+              type="button" size="sm" color="neutral" variant="ghost"
+              icon="i-lucide-x" @click="contextSearch.clear()"
+            >
+              Clear
+            </UButton>
+            <span v-if="contextSearch.isActive.value" class="text-xs text-muted">
+              {{ contextSearch.results.value?.length ?? 0 }} match{{ (contextSearch.results.value?.length ?? 0) === 1 ? '' : 'es' }}
+            </span>
+          </form>
+
+          <EmptyState
+            v-if="contextSearch.isActive.value && !contextSearch.results.value?.length"
+            icon="i-lucide-search-x"
+            title="No matching contexts"
+            description="Try fewer words. Matching is plain word matching, so search for a word as it was written."
+          />
+          <EmptyState
+            v-else-if="!contextSearch.displayed.value.length"
+            icon="i-lucide-book-text"
+            title="No contexts yet"
+            description="Document decisions, notes, or APIs."
+          />
           <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <ContextCard
-              v-for="c in contexts" :key="c.id" :context="c" :agent-name="agentsById[c.agent_id]"
+              v-for="c in contextSearch.displayed.value" :key="c.id" :context="c" :agent-name="agentsById[c.agent_id]"
               @view="(c) => viewingContext = c"
               @delete="(c) => deletingContext = c"
             />
