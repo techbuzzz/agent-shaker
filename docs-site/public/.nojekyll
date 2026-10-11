@@ -1,0 +1,2 @@
+# This file tells GitHub Pages to serve files starting with underscore
+# without processing them through Jekyll. Required for Next.js static export.
