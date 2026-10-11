@@ -112,6 +112,14 @@ export default defineNuxtConfig({
   // SSR is on by default; SPA-only would be ssr: false. The plan calls for SSR.
   ssr: true,
 
+  // Disable route prerendering. Crawling at build time snapshots whatever the
+  // database state happens to be then (typically empty) and serves that stale
+  // HTML until the next rebuild — wrong for an app whose entire UI is
+  // fetched live from the API. SSR at request time is correct here.
+  routeRules: {
+    '/**': { prerender: false }
+  },
+
   typescript: {
     strict: true
   },
