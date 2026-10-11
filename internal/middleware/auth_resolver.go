@@ -89,12 +89,12 @@ type ResolverOptions struct {
 // StoreKeyResolver resolves credentials against the database, with a
 // short-lived cache in front.
 type StoreKeyResolver struct {
-	store      KeyStore
-	ttl        time.Duration
+	store       KeyStore
+	ttl         time.Duration
 	negativeTTL time.Duration
-	now        func() time.Time
-	logger     *slog.Logger
-	cache      *resolverCache
+	now         func() time.Time
+	logger      *slog.Logger
+	cache       *resolverCache
 }
 
 // NewKeyResolver returns a resolver backed by store.

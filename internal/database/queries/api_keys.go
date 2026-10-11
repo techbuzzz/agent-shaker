@@ -12,7 +12,6 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/models"
 )
 
-
 // apiKeyColumns is the projection every single-row lookup selects. Kept in one
 // place so the scan helpers and the SQL cannot drift apart; a mismatch here is
 // a runtime scan error, not a compile error.
