@@ -43,7 +43,7 @@ export default function DocsIndexPage() {
           {featuredDocs.map((doc) => (
             <Link
               key={doc.slug}
-              href={`/agent-shaker/docs/${doc.slug}/`}
+              href={`/docs/${doc.slug}/`}
               className="card group relative overflow-hidden"
             >
               <div className="absolute right-0 top-0 h-24 w-24 translate-x-8 -translate-y-8 rounded-full bg-primary-500/10 transition-transform group-hover:scale-150" />
@@ -97,7 +97,7 @@ export default function DocsIndexPage() {
                 {docsByCategory[category].map((doc) => (
                   <Link
                     key={doc.slug}
-                    href={`/agent-shaker/docs/${doc.slug}/`}
+                    href={`/docs/${doc.slug}/`}
                     className="group flex items-center justify-between px-6 py-4 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50"
                   >
                     <div className="flex items-center gap-4">

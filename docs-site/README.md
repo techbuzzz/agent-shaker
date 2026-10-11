@@ -37,11 +37,14 @@ docs-site/
 │   ├── Footer.tsx          # Подвал сайта
 │   └── ThemeToggle.tsx     # Переключатель темы (client)
 ├── lib/
+│   ├── config.ts            # BASE_PATH / asset() — единый источник basePath
 │   ├── docs.ts             # Работа с Markdown документацией
 │   └── screenshots.ts      # Работа со скриншотами
 ├── public/
 │   ├── .nojekyll           # Отключает Jekyll на GitHub Pages
 │   └── screenshots/        # Изображения (скопированы из ../images/use-cases/)
+├── scripts/
+│   └── check-export-links.mjs  # Проверка ссылок в готовом out/
 ├── next.config.js          # Конфиг с basePath и static export
 ├── tailwind.config.js      # Конфиг Tailwind + типографика
 ├── postcss.config.js
@@ -65,9 +68,16 @@ npm run dev
 # Сборка для production
 npm run build
 
+# Сборка + проверка всех внутренних ссылок
+npm run verify
+
 # Просмотр собранного сайта локально
 npx serve out
 ```
+
+> ⚠️ Dev-сервер тоже работает под `basePath`, поэтому в браузере адрес —
+> `http://localhost:3000/agent-shaker` (один сегмент). Двойного `/agent-shaker/agent-shaker/`
+> быть не должно: если он появился — см. правило про `asset()` ниже.
 
 ## 📦 Деплой на GitHub Pages
 
@@ -81,7 +91,8 @@ npx serve out
 
 Этапы:
 1. **Build** — установка зависимостей и сборка статического сайта (`npm run build`)
-2. **Deploy** — загрузка артефакта и деплой на GitHub Pages
+2. **Verify** — проверка внутренних ссылок в `out/` (`npm run check:links`), падает при 404, пропущенном или задвоенном `basePath`
+3. **Deploy** — загрузка артефакта и деплой на GitHub Pages
 
 ### Включение GitHub Pages
 
@@ -130,6 +141,36 @@ category: Custom
   trailingSlash: true,        // Совместимость со статическим хостингом
 }
 ```
+
+### Правило basePath
+
+`basePath` Next.js применяет **сам** — но только к `next/link` и `next/navigation`.
+
+| Контекст | Как писать | Пример |
+|---|---|---|
+| `<Link href>` / `router.push` | **без** префикса | `href="/docs/quickstart/"` |
+| `next/image` `src`, `<img src>`, CSS `url()` | **через `asset()`** | `asset('/screenshots/foo.jpeg')` |
+
+Если писать `href="/agent-shaker/docs/"`, на выходе получится
+`/agent-shaker/agent-shaker/docs/` — такой сайт не работает ни на Pages, ни локально.
+
+`asset()` берёт значение из `next.config.js`, поэтому сменить префикс
+(например, на кастомный домен) достаточно в одном месте.
+
+### Проверка экспорта
+
+```bash
+npm run verify   # build + check:links
+```
+
+Скрипт `scripts/check-export-links.mjs` обходит все HTML в `out/` и падает, если:
+
+- ссылка содержит `basePath` дважды;
+- внутренняя ссылка не содержит `basePath`;
+- `href`/`src` указывает на файл, которого нет в экспорте (404).
+
+Исключения перечислены в `IGNORED_URL_PREFIXES` — это ссылки внутри примеров
+кода в документации, а не навигация сайта.
 
 ## 📄 Лицензия
 

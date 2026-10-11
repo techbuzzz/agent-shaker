@@ -51,6 +51,11 @@ jobs:
         # basePath '/agent-shaker' is configured in next.config.js.
         run: npm run build
 
+      - name: Verify exported links
+        # Fails the build if any internal href/src is missing basePath,
+        # double-prefixed, or points at a file the export did not produce.
+        run: npm run check:links
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

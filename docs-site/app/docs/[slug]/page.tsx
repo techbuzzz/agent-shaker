@@ -67,7 +67,7 @@ export default function DocPage({ params }: DocPageProps) {
       {/* Breadcrumb */}
       <nav className="mb-8 flex items-center gap-2 text-sm">
         <Link
-          href="/agent-shaker/docs/"
+          href="/docs/"
           className="flex items-center gap-1 text-slate-500 transition-colors hover:text-primary-600 dark:text-slate-400 dark:hover:text-primary-400"
         >
           <FolderOpen className="h-4 w-4" />
@@ -115,7 +115,7 @@ export default function DocPage({ params }: DocPageProps) {
       <nav className="mt-16 flex items-center justify-between border-t border-slate-200 pt-8 dark:border-slate-800">
         {prevDoc ? (
           <Link
-            href={`/agent-shaker/docs/${prevDoc.slug}/`}
+            href={`/docs/${prevDoc.slug}/`}
             className="group flex items-center gap-3"
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 transition-colors group-hover:bg-primary-100 dark:bg-slate-800 dark:group-hover:bg-primary-950">
@@ -136,7 +136,7 @@ export default function DocPage({ params }: DocPageProps) {
 
         {nextDoc ? (
           <Link
-            href={`/agent-shaker/docs/${nextDoc.slug}/`}
+            href={`/docs/${nextDoc.slug}/`}
             className="group flex items-center gap-3"
           >
             <div className="text-right">
@@ -159,7 +159,7 @@ export default function DocPage({ params }: DocPageProps) {
       {/* Back to docs link */}
       <div className="mt-8 text-center">
         <Link
-          href="/agent-shaker/docs/"
+          href="/docs/"
           className="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
         >
           <ArrowLeft className="h-4 w-4" />

@@ -21,19 +21,19 @@ export function Footer() {
           {/* Center - Navigation */}
           <nav className="flex items-center gap-6 text-sm">
             <Link
-              href="/agent-shaker/"
+              href="/"
               className="text-slate-600 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             >
               Home
             </Link>
             <Link
-              href="/agent-shaker/docs/"
+              href="/docs/"
               className="text-slate-600 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             >
               Docs
             </Link>
             <Link
-              href="/agent-shaker/screenshots/"
+              href="/screenshots/"
               className="text-slate-600 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             >
               Screenshots

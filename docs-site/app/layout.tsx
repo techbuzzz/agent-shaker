@@ -3,10 +3,13 @@ import { Inter } from 'next/font/google'
 import './globals.css'
 import { Header } from '@/components/Header'
 import { Footer } from '@/components/Footer'
+import { asset, SITE_URL } from '@/lib/config'
 
 const inter = Inter({ subsets: ['latin', 'cyrillic'] })
 
 export const metadata: Metadata = {
+  // Required so canonical/OG URLs on a subpath deployment resolve absolutely.
+  metadataBase: new URL(SITE_URL),
   title: {
     default: 'Agent Shaker — Documentation',
     template: '%s | Agent Shaker',
@@ -23,10 +26,16 @@ export const metadata: Metadata = {
     'documentation',
   ],
   authors: [{ name: 'Agent Shaker Team' }],
+  icons: {
+    icon: [{ url: asset('/icon.svg'), type: 'image/svg+xml' }],
+    apple: [{ url: asset('/icon.svg'), type: 'image/svg+xml' }],
+  },
   openGraph: {
     title: 'Agent Shaker — Documentation',
     description:
       'Task coordination for teams of AI agents. Register agents, assign them real work, and let them coordinate through MCP.',
+    url: SITE_URL,
+    siteName: 'Agent Shaker',
     type: 'website',
     locale: 'en_US',
   },

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Image from 'next/image'
+import Link from 'next/link'
 import { getScreenshots } from '@/lib/screenshots'
 
 export const metadata: Metadata = {
@@ -77,12 +78,12 @@ export default function ScreenshotsPage() {
         <p className="mt-2 text-primary-700 dark:text-primary-300">
           Run Agent Shaker locally with Docker Compose to explore the full
           interface. Check out the{' '}
-          <a
-            href="/agent-shaker/docs/quickstart/"
+          <Link
+            href="/docs/quickstart/"
             className="font-medium underline hover:no-underline"
           >
             Quick Start guide
-          </a>{' '}
+          </Link>{' '}
           for setup instructions.
         </p>
         <div className="mt-4">

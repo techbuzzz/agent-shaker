@@ -14,6 +14,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { getFeaturedDocs } from '@/lib/docs'
+import { asset } from '@/lib/config'
 
 const features = [
   {
@@ -55,10 +56,10 @@ const features = [
 ]
 
 const quickLinks = [
-  { title: 'Quick Start', href: '/agent-shaker/docs/quickstart/', description: 'Step-by-step first run guide', icon: Zap },
-  { title: 'Deployment', href: '/agent-shaker/docs/deployment/', description: 'Topology, TLS edge, backups', icon: Shield },
-  { title: 'MCP Setup', href: '/agent-shaker/docs/mcp-setup/', description: 'Connect an AI agent', icon: Users },
-  { title: 'API Reference', href: '/agent-shaker/docs/api/', description: 'REST API documentation', icon: BookOpen },
+  { title: 'Quick Start', href: '/docs/quickstart/', description: 'Step-by-step first run guide', icon: Zap },
+  { title: 'Deployment', href: '/docs/deployment/', description: 'Topology, TLS edge, backups', icon: Shield },
+  { title: 'MCP Setup', href: '/docs/mcp-setup/', description: 'Connect an AI agent', icon: Users },
+  { title: 'API Reference', href: '/docs/api/', description: 'REST API documentation', icon: BookOpen },
 ]
 
 export default function HomePage() {
@@ -99,7 +100,7 @@ export default function HomePage() {
             {/* CTA Buttons */}
             <div className="mt-10 flex flex-col gap-4 sm:flex-row">
               <Link
-                href="/agent-shaker/docs/quickstart/"
+                href="/docs/quickstart/"
                 className="btn-primary group"
               >
                 Get Started
@@ -132,7 +133,7 @@ export default function HomePage() {
                 </div>
               </div>
               <Image
-                src="/agent-shaker/screenshots/main-dashboard-ui.jpeg"
+                src={asset('/screenshots/main-dashboard-ui.jpeg')}
                 alt="Agent Shaker Dashboard"
                 width={1200}
                 height={750}
@@ -225,7 +226,7 @@ export default function HomePage() {
               </p>
             </div>
             <Link
-              href="/agent-shaker/docs/"
+              href="/docs/"
               className="btn-primary group shrink-0"
             >
               <BookOpen className="h-4 w-4" />
@@ -238,7 +239,7 @@ export default function HomePage() {
             {featuredDocs.map((doc) => (
               <Link
                 key={doc.slug}
-                href={`/agent-shaker/docs/${doc.slug}/`}
+                href={`/docs/${doc.slug}/`}
                 className="card group"
               >
                 <div className="mb-2 flex items-center gap-2">
@@ -271,7 +272,7 @@ export default function HomePage() {
               </p>
             </div>
             <Link
-              href="/agent-shaker/screenshots/"
+              href="/screenshots/"
               className="btn-primary group shrink-0"
             >
               <Camera className="h-4 w-4" />
@@ -283,7 +284,7 @@ export default function HomePage() {
           <div className="mt-12 grid gap-6 sm:grid-cols-2">
             <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
               <Image
-                src="/agent-shaker/screenshots/project-ui.jpeg"
+                src={asset('/screenshots/project-ui.jpeg')}
                 alt="Project View"
                 width={800}
                 height={500}
@@ -298,7 +299,7 @@ export default function HomePage() {
             </div>
             <div className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
               <Image
-                src="/agent-shaker/screenshots/agent-setup-ui.jpeg"
+                src={asset('/screenshots/agent-setup-ui.jpeg')}
                 alt="Agent Setup"
                 width={800}
                 height={500}
@@ -319,7 +320,10 @@ export default function HomePage() {
       <section className="border-t border-slate-200 bg-white py-20 dark:border-slate-800 dark:bg-slate-950">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary-600 to-purple-700 px-8 py-16 text-center sm:px-16">
-            <div className="absolute inset-0 bg-[url('/grid.svg')] bg-center opacity-10" />
+            <div
+              className="absolute inset-0 bg-center opacity-10"
+              style={{ backgroundImage: `url(${asset('/grid.svg')})` }}
+            />
             <div className="relative">
               <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
                 Ready to coordinate your AI agents?
@@ -330,7 +334,7 @@ export default function HomePage() {
               </p>
               <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
                 <Link
-                  href="/agent-shaker/docs/quickstart/"
+                  href="/docs/quickstart/"
                   className="inline-flex items-center gap-2 rounded-lg bg-white px-6 py-3 text-sm font-semibold text-primary-600 shadow-lg transition-colors hover:bg-primary-50"
                 >
                   Read the Quick Start

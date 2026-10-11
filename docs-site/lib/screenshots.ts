@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { asset } from './config'
 
 // Path to screenshots in public folder
 const SCREENSHOTS_DIR = path.join(process.cwd(), 'public', 'screenshots')
@@ -35,6 +36,41 @@ const SCREENSHOT_META: Record<string, { title: string; description: string }> = 
     description:
       'Connect an AI agent configuration screen — generate MCP config, VS Code settings, and setup instructions.',
   },
+  'projects-list-ui.jpeg': {
+    title: 'Projects List',
+    description:
+      'Browse every project, search by name, and jump into the detail view from one card per project.',
+  },
+  'project-overview-ui.jpeg': {
+    title: 'Project Overview',
+    description:
+      'Single-project snapshot — agent and task counts, plus a one-click path to the MCP agent config bundle.',
+  },
+  'project-tasks-ui.jpeg': {
+    title: 'Project Tasks',
+    description:
+      'Per-project task list with priority, status, and assignee — change any field inline without leaving the page.',
+  },
+  'agents-list-ui.jpeg': {
+    title: 'Agents List',
+    description:
+      'Every agent registered to the server with role, team, project, and online status — search and filter by status.',
+  },
+  'tasks-list-ui.jpeg': {
+    title: 'Tasks List',
+    description:
+      'Global task backlog grouped by status, filterable by priority and text — the home of every work item in flight.',
+  },
+  'documentation-ui.jpeg': {
+    title: 'Documentation Search',
+    description:
+      'Full-text search across every project doc — surfaces decisions, notes, and APIs by title, content, and tags.',
+  },
+  'global-context-ui.jpeg': {
+    title: 'Global Context',
+    description:
+      'Server-wide playbooks and notes that every agent reads via read_resource("global://<title>").',
+  },
 }
 
 /**
@@ -63,7 +99,7 @@ export function getScreenshots(): Screenshot[] {
       }
 
       return {
-        src: `/agent-shaker/screenshots/${file}`,
+        src: asset(`/screenshots/${file}`),
         name: file,
         title: meta.title,
         description: meta.description,

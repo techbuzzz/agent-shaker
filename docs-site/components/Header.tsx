@@ -6,9 +6,9 @@ import { useState } from 'react'
 import { ThemeToggle } from './ThemeToggle'
 
 const navigation = [
-  { name: 'Home', href: '/agent-shaker/', icon: Home },
-  { name: 'Documentation', href: '/agent-shaker/docs/', icon: BookOpen },
-  { name: 'Screenshots', href: '/agent-shaker/screenshots/', icon: Camera },
+  { name: 'Home', href: '/', icon: Home },
+  { name: 'Documentation', href: '/docs/', icon: BookOpen },
+  { name: 'Screenshots', href: '/screenshots/', icon: Camera },
 ]
 
 export function Header() {
@@ -20,7 +20,7 @@ export function Header() {
         {/* Logo */}
         <div className="flex items-center gap-3">
           <Link
-            href="/agent-shaker/"
+            href="/"
             className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-purple-600 text-white shadow-lg shadow-primary-500/25">
