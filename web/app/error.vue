@@ -3,7 +3,7 @@ import type { NuxtError } from '#app'
 
 const props = defineProps<{ error: NuxtError }>()
 
-const isNotFound = computed(() => props.error?.statusCode === 404)
+const isNotFound = computed(() => props.error?.status === 404)
 
 function handleHome() {
   return clearError({ redirect: '/' })
@@ -15,7 +15,7 @@ function handleHome() {
     <UCard class="max-w-md w-full" :ui="{ body: 'p-8' }">
       <div class="text-center">
         <div class="text-6xl mb-2 font-bold bg-gradient-to-br from-indigo-500 to-violet-600 bg-clip-text text-transparent">
-          {{ error?.statusCode || 500 }}
+          {{ error?.status || 500 }}
         </div>
         <h1 class="text-xl font-semibold mb-2">
           {{ isNotFound ? 'Page not found' : 'Something went wrong' }}

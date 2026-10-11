@@ -60,6 +60,12 @@ export interface UseApi {
   deleteTask: (id: string) => Promise<void>
   // Contexts
   listContexts: (filters?: { project_id?: string; tags?: string }) => Promise<Context[]>
+  /**
+   * Full-text search within one project. `project_id` is not optional here even
+   * though it is on `listContexts`: a context belongs to a project, and search
+   * across the boundary would put one team's notes into another team's view.
+   */
+  searchContexts: (filters: { project_id: string; q: string; limit?: number }) => Promise<Context[]>
   getContext: (id: string) => Promise<Context>
   createContext: (input: CreateContextInput) => Promise<Context>
   updateContext: (id: string, input: Partial<CreateContextInput>) => Promise<Context>
@@ -190,6 +196,7 @@ export function useApi(): UseApi {
     deleteTask:          async (id) => { await request<void>(`/tasks/${id}`, { method: 'DELETE' }) },
 
     listContexts:        (filters = {}) => request<Context[]>('/contexts', { params: toParams(filters) }),
+    searchContexts:      (filters)      => request<Context[]>('/contexts/search', { params: toParams({ q: filters.q, project_id: filters.project_id, limit: filters.limit }) }),
     getContext:          (id)            => request<Context>(`/contexts/${id}`),
     createContext:       (input)         => request<Context>('/contexts', { method: 'POST', body: input }),
     updateContext:       (id, input)     => request<Context>(`/contexts/${id}`, { method: 'PUT', body: input }),

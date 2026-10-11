@@ -159,7 +159,7 @@ func (h *StreamingHandler) PollTask(ctx context.Context, taskID string, interval
 				return nil, err
 			}
 
-			if t.Status == models.TaskStatusCompleted || t.Status == models.TaskStatusFailed {
+			if t.Status.IsTerminal() {
 				return t, nil
 			}
 		}

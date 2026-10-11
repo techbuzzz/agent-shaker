@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"encoding/json"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -143,7 +142,7 @@ func (h *Hub) Run() {
 			}
 			h.projects[client.ProjectID][client.ID] = client
 			h.mu.Unlock()
-			log.Printf("Client %s registered for project %s", client.ID, client.ProjectID)
+			slog.Info("websocket client registered", "client_id", client.ID, "project_id", client.ProjectID)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -158,7 +157,7 @@ func (h *Hub) Run() {
 				close(client.Send)
 			}
 			h.mu.Unlock()
-			log.Printf("Client %s unregistered", client.ID)
+			slog.Info("websocket client unregistered", "client_id", client.ID)
 
 		case message, ok := <-h.broadcast:
 			if !ok {
@@ -193,7 +192,7 @@ func (h *Hub) Shutdown() {
 func (h *Hub) broadcastMessage(message *Message) {
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("Failed to marshal message: %v", err)
+		slog.Error("websocket broadcast marshal failed", "error", err)
 		return
 	}
 
@@ -336,7 +335,7 @@ func (c *Client) ReadPump() {
 		_, _, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
+				slog.Error("websocket read error", "error", err, "client_id", c.ID)
 			}
 			break
 		}

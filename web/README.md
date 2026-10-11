@@ -10,7 +10,8 @@ and live WebSocket updates.
 - **Nuxt UI v3** (Tailwind v4 + Reka UI) for components
 - **@pinia/nuxt** for cross-page state
 - **@vueuse/nuxt** for composables
-- **marked + DOMPurify** for markdown rendering
+- **marked + isomorphic-dompurify** for markdown rendering (sanitised on the
+  server as well as the client — see `app/utils/markdown.ts`)
 - **Nitro** for the server (in production, proxies `/api/*` and `/ws`
   to the MCP backend)
 

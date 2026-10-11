@@ -147,7 +147,7 @@ func RateLimit(cfg RateLimitConfig) (Middleware, func(context.Context)) {
 				w.Header().Set("Retry-After", "1")
 				w.WriteHeader(http.StatusTooManyRequests)
 				_, _ = w.Write([]byte(`{"error":{"code":"rate_limited","message":"too many requests"}}`))
-				slog.Debug("rate limited", "client_ip", ip, "path", r.URL.Path)
+				slog.DebugContext(r.Context(), "rate limited", "client_ip", ip, "path", r.URL.Path)
 				return
 			}
 			next.ServeHTTP(w, r)

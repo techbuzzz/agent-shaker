@@ -122,9 +122,15 @@ func main() {
 	// is unavailable, pass a literal nil interface — a typed-nil *database.DB
 	// would box into a non-nil Querier interface, defeating the handlers'
 	// `store.Available()` short-circuit (Go's typed-nil-interface gotcha).
+	// The tracing decorator is applied only inside the non-nil branch, for the
+	// same reason: wrapping a nil interface would produce a non-nil
+	// *tracedQuerier holding nothing, and the Available() short-circuit would
+	// stop firing precisely when the database is down. Every store shares this
+	// one querier, so decorating it here instruments every query in the process
+	// without touching a single call site.
 	var querier queries.Querier
 	if db != nil {
-		querier = db
+		querier = database.Traced(db)
 	}
 	projectStore := queries.NewProjectsStore(querier)
 	agentStore := queries.NewAgentsStore(querier)

@@ -130,6 +130,12 @@ func WriteJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		// No context: WriteJSON has no *http.Request and is called from every
+		// handler in the codebase. Threading one through all of them to enrich
+		// a swallowed encode error is not worth the signature churn — the
+		// response is already partially written and the client has usually
+		// disconnected. Structured logging still beats the unstructured default
+		// logger this replaced.
 		slog.Error("encode response", "error", err, "status", status)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -125,4 +126,74 @@ func (s *ContextsStore) GetContextProjectID(ctx context.Context, id uuid.UUID) (
 		return uuid.Nil, fmt.Errorf("select context project: %w", err)
 	}
 	return pid, nil
+}
+
+// Search limits for SearchContext. They are exported so the HTTP layer and the
+// MCP tool agree on the same bounds instead of each inventing their own.
+const (
+	// DefaultSearchLimit is what a caller gets when it does not ask for a size.
+	DefaultSearchLimit = 20
+
+	// MaxSearchLimit caps what a caller may ask for. Without a cap, one
+	// request can pull an entire project into memory and into an agent's
+	// context window, which is the failure this search exists to avoid.
+	MaxSearchLimit = 100
+)
+
+// SearchContexts finds contexts within a project whose title or body matches
+// the query, most relevant first.
+//
+// The search is scoped to a project rather than global because that is the
+// unit of isolation in the product: a context is a project's knowledge, and a
+// cross-project hit would leak one team's notes into another team's task.
+//
+// An empty or whitespace-only query returns no results without touching the
+// database. That is a deliberate short-circuit rather than an optimisation:
+// websearch_to_tsquery on an empty string yields an empty query, and asking a
+// GIN index about an empty query is a way to make "return nothing" cost a
+// round trip.
+func (s *ContextsStore) SearchContexts(ctx context.Context, projectID uuid.UUID, query string, limit int) ([]models.Context, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return []models.Context{}, nil
+	}
+
+	if limit <= 0 {
+		limit = DefaultSearchLimit
+	}
+	if limit > MaxSearchLimit {
+		limit = MaxSearchLimit
+	}
+
+	// websearch_to_tsquery never raises a syntax error, which matters here:
+	// the query text comes from an agent, and an agent pasting a stray quote
+	// should get fewer results rather than an error.
+	rows, err := s.q.QueryContext(ctx, `
+		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
+		FROM contexts
+		WHERE project_id = $1
+		  AND search_vector @@ websearch_to_tsquery('simple', $2)
+		ORDER BY ts_rank(search_vector, websearch_to_tsquery('simple', $2)) DESC, created_at DESC
+		LIMIT $3
+	`, projectID, trimmed, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search contexts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []models.Context
+	for rows.Next() {
+		var c models.Context
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, pq.Array(&c.Tags), &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan context: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating contexts: %w", err)
+	}
+	if out == nil {
+		return []models.Context{}, nil
+	}
+	return out, nil
 }

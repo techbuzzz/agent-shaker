@@ -38,7 +38,23 @@ const (
 	TaskStatusRunning   TaskStatus = "running"
 	TaskStatusCompleted TaskStatus = "completed"
 	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusCanceled  TaskStatus = "canceled"
 )
+
+// IsTerminal reports whether no further transition is possible for a status.
+//
+// Cancellation is terminal but is not a failure: a caller asked for the work to
+// stop, and conflating the two would make "did this succeed?" unanswerable
+// from the task record alone. The store persists status as free-form TEXT, so
+// the closed set lives here rather than in the schema.
+func (s TaskStatus) IsTerminal() bool {
+	switch s {
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
 
 // Task represents an A2A task
 type Task struct {

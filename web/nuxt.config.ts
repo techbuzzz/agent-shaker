@@ -76,7 +76,24 @@ export default defineNuxtConfig({
   // Dev: forward /api/* and /ws/* to the Go backend on :8080 (matches the old Vite proxy).
   // Prod: server/routes/api/[...path].ts proxies /api/*, server/routes/ws.ts handles /ws.
   nitro: {
+    // `pinia` must be INLINED, not left external.
+    //
+    // @pinia/nuxt pushes its own runtime dir into `build.transpile`, so its
+    // plugin (which calls createPinia) is bundled into the server entry. App
+    // code importing `defineStore` would otherwise be traced as an external
+    // and resolved from `.output/server/node_modules/pinia` — two copies of
+    // the module, two distinct `piniaSymbol`s. `useStore()` then injects the
+    // bundled copy's symbol while the app's copy looks it up, gets `null`,
+    // and throws `getActivePinia() was called but there was no active Pinia`
+    // on every SSR render that touches a store. Vite's dev-time dedupe hides
+    // this completely: dev renders fine, production returns 500.
+    externals: {
+      inline: ['pinia']
+    },
     experimental: {
+      // Nitro v2 / h3 v1. Nuxt 5 moves to Nitro v3, where this becomes
+      // `features: { websocket: true }` and `defineWebSocketHandler` is imported
+      // from `nitro` rather than `h3` — see server/routes/ws.ts.
       websocket: true
     },
     devProxy: {
@@ -94,6 +111,14 @@ export default defineNuxtConfig({
 
   // SSR is on by default; SPA-only would be ssr: false. The plan calls for SSR.
   ssr: true,
+
+  // Disable route prerendering. Crawling at build time snapshots whatever the
+  // database state happens to be then (typically empty) and serves that stale
+  // HTML until the next rebuild — wrong for an app whose entire UI is
+  // fetched live from the API. SSR at request time is correct here.
+  routeRules: {
+    '/**': { prerender: false }
+  },
 
   typescript: {
     strict: true

@@ -102,9 +102,12 @@ func (h *AgentCardHandler) generateAgentCard(baseURL string) models.AgentCard {
 		// Optional fields
 		Skills: []models.Skill{
 			{
-				ID:          "task_execution",
-				Name:        "Asynchronous Task Execution",
-				Description: "Execute tasks asynchronously with status tracking and result retrieval",
+				ID:   "task_submission",
+				Name: "Task Submission and Lifecycle Tracking",
+				Description: "Accept a message as a tracked task and report its status, artifacts and outcome. " +
+					"Agent Shaker is a coordination plane, not a runtime: a submitted task reaches the " +
+					"failed terminal state with an explicit reason, because no executor is configured to run it. " +
+					"Use the MCP surface to assign work to registered agents instead.",
 				InputSchema: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{

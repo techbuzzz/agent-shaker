@@ -10,6 +10,12 @@
  * EventEmitter-style `.on()`: `Peer` exposes `send` and `close` only. Using
  * `.on()` here would throw at runtime the moment the first client frame
  * arrived, so the wiring below is hook-based on purpose.
+ *
+ * The import below is the Nitro v2 / h3 v1 location. Nitro v3 (Nuxt 5) moves
+ * `defineWebSocketHandler` to the `nitro` package and renames the config flag
+ * from `nitro.experimental.websocket` to `nitro.features.websocket` (see
+ * nuxt.config.ts). The hook signatures and the crossws `Peer` surface are
+ * unchanged between the two, so only those two lines differ at migration time.
  */
 import { defineWebSocketHandler } from 'h3'
 import { resolveUpstreamAuth } from '../utils/upstreamAuth'

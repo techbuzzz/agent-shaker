@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -24,16 +24,16 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 	// Pre-validate project_id so we can fail-fast with a 400 before the upgrade.
 	projectIDStr := r.URL.Query().Get("project_id")
 	if projectIDStr == "" {
-		log.Printf("WebSocket connection failed: project_id is required")
+		slog.WarnContext(r.Context(), "websocket connection rejected: project_id is required")
 		http.Error(w, "project_id is required", http.StatusBadRequest)
 		return
 	}
 	if _, err := uuid.Parse(projectIDStr); err != nil {
-		log.Printf("WebSocket connection failed: invalid project_id %s: %v", projectIDStr, err)
+		slog.WarnContext(r.Context(), "websocket connection rejected: invalid project_id", "project_id", projectIDStr, "error", err)
 		http.Error(w, "Invalid project_id", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("WebSocket delegating connection for project %s", projectIDStr)
+	slog.DebugContext(r.Context(), "websocket delegating connection", "project_id", projectIDStr)
 	h.hub.HandleWebSocket(w, r)
 }

@@ -13,7 +13,11 @@ concurrency:
 
 env:
   GO_VERSION: '1.27'
-  NODE_VERSION: '22'
+  # nuxt@4.6.1 and friends declare `node: ^22.22.3 || ^24.15.0 || >=26.0.0`.
+  # Pinning an older 22.x produces a wall of EBADENGINE warnings on `npm ci`
+  # and leaves the toolchain outside its supported range.
+  # Keep in sync with the "engines" field in web/package.json and web/Dockerfile.
+  NODE_VERSION: '22.23'
 
 jobs:
   # ---------------------------------------------------------------- Go backend

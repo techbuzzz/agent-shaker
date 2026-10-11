@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,6 +90,59 @@ func (h *ContextHandler) ListContexts(w http.ResponseWriter, r *http.Request) {
 		tags = strings.Split(tagsParam, ",")
 	}
 	contexts, err := h.store.ListContexts(r.Context(), projectID, taskID, tags)
+	if err != nil {
+		httpx.WriteError(w, r, err)
+		return
+	}
+	if contexts == nil {
+		contexts = []models.Context{}
+	}
+	httpx.WriteJSON(w, http.StatusOK, contexts)
+}
+
+// SearchContexts runs a full-text search over one project's contexts.
+//
+// The route is a separate handler rather than a mode of ListContexts because
+// the two have different failure modes: ListContexts can safely return a whole
+// project, while search is the operation that lets a caller ask for a subset,
+// so its limit is enforced here as well as in the store. Keeping them apart
+// also means a future search filter cannot silently change what "list" means.
+func (h *ContextHandler) SearchContexts(w http.ResponseWriter, r *http.Request) {
+	if !h.store.Available() {
+		handleNoStore(w, r)
+		return
+	}
+
+	projectIDStr := r.URL.Query().Get("project_id")
+	if projectIDStr == "" {
+		httpx.WriteError(w, r, fmt.Errorf("%w: project_id query parameter is required", httpx.ErrBadRequest))
+		return
+	}
+	projectID, err := uuid.Parse(projectIDStr)
+	if err != nil {
+		httpx.WriteError(w, r, fmt.Errorf("invalid project_id: %w", err))
+		return
+	}
+
+	// A missing q is not an error: it means "no results", and answering with
+	// every context in the project would be the opposite of what the caller
+	// asked for.
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
+
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			httpx.WriteError(w, r, fmt.Errorf("%w: limit must be an integer", httpx.ErrBadRequest))
+			return
+		}
+		if limit < 0 {
+			httpx.WriteError(w, r, fmt.Errorf("%w: limit must not be negative", httpx.ErrBadRequest))
+			return
+		}
+	}
+
+	contexts, err := h.store.SearchContexts(r.Context(), projectID, query, limit)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return

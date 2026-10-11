@@ -98,3 +98,8 @@ desktop.ini
 /.*.env.tmp
 /*.env.tmp
 /*.tmp
+
+# ---- OpenCode (AI assistant) local config ----
+# Local AI assistant state: agents, instructions, prompts, skills, node_modules.
+# Per-developer tooling, not project source.
+/.opencode/
