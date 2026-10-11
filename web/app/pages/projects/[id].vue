@@ -22,7 +22,7 @@ const { data: project, error: projectError } = await useFetch<Project>(`/project
   key: () => `project:${projectId.value}`,
   watch: [projectId]
 })
-if (projectError.value) throw createError({ statusCode: 404, statusMessage: 'Project not found' })
+if (projectError.value) throw createError({ status: 404, statusText: 'Project not found' })
 if (project.value) settings.rememberProject(project.value.id)
 
 // Tab data

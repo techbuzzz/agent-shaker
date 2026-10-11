@@ -5,15 +5,16 @@
 
   "vueCompilerOptions": {
     // The generated config registers `vue-router/volar/sfc-route-blocks`,
-    // but vue-router 4.6 removed the `volar/` directory entirely. Volar then
-    // throws "plugin is not a function" while building the language plugin
-    // set, which silently degrades .vue type inference and makes the
-    // typecheck gate report nonsense.
+    // but no vue-router release since 4.5 ships the `volar/` directory —
+    // neither 4.6 nor 5.4. Volar then throws "plugin is not a function" while
+    // building the language plugin set, which silently degrades .vue type
+    // inference and makes the typecheck gate report nonsense.
     //
     // That plugin only provided <route>-block awareness inside Vue Router
     // SFCs. Nuxt 4 uses file-based routing, so nothing in this app uses those
     // blocks — clearing the list costs us nothing and restores a working
-    // typechecker. Re-check this after a major vue-router bump.
+    // typechecker. Re-check this on a major vue-router bump: if the plugin ever
+    // comes back, drop this override.
     "plugins": []
   }
 }

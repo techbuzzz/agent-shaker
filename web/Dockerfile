@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
-# Node 22 is a hard floor, not a preference. Nuxt 4.5 / Nitro 2.13 depend on
-# the `trustedFunctions` global (Node 22.12+); on node:20 the build dies with
-# "TypeError: trustedFunctions.difference is not a function". Keep this in sync
-# with the "engines" field in package.json and the NODE_VERSION in ci.yml.
+# Node 22.21 is a hard floor, not a preference. Nuxt 4.5 / Nitro 2.13 depend on
+# the `trustedFunctions` global (Node 22.12+), and Nuxt 4.6 ships @nuxt/cli v4,
+# which raises the floor to 22.21 / 24.11 / 26. `node:22-alpine` tracks the
+# latest 22.x, so the tag already satisfies it — the constraint is documentation
+# and an early failure for anyone pinning an older base. Keep this in sync with
+# the "engines" field in package.json and the NODE_VERSION in ci.yml.
 
 # ---- build stage ----
 FROM node:22-alpine AS build

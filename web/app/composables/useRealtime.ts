@@ -47,7 +47,27 @@ function backoffDelay(attempt: number): number {
   return BACKOFF_MS[idx]!
 }
 
+/**
+ * Shared instance, created on first use.
+ *
+ * This used to build a fresh `State`, `ref`s and listener registry on every
+ * call, which silently split the WebSocket across the components that need it:
+ * `projects/[id].vue` connected on its own instance while
+ * `layout/ConnectionStatus.vue` read `isConnected` from another, so the header
+ * indicator could never report a live socket; and `useServerUrl.set()` called
+ * `disconnect()` on a throwaway instance, which closed nothing.
+ *
+ * A module-level singleton fixes both, and matches how `useToast` and Nuxt's
+ * own client-only state behave: one connection, one observable state.
+ */
+let shared: UseRealtime | null = null
+
 export function useRealtime(): UseRealtime {
+  shared ??= createRealtime()
+  return shared
+}
+
+function createRealtime(): UseRealtime {
   const s: State = {
     socket: null,
     projectId: null,

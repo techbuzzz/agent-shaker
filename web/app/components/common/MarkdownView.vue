@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { marked } from 'marked'
-import DOMPurify from 'dompurify'
+import { renderMarkdown } from '~/utils/markdown'
 
 const props = withDefaults(defineProps<{
   source?: string | null
@@ -10,19 +9,10 @@ const props = withDefaults(defineProps<{
   compact: false
 })
 
-marked.setOptions({ gfm: true, breaks: false })
-
-const html = computed(() => {
-  if (!props.source) return ''
-  // marked.parse is sync for non-async sources
-  const raw = marked.parse(props.source) as string
-  if (typeof window === 'undefined') {
-    // Server-side rendering: minimal sanitization via a regex strip for script tags.
-    // DOMPurify's jsdom setup requires extra config; we keep this conservative.
-    return raw.replace(/<script[\s\S]*?<\/script>/gi, '').replace(/on[a-z]+="[^"]*"/gi, '')
-  }
-  return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
-})
+// Sanitisation lives in the utility and runs on both sides of the render — see
+// app/utils/markdown.ts for why the server pass is the security boundary and
+// why the previous regex strip was not one.
+const html = computed(() => renderMarkdown(props.source))
 </script>
 
 <template>

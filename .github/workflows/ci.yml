@@ -13,7 +13,9 @@ concurrency:
 
 env:
   GO_VERSION: '1.27'
-  NODE_VERSION: '22'
+  # Nuxt 4.6 ships @nuxt/cli v4, which requires Node 22.21+ / 24.11+ / 26+.
+  # Keep in sync with the "engines" field in web/package.json and web/Dockerfile.
+  NODE_VERSION: '22.21'
 
 jobs:
   # ---------------------------------------------------------------- Go backend
