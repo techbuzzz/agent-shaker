@@ -522,6 +522,22 @@ Two repository settings, neither of which the workflow can create for itself:
   anyone who can push a `v*` tag, and a `latest` that moves is not undone by
   re-tagging.
 
+### Docker Hub repository overviews
+
+Each repository's "Overview" tab on Docker Hub is rendered from a markdown
+file. The publish workflow updates both overviews automatically after a
+successful push, reading from:
+
+| repository | overview source |
+|---|---|
+| `techbuzzz/agent-shaker-server` | `docker/agent-shaker-server.README.md` |
+| `techbuzzz/agent-shaker-webui` | `docker/agent-shaker-webui.README.md` |
+
+Edit those files to change what appears on Docker Hub. The update runs as the
+last step of the publish workflow and uses the same `DOCKERHUB_TOKEN` as the
+push. A failed overview update logs a warning but does **not** fail the
+release — the images are already published and verified by then.
+
 ### If a publish fails halfway
 
 Re-running is safe: `workflow_dispatch` on the same workflow takes the tag as

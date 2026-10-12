@@ -293,3 +293,50 @@ jobs:
             --entrypoint node "$webui" --version
           timeout --kill-after=10 120 docker run --rm --platform linux/amd64 \
             --entrypoint /bin/sh "$webui" -c 'ls -la /app/.output/server/index.mjs'
+
+      # ── Docker Hub repository overview ──────────────────────────────────────
+      # Docker Hub shows a per-repository "Overview" tab rendered from a
+      # README. There is no first-class action for it, so this step calls the
+      # Hub API directly: authenticate with the same token used for the push,
+      # then PATCH each repository's full_description from the markdown files
+      # in docker/. A failed overview update never fails the release — the
+      # images are already published and verified by the time this runs.
+      - name: Update Docker Hub repository overviews
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          # Authenticate and get a JWT for the Hub API.
+          token="$(curl -fsS -X POST "https://hub.docker.com/v2/users/login/" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${DOCKERHUB_USERNAME}\",\"password\":\"${DOCKERHUB_TOKEN}\"}" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')"
+
+          update_overview() {
+            local repo="$1" readme="$2"
+            local full_description
+            full_description="$(cat "$readme")"
+
+            # PATCH the repository with the full_description field.
+            # --fail-with-body surfaces the error body on non-2xx, which is
+            # what makes a misconfigured token diagnosable rather than a bare
+            # "exit 22".
+            local http_code
+            http_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -X PATCH "https://hub.docker.com/v2/repositories/${NAMESPACE}/${repo}/" \
+              -H "Authorization: JWT ${token}" \
+              -H 'Content-Type: application/json' \
+              --data-binary @<(python3 -c 'import sys,json;print(json.dumps({"full_description": sys.stdin.read()}))' <<<"$full_description") \
+              || echo '000')"
+
+            if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+              echo "── overview updated: ${NAMESPACE}/${repo}"
+            else
+              echo "::warning::failed to update overview for ${NAMESPACE}/${repo} (HTTP ${http_code})"
+            fi
+          }
+
+          update_overview "$SERVER_IMG" "docker/agent-shaker-server.README.md"
+          update_overview "$WEBUI_IMG" "docker/agent-shaker-webui.README.md"
