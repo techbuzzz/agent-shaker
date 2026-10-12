@@ -242,11 +242,17 @@ jobs:
             manifest="$(docker buildx imagetools inspect "$repo" --format '{{json .Manifest}}')"
             echo "$manifest"
 
-            # Assert both platforms are present rather than eyeballing the JSON.
-            for want in linux/amd64 linux/arm64; do
-              echo "$manifest" | grep -q "$want" || {
-                echo "::error::$repo is missing $want"; exit 1;
+            # Assert both architectures are present rather than eyeballing the
+            # JSON. The manifest lists them as separate fields:
+            #   "platform": { "architecture": "amd64", "os": "linux" }
+            # so grepping for "linux/amd64" as a single string would never match.
+            # Check each architecture explicitly, skipping the "unknown/unknown"
+            # attestation manifests.
+            for arch in amd64 arm64; do
+              echo "$manifest" | grep -q "\"architecture\": \"$arch\"" || {
+                echo "::error::$repo is missing linux/$arch"; exit 1;
               }
+              echo "  ✓ linux/$arch present"
             done
           done
 
