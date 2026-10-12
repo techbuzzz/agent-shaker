@@ -1,9 +1,11 @@
 'use client'
 
 import Link from 'next/link'
+import Image from 'next/image'
 import { Github, BookOpen, Camera, Home, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { ThemeToggle } from './ThemeToggle'
+import { asset } from '@/lib/config'
 
 const navigation = [
   { name: 'Home', href: '/', icon: Home },
@@ -23,9 +25,14 @@ export function Header() {
             href="/"
             className="flex items-center gap-2 text-lg font-bold text-slate-900 dark:text-white"
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-purple-600 text-white shadow-lg shadow-primary-500/25">
-              <span className="text-sm font-black">AS</span>
-            </div>
+            <Image
+              src={asset('/icon.png')}
+              alt="Agent Shaker"
+              width={36}
+              height={36}
+              priority
+              className="h-9 w-9 rounded-lg"
+            />
             <span className="hidden sm:inline">Agent Shaker</span>
           </Link>
         </div>

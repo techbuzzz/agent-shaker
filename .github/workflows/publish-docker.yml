@@ -1,0 +1,295 @@
+name: publish-docker
+
+# Publish ONLY from a version tag.
+#
+# `ci.yml` already builds both images on every push and pull request, so this
+# workflow has nothing to verify that CI does not verify faster and cheaper. Its
+# only job is the irreversible part: pushing to a registry that consumers pull
+# from. A branch push must never move `latest` under someone — so the trigger is
+# `tags: ['v*']` and nothing else.
+#
+# Cutting the tag is therefore the release action: merge the reviewed PR, wait
+# for the `ci` run to go green on `main`, then `git tag v1.2.3 && git push origin v1.2.3`.
+on:
+  push:
+    tags: [ 'v*' ]
+  # Escape hatch for the two cases that need it: Docker Hub being flaky at push
+  # time, and re-publishing a tag after fixing something in this file. The
+  # `tag` input is required — there is no sensible default to guess, and a wrong
+  # guess overwrites a published `latest`.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag to publish, with the leading v (e.g. v1.2.3)'
+        required: true
+        type: string
+
+concurrency:
+  # One publish per tag. Re-running the same tag supersedes the in-flight run
+  # rather than queueing behind it, so a retry does not wait out the previous
+  # attempt's 45-minute budget.
+  group: publish-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: docker.io
+  NAMESPACE: techbuzzz
+  SERVER_IMG: agent-shaker-server
+  WEBUI_IMG: agent-shaker-webui
+
+jobs:
+  publish:
+    name: push to Docker Hub
+    # Belt and braces alongside the `on:` filter: a workflow_dispatch run points
+    # at a branch ref, and this keeps the two triggers from ever sharing a path.
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Two multi-arch builds plus the smoke checks. The webui is the slow half:
+    # `npm ci` + `vite build` for arm64 run under QEMU emulation rather than
+    # natively, which is why this is not 15 minutes but generously bounded.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    # Same protection layer as the NuGet publishing in the sibling project, and
+    # the reason it is not enough to rely on the tag filter alone.
+    #
+    # The `if:` already stops a merge to `main` from publishing — but it does
+    # nothing about a mistyped tag, or about anyone able to push a `v*` tag. That
+    # path overwrites a published `latest` on a registry consumers pull from,
+    # which re-tagging does not undo.
+    #
+    # The environment is where `Required reviewers` lives. With it enabled on
+    # `dockerhub-prod`, the run pauses at this job until a human approves the
+    # push; without it the environment is only scoping for the secrets, the URL
+    # below, and the deployment history.
+    environment:
+      name: dockerhub-prod
+      url: https://hub.docker.com/r/techbuzzz/agent-shaker-server
+    steps:
+      - uses: actions/checkout@v7
+
+      # Required, not decorative: `platforms: linux/amd64,linux/arm64` on an
+      # amd64 runner builds the arm64 half through QEMU. Without this step the
+      # build fails part-way through the webui image with an exec-format error
+      # that reads like a Dockerfile problem. Registered before buildx so the
+      # emulator is in place when the builder starts.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Version derivation ──────────────────────────────────────────────────
+      # `v1.2.3` yields: full=1.2.3, major=1, minor=2.
+      #
+      # A single source for both trigger paths: on a tag push `ref_name` is the
+      # tag, on dispatch it is the branch that was selected, so the input wins
+      # there. `startsWith v` rather than `${tag#v}` blindly — `git tag 1.2.3`
+      # would otherwise publish `latest` from a tag the docs do not describe.
+      - name: Derive tags
+        id: meta
+        env:
+          RAW_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$RAW_TAG" in
+            v[0-9]*) ;;
+            *) echo "::error::'$RAW_TAG' is not a v<major>.<minor>.<patch> tag"; exit 1 ;;
+          esac
+
+          tag="${RAW_TAG#v}"
+          major="${tag%%.*}"
+          minor="${tag#*.}"; minor="${minor%%.*}"
+
+          # One grouped redirect rather than four: `>> "$GITHUB_OUTPUT"` opens and
+          # closes the file once per line, which is both slower and — under
+          # `set -e` — four separate places for the step to die.
+          #
+          # built_at is stamped here, not in the build-arg block, because a
+          # multi-arch build resolves ARG per platform: a timestamp evaluated
+          # downstream could differ between the two halves of the manifest and
+          # make one image report two build times.
+          {
+            echo "full=$tag"
+            echo "major=$major"
+            echo "minor=$minor"
+            echo "built_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "$GITHUB_OUTPUT"
+
+          # A semver prerelease (-rc1, -beta2) gets the exact tag and nothing
+          # else. `major.minor` and `latest` are the channels consumers pull from,
+          # and an RC taking either over is the kind of breakage nobody reports
+          # until it is in production.
+          #
+          # The tag lists are assembled here rather than in the two build steps
+          # because dropping two of three lines cannot be expressed inside a
+          # `tags: |` block — it would mean duplicating the step per case.
+          channel=''
+          case "$tag" in
+            *-*) ;;                    # prerelease: exact tag only
+            *) channel="$major.$minor" ;;
+          esac
+
+          for img in "$SERVER_IMG" "$WEBUI_IMG"; do
+            repo="$REGISTRY/$NAMESPACE/$img"
+            # Underscores, not the image name verbatim: `steps.meta.outputs.foo-bar`
+            # is not addressable — GitHub's expression parser treats `-` as an
+            # operator, so the reference silently resolves to the wrong thing or
+            # to nothing. Index syntax works but reads badly in a `with:` block.
+            key="${img//-/_}"
+            {
+              echo "tags_$key<<EOF"
+              echo "$repo:$tag"
+              if [ -n "$channel" ]; then
+                echo "$repo:$channel"
+                echo "$repo:latest"
+              fi
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          done
+
+          # Surfaced in the run log so a tag that publishes the wrong thing is
+          # visible before anyone pulls it.
+          if [ -n "$channel" ]; then
+            channels="\`$tag\`, \`$major.$minor\`, \`latest\`"
+          else
+            channels="\`$tag\` (prerelease — \`latest\` and \`$major.$minor\` left untouched)"
+          fi
+          {
+            echo "### Published $REGISTRY/$NAMESPACE/$SERVER_IMG:$tag"
+            echo
+            echo '| image | tags pushed |'
+            echo '|-------|-------------|'
+            echo "| \`$SERVER_IMG\` | $channels |"
+            echo "| \`$WEBUI_IMG\` | $channels |"
+            echo
+            echo "commit \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Server image ────────────────────────────────────────────────────────
+      # VERSION/COMMIT/BUILD_TIME are baked into the binary and printed on the
+      # `build` log line at boot, which is the only link from a running container
+      # back to a commit. Passed explicitly because a multi-arch build that
+      # derived them per-platform could produce an index whose two halves report
+      # different commits; supplying one value here keeps the manifest coherent.
+      - name: Build and push server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags_agent_shaker_server }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.full }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.built_at }}
+          # Caching is a convenience here, never a correctness dependency, so
+          # export failures are swallowed.
+          #
+          # The gha backend authenticates with $ACTIONS_RUNTIME_TOKEN, not with a
+          # GITHUB_TOKEN scope, so this job's `permissions: contents: read` does
+          # not restrict it. What DOES bite is documented behaviour of the cache
+          # API: an export can fail with "error writing layer blob: failed to
+          # reserve cache" *after* the image has already been built and pushed —
+          # which would turn a completed release into a red run. `ignore-error`
+          # is the difference between "the cache was busy" and "the release
+          # failed".
+          #
+          # Expect hits on cache-from to be cold: the scope is keyed to the ref,
+          # and this workflow runs on a tag ref, while ci.yml writes under the
+          # default scope. The arm64 webui build therefore reinstalls its tree
+          # under emulation every release. That is the correct trade for a
+          # workflow that runs a handful of times a year.
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max,ignore-error=true
+
+      # ── Webui image ─────────────────────────────────────────────────────────
+      # Context is ./web, matching docker-compose.yml and ci.yml: the Dockerfile
+      # copies package.json / package-lock.json by bare filename, so a
+      # repo-root context would not find them at /package.json.
+      - name: Build and push webui
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags_agent_shaker_webui }}
+          # Same rationale as the server build: the cache is optional, the release is not.
+          cache-from: type=gha,scope=webui
+          cache-to: type=gha,scope=webui,mode=max,ignore-error=true
+
+      # ── Post-push assertions ────────────────────────────────────────────────
+      # A tag that silently contains only one architecture is worse than a build
+      # failure: the pull fails much later, on someone else's machine. buildx
+      # pushes each platform as it finishes, so a partial push can leave a
+      # single-arch tag behind — this is what catches it.
+      - name: Verify published manifests
+        run: |
+          set -euo pipefail
+          for img in "${{ env.SERVER_IMG }}" "${{ env.WEBUI_IMG }}"; do
+            repo="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${img}:${{ steps.meta.outputs.full }}"
+            echo "── $repo"
+
+            # `docker manifest inspect` is the authority on what a registry will
+            # hand a `docker pull`; the buildx view is the one that just pushed.
+            docker manifest inspect "$repo" >/dev/null
+            manifest="$(docker buildx imagetools inspect "$repo" --format '{{json .Manifest}}')"
+            echo "$manifest"
+
+            # Assert both platforms are present rather than eyeballing the JSON.
+            for want in linux/amd64 linux/arm64; do
+              echo "$manifest" | grep -q "$want" || {
+                echo "::error::$repo is missing $want"; exit 1;
+              }
+            done
+          done
+
+      - name: Runtime smoke (amd64)
+        # Pulls back what was just pushed, so this asserts the published artifact
+        # and not a local build cache entry that happens to be green.
+        #
+        # --entrypoint is required on both images: each declares a CMD that boots
+        # a server, and `docker run IMAGE <args>` REPLACES a CMD (unlike an
+        # ENTRYPOINT, which it appends to) — but being explicit keeps the
+        # override visible and survives a future change to either Dockerfile.
+        run: |
+          set -euo pipefail
+          server="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.SERVER_IMG }}:${{ steps.meta.outputs.full }}"
+          webui="${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.WEBUI_IMG }}:${{ steps.meta.outputs.full }}"
+
+          # The interpreter check, for the image whose runtime stage is a bare
+          # alpine with no language runtime to invoke.
+          timeout --kill-after=10 120 docker run --rm --platform linux/amd64 \
+            --entrypoint /bin/sh "$server" -c 'echo server-runtime-ok'
+
+          # The published payload. A build that silently dropped /app passes
+          # every interpreter check above and fails only at boot on someone
+          # else's host, so the file layout is asserted directly.
+          #
+          # `migrate` and `migrations/` ship in the image so the compose one-shot
+          # job can apply migrations without a bind mount — if a future runtime
+          # stage change drops them, deployments break here rather than in
+          # production.
+          timeout --kill-after=10 120 docker run --rm --platform linux/amd64 \
+            --entrypoint /bin/sh "$server" -c '
+              set -e
+              ls -la /app/mcp-server /app/migrate
+              test -d /app/migrations
+              ls /app/migrations | head -1
+              # The compose migrate job runs exactly this path; an image
+              # without the migration runner cannot deploy at all.
+              test -x /app/migrate
+            '
+
+          # Webui: node must be the runtime the image actually ships, and the
+          # Nitro entrypoint must be where CMD expects it.
+          timeout --kill-after=10 120 docker run --rm --platform linux/amd64 \
+            --entrypoint node "$webui" --version
+          timeout --kill-after=10 120 docker run --rm --platform linux/amd64 \
+            --entrypoint /bin/sh "$webui" -c 'ls -la /app/.output/server/index.mjs'

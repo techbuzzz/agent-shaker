@@ -1,5 +1,7 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { Github, Heart } from 'lucide-react'
+import { asset } from '@/lib/config'
 
 export function Footer() {
   const currentYear = new Date().getFullYear()
@@ -10,9 +12,13 @@ export function Footer() {
         <div className="flex flex-col items-center justify-between gap-4 md:flex-row">
           {/* Left side */}
           <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-br from-primary-500 to-purple-600 text-white">
-              <span className="text-xs font-black">AS</span>
-            </div>
+            <Image
+              src={asset('/icon.png')}
+              alt="Agent Shaker"
+              width={28}
+              height={28}
+              className="h-7 w-7 rounded-md"
+            />
             <span>Agent Shaker</span>
             <span className="text-slate-400">·</span>
             <span>© {currentYear}</span>

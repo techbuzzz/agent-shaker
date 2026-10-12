@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="images/logo-clean.png" alt="Agent Shaker — AI coordination platform" width="320">
+
 # Agent Shaker
 
 **Task coordination for teams of AI agents.**

@@ -481,6 +481,54 @@ curl -s -H "Authorization: Bearer $API_KEY" https://your.host/.well-known/agent-
 # "https://your.host/a2a/v1"
 ```
 
+## Releasing an image to Docker Hub
+
+`.github/workflows/publish-docker.yml` publishes two images, and **only from a
+version tag**:
+
+| image | built from |
+|---|---|
+| `techbuzzz/agent-shaker-server` | `./Dockerfile` (Go) |
+| `techbuzzz/agent-shaker-webui` | `./web/Dockerfile` (Nuxt) |
+
+```bash
+git tag v1.2.3
+git push origin v1.2.3
+```
+
+That single tag push is the release. There is no separate publish step, and
+merging to `main` publishes nothing — `ci.yml` already builds both images on
+every push and pull request, so a second build on branch pushes would only
+repeat work while adding a way to overwrite a published `latest` by accident.
+
+`v1.2.3` publishes three tags per image: `1.2.3`, `1.2` and `latest`. A
+prerelease (`v1.2.3-rc1`) publishes **only** `1.2.3-rc1` — `1.2` and `latest`
+are left pointing at the last stable build, because those are the tags
+consumers pull and an RC silently taking them over is discovered from someone
+else's bug report.
+
+Both images are built for `linux/amd64` and `linux/arm64`.
+
+### Before the first release
+
+Two repository settings, neither of which the workflow can create for itself:
+
+- **Secrets** `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` — an access token with
+  read/write on the namespace, not the account password. Same names the
+  sibling projects use.
+- **Environment** `dockerhub-prod`. Enable *Required reviewers* on it if you
+  want a human to approve each push: the `v*` tag filter stops an ordinary
+  merge from publishing, but it does nothing about a mistyped tag or about
+  anyone who can push a `v*` tag, and a `latest` that moves is not undone by
+  re-tagging.
+
+### If a publish fails halfway
+
+Re-running is safe: `workflow_dispatch` on the same workflow takes the tag as
+input, and `concurrency` cancels an in-flight run for the same tag rather than
+queueing behind it. The post-push steps re-verify both manifests for both
+platforms, so a half-published tag is caught rather than discovered on pull.
+
 ## Troubleshooting
 
 **`/api/*` returns 401 in the browser but the key is correct.** The SPA holds no
