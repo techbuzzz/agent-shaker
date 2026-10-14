@@ -57,11 +57,9 @@ func (s *TasksStore) ListTasks(ctx context.Context, projectID *uuid.UUID, status
 	var out []models.Task
 	for rows.Next() {
 		var t models.Task
-		var statusStr string
-		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Description, &statusStr, &t.Priority, &t.CreatedBy, &t.AssignedTo, &t.Output, &t.MilestoneID, pq.Array(&t.Tags), &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan task: %w", err)
+		if err := scanTaskRow(rows, &t); err != nil {
+			return nil, err
 		}
-		t.Status = models.TaskStatus(statusStr)
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {
@@ -70,20 +68,60 @@ func (s *TasksStore) ListTasks(ctx context.Context, projectID *uuid.UUID, status
 	return out, nil
 }
 
+// scanTaskRow materialises one task row.
+//
+// Every nullable column is read through a sql.Null* wrapper. description,
+// output, priority, status and both timestamps are all nullable in the schema,
+// and scanning a NULL straight into a string or time.Time fails at runtime
+// with "converting NULL to string is unsupported" — which took out the whole
+// task list, not one row: any task created without a description was enough.
+//
+// A NULL status is reported as 'pending', the column's own DEFAULT. It is not
+// merely tolerated: a CHECK constraint evaluates to NULL and therefore passes,
+// so an explicitly-NULL status is reachable and every status filter would
+// silently skip it.
+func scanTaskRow(row rowScanner, t *models.Task) error {
+	var (
+		description sql.NullString
+		statusStr   sql.NullString
+		priority    sql.NullString
+		output      sql.NullString
+		createdAt   sql.NullTime
+		updatedAt   sql.NullTime
+	)
+	if err := row.Scan(
+		&t.ID, &t.ProjectID, &t.Title, &description, &statusStr, &priority,
+		&t.CreatedBy, &t.AssignedTo, &output, &t.MilestoneID, &t.Tags,
+		&createdAt, &updatedAt,
+	); err != nil {
+		return fmt.Errorf("scan task: %w", err)
+	}
+
+	t.Description = description.String
+	t.Priority = priority.String
+	t.Output = output.String
+	t.CreatedAt = createdAt.Time
+	t.UpdatedAt = updatedAt.Time
+
+	t.Status = models.StatusTaskPending
+	if statusStr.Valid && statusStr.String != "" {
+		t.Status = models.TaskStatus(statusStr.String)
+	}
+	return nil
+}
+
 func (s *TasksStore) GetTask(ctx context.Context, id uuid.UUID) (*models.Task, error) {
 	var t models.Task
-	var statusStr string
-	err := s.q.QueryRowContext(ctx, `
+	err := scanTaskRow(s.q.QueryRowContext(ctx, `
 		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at
 		FROM tasks WHERE id = $1
-	`, id).Scan(&t.ID, &t.ProjectID, &t.Title, &t.Description, &statusStr, &t.Priority, &t.CreatedBy, &t.AssignedTo, &t.Output, &t.MilestoneID, pq.Array(&t.Tags), &t.CreatedAt, &t.UpdatedAt)
+	`, id), &t)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("task %s not found", id)
+			return nil, fmt.Errorf("task not found: id %s", id)
 		}
 		return nil, fmt.Errorf("select task: %w", err)
 	}
-	t.Status = models.TaskStatus(statusStr)
 	return &t, nil
 }
 

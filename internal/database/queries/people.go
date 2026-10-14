@@ -75,7 +75,7 @@ func (s *PeopleStore) GetPerson(ctx context.Context, id uuid.UUID) (*models.Pers
 	`, id).Scan(&p.ID, &p.Kind, &p.DisplayName, &email, &p.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("person %s not found", id)
+			return nil, fmt.Errorf("%w: %s", models.ErrPersonNotFound, id)
 		}
 		return nil, fmt.Errorf("select person: %w", err)
 	}

@@ -19,6 +19,17 @@ const apiKeyColumns = `
 	k.id, k.key_hash, k.key_prefix, k.principal_type, k.principal_id,
 	k.project_id, k.scopes, k.created_at, k.last_used_at, k.revoked_at`
 
+// apiKeyColumnsBare is the same projection without the `k.` qualifier, for use
+// in UPDATE ... RETURNING.
+//
+// Postgres has no FROM clause to source an alias from in an UPDATE, so
+// reusing apiKeyColumns there fails at runtime with `missing FROM-clause entry
+// for table "k"` — and it fails on the revoke path specifically, which is the
+// one operation an operator runs when something has already gone wrong.
+const apiKeyColumnsBare = `
+	id, key_hash, key_prefix, principal_type, principal_id,
+	project_id, scopes, created_at, last_used_at, revoked_at`
+
 // rowScanner is satisfied by *sql.Row and *sql.Rows, which lets one scan
 // helper serve both the single-row lookups on the request path and the list
 // query.
@@ -161,7 +172,7 @@ func (s *APIKeysStore) RevokeAPIKey(ctx context.Context, id uuid.UUID) (*models.
 	row := s.q.QueryRowContext(ctx, `
 		UPDATE api_keys SET revoked_at = NOW()
 		WHERE id = $1 AND revoked_at IS NULL
-		RETURNING`+apiKeyColumns,
+		RETURNING`+apiKeyColumnsBare,
 		id)
 
 	k, err := scanAPIKey(row)
@@ -206,13 +217,19 @@ func scanAPIKey(row rowScanner) (*models.APIKey, error) {
 		projectID uuid.NullUUID
 		lastUsed  sql.NullTime
 		revokedAt sql.NullTime
+		rawScopes pq.StringArray
 	)
 	if err := row.Scan(
 		&k.ID, &k.KeyHash, &k.KeyPrefix, &k.PrincipalType, &k.PrincipalID,
-		&projectID, pq.Array(&k.Scopes), &k.CreatedAt, &lastUsed, &revokedAt,
+		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt,
 	); err != nil {
 		return nil, err
 	}
+	scopes, err := models.ScopesFromStrings(rawScopes)
+	if err != nil {
+		return nil, fmt.Errorf("read scopes for key %s: %w", k.ID, err)
+	}
+	k.Scopes = scopes
 	applyNullColumns(&k, projectID, lastUsed, revokedAt)
 	return &k, nil
 }
@@ -224,14 +241,20 @@ func scanAPIKeyWithPrincipal(row rowScanner) (*models.APIKey, error) {
 		projectID uuid.NullUUID
 		lastUsed  sql.NullTime
 		revokedAt sql.NullTime
+		rawScopes pq.StringArray
 	)
 	if err := row.Scan(
 		&k.ID, &k.KeyHash, &k.KeyPrefix, &k.PrincipalType, &k.PrincipalID,
-		&projectID, pq.Array(&k.Scopes), &k.CreatedAt, &lastUsed, &revokedAt,
+		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt,
 		&k.PrincipalName,
 	); err != nil {
 		return nil, err
 	}
+	scopes, err := models.ScopesFromStrings(rawScopes)
+	if err != nil {
+		return nil, fmt.Errorf("read scopes for key %s: %w", k.ID, err)
+	}
+	k.Scopes = scopes
 	applyNullColumns(&k, projectID, lastUsed, revokedAt)
 	return &k, nil
 }

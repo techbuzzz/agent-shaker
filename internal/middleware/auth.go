@@ -145,10 +145,32 @@ func RequireAPIKey(cfg AuthConfig) (Middleware, error) {
 func authenticate(ctx context.Context, presented string, cfg AuthConfig, keys []string) (Principal, error) {
 	if cfg.Resolver != nil {
 		principal, err := cfg.Resolver.ResolveKey(ctx, presented)
-		if err != nil {
+		switch {
+		case err == nil:
+			return principal, nil
+
+		// Fall back to the flat env list only when the resolver says the
+		// credential is simply not one it issued. API_KEYS has to keep working
+		// on a deployment that has a database, because it is how an operator
+		// bootstraps the very first scoped key: the mint endpoint itself
+		// requires ScopeAdmin, which an env key holds via LegacyPrincipal.
+		// Without this fallback, enabling the resolver locks out every existing
+		// deployment with no way back in.
+		case errors.Is(err, ErrKeyUnknown) && matchesAnyKey(presented, keys):
+			return LegacyPrincipal(), nil
+
+		// A revoked key is authoritative. Falling through to the env list here
+		// would let a revocation be bypassed by presenting the old value as an
+		// env key.
+		case errors.Is(err, ErrKeyRevoked):
+			return Principal{}, err
+
+		// Anything else is an infrastructure failure (the database is down).
+		// Answering 401 would disguise an outage as an attack, so the error
+		// travels up untouched.
+		default:
 			return Principal{}, err
 		}
-		return principal, nil
 	}
 
 	if !matchesAnyKey(presented, keys) {

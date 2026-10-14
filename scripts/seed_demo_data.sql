@@ -1,4 +1,4 @@
--- Optional demo dataset. NOT part of the migration chain.
+﻿-- Optional demo dataset. NOT part of the migration chain.
 --
 -- This is the data that used to be applied automatically by
 -- `002_sample_data.up.sql`, which meant every fresh database — production
@@ -18,10 +18,14 @@
 INSERT INTO projects (id, name, description, status, created_at) VALUES
 ('550e8400-e29b-41d4-a716-446655440001', 'E-Commerce Platform', 'Building a modern e-commerce solution', 'active', NOW()),
 ('550e8400-e29b-41d4-a716-446655440002', 'Mobile App Development', 'Cross-platform mobile application', 'active', NOW()),
-('550e8400-e29b-41d4-a716-446655440003', 'Data Analytics Dashboard', 'Real-time analytics and reporting', 'inactive', NOW())
+('550e8400-e29b-41d4-a716-446655440003', 'Data Analytics Dashboard', 'Real-time analytics and reporting', 'archived', NOW())
 ON CONFLICT (id) DO NOTHING;
 
 -- Sample agents
+--
+-- Statuses come from models.AllAgentStatuses: active, idle, blocked, offline.
+-- `archived` is a PROJECT status and is rejected here by agents_status_check
+-- (migration 014) — the two vocabularies are separate on purpose.
 INSERT INTO agents (id, project_id, name, role, team, status, last_seen, created_at) VALUES
 -- E-Commerce Platform agents
 ('660e8400-e29b-41d4-a716-446655440001', '550e8400-e29b-41d4-a716-446655440001', 'React Frontend Agent', 'frontend', 'UI Team', 'active', NOW(), NOW() - INTERVAL '1 day'),
@@ -31,12 +35,12 @@ INSERT INTO agents (id, project_id, name, role, team, status, last_seen, created
 -- Mobile App Development agents
 ('660e8400-e29b-41d4-a716-446655440004', '550e8400-e29b-41d4-a716-446655440002', 'Flutter UI Agent', 'frontend', 'Mobile Team', 'active', NOW() - INTERVAL '12 hours', NOW() - INTERVAL '12 hours'),
 ('660e8400-e29b-41d4-a716-446655440005', '550e8400-e29b-41d4-a716-446655440002', 'API Integration Agent', 'backend', 'Mobile Team', 'active', NOW() - INTERVAL '30 minutes', NOW() - INTERVAL '12 hours'),
-('660e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440002', 'Firebase Agent', 'backend', 'Cloud Team', 'inactive', NOW() - INTERVAL '5 days', NOW() - INTERVAL '15 days'),
+('660e8400-e29b-41d4-a716-446655440006', '550e8400-e29b-41d4-a716-446655440002', 'Firebase Agent', 'backend', 'Cloud Team', 'offline', NOW() - INTERVAL '5 days', NOW() - INTERVAL '15 days'),
 
 -- Data Analytics Dashboard agents
 ('660e8400-e29b-41d4-a716-446655440007', '550e8400-e29b-41d4-a716-446655440003', 'Dashboard Frontend Agent', 'frontend', 'Analytics Team', 'active', NOW() - INTERVAL '1 hour', NOW() - INTERVAL '3 days'),
 ('660e8400-e29b-41d4-a716-446655440008', '550e8400-e29b-41d4-a716-446655440003', 'Data Processing Agent', 'backend', 'Analytics Team', 'active', NOW(), NOW() - INTERVAL '3 days'),
-('660e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440003', 'Reporting Agent', 'backend', 'BI Team', 'inactive', NOW() - INTERVAL '10 days', NOW() - INTERVAL '30 days')
+('660e8400-e29b-41d4-a716-446655440009', '550e8400-e29b-41d4-a716-446655440003', 'Reporting Agent', 'backend', 'BI Team', 'offline', NOW() - INTERVAL '10 days', NOW() - INTERVAL '30 days')
 ON CONFLICT (id) DO NOTHING;
 
 -- Sample tasks

@@ -66,14 +66,7 @@ func ValidateCreateTaskRequest(req *models.CreateTaskRequest) error {
 
 // ValidateUpdateTaskRequest validates task update request
 func ValidateUpdateTaskRequest(req *models.UpdateTaskRequest) error {
-	validStatuses := map[string]bool{
-		"pending":     true,
-		"in_progress": true,
-		"blocked":     true,
-		"done":        true,
-		"cancelled":   true,
-	}
-	if !validStatuses[string(req.Status)] {
+	if !models.IsValidTaskStatus(string(req.Status)) {
 		return ErrInvalidStatus
 	}
 	return nil
@@ -81,12 +74,7 @@ func ValidateUpdateTaskRequest(req *models.UpdateTaskRequest) error {
 
 // ValidateUpdateAgentStatusRequest validates agent status update request
 func ValidateUpdateAgentStatusRequest(req *models.UpdateAgentStatusRequest) error {
-	validStatuses := map[string]bool{
-		"active":  true,
-		"idle":    true,
-		"offline": true,
-	}
-	if !validStatuses[req.Status] {
+	if !models.IsValidAgentStatus(req.Status) {
 		return ErrInvalidStatus
 	}
 	return nil

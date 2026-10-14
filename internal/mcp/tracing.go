@@ -12,14 +12,10 @@ import (
 // single instrumentation scope, which is what a backend filters on.
 var mcpTracer = otel.Tracer("github.com/techbuzzz/agent-shaker/internal/mcp")
 
-// mcpProtocolVersion is the MCP revision this server implements.
-//
-// It is a constant because it is reported in three places (server info,
-// initialize, and the tool-call span) and a hardcoded literal in each of them
-// is exactly the kind of drift that goes unnoticed: a future revision bump has
-// to change one line, not three, and the span attribute must not be able to
-// disagree with the value the client was told.
-const mcpProtocolVersion = "2024-11-05"
+// mcpProtocolVersion, the supported set and the negotiation rules live in
+// protocol.go. They are declared there together because they are one decision:
+// the reported revision, the default, and the accepted range have to be changed
+// together or the server starts lying to clients.
 
 // argumentKeys returns the sorted top-level keys of a tool-call argument
 // object, for logging.

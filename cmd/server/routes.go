@@ -18,6 +18,7 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
+	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/observability"
 )
 
@@ -35,6 +36,8 @@ type routeDeps struct {
 	milestoneHandler     *handlers.MilestoneHandler
 	projectRepoHandler   *handlers.ProjectRepoHandler
 	globalContextHandler *handlers.GlobalContextHandler
+	peopleHandler        *handlers.PeopleHandler
+	apiKeysHandler       *handlers.APIKeysHandler
 	mcpHandler           *mcp.MCPHandler
 	agentCardHandler     *server.AgentCardHandler
 	a2aHandler           *server.A2AHandler
@@ -193,11 +196,25 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	))
 
 	// REST API — CORS-wrapped + body-size limited + authenticated.
+	//
+	// Order is load-bearing. Apply composes right-to-left, so the last entry is
+	// the innermost and runs last. Authentication must wrap the scope checks,
+	// not the other way round: the scope gates read the principal that auth
+	// puts in the context, so listing them before d.auth would evaluate every
+	// request against an anonymous principal.
+	//
+	// Keeping scope enforcement out of the handlers means a new route cannot
+	// ship unauthorised and a deleted route cannot silently lose its
+	// authorisation. The administrative prefixes demand ScopeAdmin regardless of
+	// method; everything else is graded by HTTP method, so an unrecognised verb
+	// fails closed as a mutation.
 	apiHandler := middleware.Apply(d.apiRouter(),
 		d.accessLog,
 		middleware.CORS(d.corsOrigins, d.corsAllowCreds, nil, nil),
 		middleware.RequestSizeLimit(d.maxBodyBytes),
 		d.auth,
+		middleware.RequireMethodScope(),
+		middleware.RequireScopeOnPaths(models.ScopeAdmin, "/api/keys", "/api/people"),
 	)
 	mux.Handle("/api/", apiHandler)
 
@@ -214,7 +231,13 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	// the log.
 	if info, err := os.Stat("./web/dist"); err == nil && info.IsDir() {
 		slog.Info("serving frontend from ./web/dist")
-		mux.Handle("/", d.spaHandler("./web/dist"))
+		// CSP applies to the HTML this fallback serves, and to nothing else:
+		// attaching it to the JSON API would spend a header on every response
+		// to protect documents that are never rendered as a document.
+		mux.Handle("/", middleware.Apply(
+			d.spaHandler("./web/dist"),
+			middleware.ContentSecurityPolicy(middleware.DefaultSPA_CSP()),
+		))
 	} else {
 		slog.Info("no ./web/dist directory; this server is API-only (frontend is a separate service)")
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +368,22 @@ func (d routeDeps) apiRouter() http.Handler {
 		mux.HandleFunc("GET /api/global_contexts/{id}", d.globalContextHandler.Get)
 		mux.HandleFunc("PUT /api/global_contexts/{id}", d.globalContextHandler.Update)
 		mux.HandleFunc("DELETE /api/global_contexts/{id}", d.globalContextHandler.Delete)
+	}
+	// Administrative surface: the principal directory and the key mint/revoke
+	// API. Both are gated by ScopeAdmin in middleware.RequireScopeOnPaths below,
+	// so a read-only or write-only key can never reach them. Minting a key is
+	// the sensitive operation in the whole product — it is the only endpoint
+	// that returns a live secret — which is why the gate is on the path prefix
+	// rather than left to each handler.
+	if d.peopleHandler != nil {
+		mux.HandleFunc("GET /api/people", d.peopleHandler.ListPeople)
+		mux.HandleFunc("POST /api/people", d.peopleHandler.CreatePerson)
+		mux.HandleFunc("GET /api/people/{id}", d.peopleHandler.GetPerson)
+	}
+	if d.apiKeysHandler != nil {
+		mux.HandleFunc("GET /api/keys", d.apiKeysHandler.ListKeys)
+		mux.HandleFunc("POST /api/keys", d.apiKeysHandler.CreateKey)
+		mux.HandleFunc("DELETE /api/keys/{id}", d.apiKeysHandler.RevokeKey)
 	}
 	return mux
 }

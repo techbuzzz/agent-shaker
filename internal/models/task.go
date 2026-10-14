@@ -7,15 +7,11 @@ import (
 	"github.com/lib/pq"
 )
 
-// TaskStatus represents the status of a task
-type TaskStatus string
-
-const (
-	StatusPending    TaskStatus = "pending"
-	StatusInProgress TaskStatus = "in_progress"
-	StatusCompleted  TaskStatus = "completed"
-	StatusFailed     TaskStatus = "failed"
-)
+// TaskStatus is defined in status.go, which is the single source of truth
+// for status vocabularies. It used to be defined here alongside constants
+// (pending/in_progress/completed/failed) that nothing referenced and that
+// contradicted the vocabulary the REST API actually accepts. Those constants
+// are gone; use the StatusTask* constants in status.go.
 
 type Task struct {
 	ID          uuid.UUID      `json:"id" db:"id"`

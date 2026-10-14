@@ -141,6 +141,27 @@ func main() {
 	milestonesStore := queries.NewMilestonesStore(querier)
 	projectReposStore := queries.NewProjectReposStore(querier)
 	globalContextsStore := queries.NewGlobalContextsStore(querier)
+	peopleStore := queries.NewPeopleStore(querier)
+	apiKeysStore := queries.NewAPIKeysStore(querier)
+
+	// Database-backed credential resolution.
+	//
+	// The env list (API_KEYS) stays supported as the bootstrap path so a fresh
+	// install can be secured before anyone has logged in to mint a key. When a
+	// store is available the resolver takes precedence for well-formed
+	// credentials, so revoking a minted key works immediately instead of at
+	// the end of the cache TTL.
+	//
+	// Nil when there is no database: the middleware then falls back to the
+	// static list, which is the behaviour a no-database deployment had before
+	// this existed.
+	var keyResolver middleware.KeyResolver
+	if apiKeysStore.Available() {
+		keyResolver = middleware.NewKeyResolver(apiKeysStore, middleware.ResolverOptions{})
+		slog.Info("database-backed key resolution enabled; API_KEYS remains the bootstrap path")
+	} else {
+		slog.Warn("no database available; API_KEYS is the only credential source and scoped keys are unavailable")
+	}
 	projectHandler := handlers.NewProjectHandler(projectStore, hub)
 	agentHandler := handlers.NewAgentHandler(agentStore, hub)
 	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub)
@@ -151,6 +172,8 @@ func main() {
 	milestoneHandler := handlers.NewMilestoneHandler(milestonesStore, tasksQueryStore, agentStore, hub, db)
 	projectRepoHandler := handlers.NewProjectRepoHandler(projectReposStore, hub)
 	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
+	peopleHandler := handlers.NewPeopleHandler(peopleStore)
+	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeysStore, peopleStore, keyResolver)
 	mcpHandler := mcp.NewMCPHandler(db, hub)
 
 	// A2A Protocol Setup.
@@ -258,8 +281,9 @@ func main() {
 	apiKeys := middleware.APIKeysFromEnv("API_KEYS")
 
 	authMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
-		Enabled: authEnabled,
-		Keys:    apiKeys,
+		Enabled:  authEnabled,
+		Keys:     apiKeys,
+		Resolver: keyResolver,
 		// Probes stay reachable: an orchestrator or load balancer has no
 		// credential, and a 401 there becomes a crash-restart loop instead of
 		// a clear configuration error.
@@ -274,6 +298,7 @@ func main() {
 	wsAuthMW, err := middleware.RequireAPIKey(middleware.AuthConfig{
 		Enabled:       authEnabled,
 		Keys:          apiKeys,
+		Resolver:      keyResolver,
 		AllowQueryKey: true,
 		Skip:          []string{"/healthz", "/readyz", "/metrics", "/health"},
 	})
@@ -312,6 +337,8 @@ func main() {
 		milestoneHandler:     milestoneHandler,
 		projectRepoHandler:   projectRepoHandler,
 		globalContextHandler: globalContextHandler,
+		peopleHandler:        peopleHandler,
+		apiKeysHandler:       apiKeysHandler,
 		mcpHandler:           mcpHandler,
 		agentCardHandler:     agentCardHandler,
 		a2aHandler:           a2aHandler,

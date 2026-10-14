@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -155,6 +157,24 @@ type MCPContext struct {
 	// by extractContext; zero-valued MCPContext in tests falls back to
 	// context.Background via requestContext.
 	Context context.Context
+	// ProtocolVersion is the revision negotiated for this request. Empty means
+	// the default (mcpProtocolVersion), which is what the legacy SSE transport
+	// and every caller that skips negotiation see.
+	ProtocolVersion string
+	// VersionFromHeader records that ProtocolVersion came from the transport
+	// header rather than from the default. initialize uses it to decide whether
+	// the handshake body is still allowed to choose: the header is authoritative
+	// when present, because by then the request is already past negotiation.
+	VersionFromHeader bool
+}
+
+// negotiatedVersion returns the revision in force for this request, falling
+// back to the default so a zero-valued context still reports something true.
+func (c MCPContext) negotiatedVersion() string {
+	if c.ProtocolVersion == "" {
+		return mcpProtocolVersion
+	}
+	return c.ProtocolVersion
 }
 
 // requestContext returns a usable context even for a zero-valued MCPContext, so
@@ -197,7 +217,10 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	// Set CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Project-ID, X-Agent-ID")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Project-ID, X-Agent-ID, "+protocolVersionHeader)
+	// Without this the browser hides the version from the client script, and a
+	// cross-origin MCP host could not read the revision the server settled on.
+	w.Header().Set("Access-Control-Expose-Headers", protocolVersionHeader)
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -218,6 +241,22 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	ctx := h.extractContext(r)
 	if ctx.ProjectID != "" || ctx.AgentID != "" {
 		slog.InfoContext(r.Context(), "mcp server info requested", "project_id", ctx.ProjectID, "agent_id", ctx.AgentID)
+	}
+
+	// Resolve the protocol revision before any work is done. Placement matters:
+	// a client that asked for semantics we do not implement must be told so
+	// before it receives a partially-valid answer, not after.
+	if r.Method != http.MethodOptions {
+		version, err := negotiateProtocolVersion(r)
+		if err != nil {
+			slog.WarnContext(r.Context(), "rejecting mcp request", "error", err,
+				"header", protocolVersionHeader, "value", r.Header.Get(protocolVersionHeader))
+			writeUnsupportedVersion(w, r.Header.Get(protocolVersionHeader))
+			return
+		}
+		ctx.ProtocolVersion = version
+		ctx.VersionFromHeader = r.Header.Get(protocolVersionHeader) != ""
+		logNegotiation(ctx, version)
 	}
 
 	// Check for SSE request (GET with Accept: text/event-stream)
@@ -247,7 +286,7 @@ func (h *MCPHandler) handleServerInfo(w http.ResponseWriter, r *http.Request, ct
 	info := map[string]interface{}{
 		"name":            "agent-shaker",
 		"version":         "1.0.0",
-		"protocolVersion": mcpProtocolVersion,
+		"protocolVersion": ctx.negotiatedVersion(),
 		"capabilities": map[string]interface{}{
 			"tools":     map[string]bool{"listChanged": false},
 			"resources": map[string]bool{"subscribe": false, "listChanged": false},
@@ -336,6 +375,12 @@ func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request, ctx M
 		result = map[string]interface{}{}
 	case "tools/list":
 		result, rpcErr = h.handleToolsList(ctx)
+	case "server/discover":
+		// Added in 2026-07-28 so a client can fetch capabilities without a
+		// connection state. Serving it on the older revisions is additive: a
+		// client that does not know the method never calls it, and one that
+		// does gets an answer instead of "Method not found".
+		result, rpcErr = h.handleServerDiscover(ctx)
 	case "tools/call":
 		result, rpcErr = h.handleToolsCall(req.Params, ctx)
 	case "resources/list":
@@ -353,6 +398,32 @@ func (h *MCPHandler) handleJSONRPC(w http.ResponseWriter, r *http.Request, ctx M
 	}
 
 	h.sendResponse(w, req.ID, result, rpcErr)
+}
+
+// handleServerDiscover reports capabilities and the accepted revisions.
+//
+// It is the stateless answer to "what can you do" that 2026-07-28 introduced
+// by removing the handshake, made available on the older revisions as an
+// additive method. supportedProtocolVersions is included deliberately: a client
+// that discovers an unsupported revision here can retry without the cost of a
+// failed request.
+func (h *MCPHandler) handleServerDiscover(ctx MCPContext) (interface{}, *JSONRPCError) {
+	return map[string]interface{}{
+		"protocolVersion":   ctx.negotiatedVersion(),
+		"supportedVersions": supportedProtocolVersions,
+		"defaultVersion":    mcpProtocolVersion,
+		"serverInfo":        map[string]string{"name": "agent-shaker", "version": "1.0.0"},
+		"capabilities":      h.serverCapabilities(),
+	}, nil
+}
+
+// serverCapabilities is the single definition of what this surface can do,
+// shared by initialize and server/discover so the two cannot disagree.
+func (h *MCPHandler) serverCapabilities() ServerCapabilities {
+	return ServerCapabilities{
+		Tools:     &ToolsCapability{ListChanged: false},
+		Resources: &ResourcesCapability{Subscribe: false, ListChanged: false},
+	}
 }
 
 func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (interface{}, *JSONRPCError) {
@@ -378,17 +449,29 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (i
 		"agent_id", ctx.AgentID,
 	)
 
+	// Resolve the revision, letting a client's own proposal win only when the
+	// transport did not already settle it.
+	//
+	// The header is authoritative when present: the request is already past the
+	// transport's gate, and letting the body override it would let initialize,
+	// server/discover and the tool-call span disagree about the same request.
+	// When no header was sent, a supported value in the body is honoured —
+	// that is how clients on the session-based revisions select one.
+	agreed := ctx.negotiatedVersion()
+	if !ctx.VersionFromHeader {
+		if requested := clientParams.ProtocolVersion; requested != "" {
+			if supportsProtocolVersion(requested) {
+				agreed = requested
+			} else {
+				slog.WarnContext(ctx.requestContext(), "initialize requested an unsupported revision; serving the default",
+					"requested", requested, "serving", agreed)
+			}
+		}
+	}
+
 	result := InitializeResult{
-		ProtocolVersion: mcpProtocolVersion,
-		Capabilities: ServerCapabilities{
-			Tools: &ToolsCapability{
-				ListChanged: false,
-			},
-			Resources: &ResourcesCapability{
-				Subscribe:   false,
-				ListChanged: false,
-			},
-		},
+		ProtocolVersion: agreed,
+		Capabilities:    h.serverCapabilities(),
 		ServerInfo: ServerInfo{
 			Name:    "agent-shaker",
 			Version: "1.0.0",
@@ -438,8 +521,8 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 				Properties: map[string]interface{}{
 					"status": map[string]interface{}{
 						"type":        "string",
-						"description": "New status: idle, working, blocked, offline",
-						"enum":        []string{"idle", "working", "blocked", "offline"},
+						"description": "New agent status: " + models.JoinValues(models.AllAgentStatuses),
+						"enum":        models.StringSlice(models.AllAgentStatuses),
 					},
 				},
 				Required: []string{"status"},
@@ -618,8 +701,8 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 					},
 					"status": map[string]interface{}{
 						"type":        "string",
-						"description": "New status: pending, in_progress, done, blocked",
-						"enum":        []string{"pending", "in_progress", "done", "blocked"},
+						"description": "New task status: " + models.JoinValues(models.AllTaskStatuses),
+						"enum":        models.StringSlice(models.AllTaskStatuses),
 					},
 				},
 				Required: []string{"task_id", "status"},
@@ -944,7 +1027,7 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 	// and it is stable.
 	spanAttrs := []attribute.KeyValue{
 		attribute.String("shaker.mcp.tool", callParams.Name),
-		attribute.String("shaker.mcp.protocol_version", mcpProtocolVersion),
+		attribute.String("shaker.mcp.protocol_version", ctx.negotiatedVersion()),
 	}
 	if ctx.ProjectID != "" {
 		spanAttrs = append(spanAttrs, attribute.String("shaker.project.id", ctx.ProjectID))
@@ -1487,10 +1570,9 @@ func (h *MCPHandler) executeUpdateTaskStatus(args map[string]interface{}) (strin
 		return `{"error": "status is required"}`, true
 	}
 
-	// Validate status
-	validStatuses := map[string]bool{"pending": true, "in_progress": true, "done": true, "blocked": true}
-	if !validStatuses[status] {
-		return `{"error": "invalid status, must be one of: pending, in_progress, done, blocked"}`, true
+	if !models.IsValidTaskStatus(status) {
+		return fmt.Sprintf(`{"error": "invalid status, must be one of: %s"}`,
+			models.JoinValues(models.AllTaskStatuses)), true
 	}
 
 	_, err := h.db.Exec(`UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2`, status, taskID)
@@ -2663,11 +2745,13 @@ func (h *MCPHandler) executeGetMyProject(ctx MCPContext) (string, bool) {
 	// Get agents count
 	agentCount := countRows(h.db, "SELECT COUNT(*) FROM agents WHERE project_id = $1", ctx.ProjectID)
 
-	// Get tasks summary
+	// Get tasks summary. Every status gets a bucket, and total is their sum, so
+	// an agent reading this cannot find a task that is counted nowhere.
 	pendingTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'pending'", ctx.ProjectID)
 	inProgressTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'in_progress'", ctx.ProjectID)
 	doneTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'done'", ctx.ProjectID)
 	blockedTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'blocked'", ctx.ProjectID)
+	cancelledTasks := countRows(h.db, "SELECT COUNT(*) FROM tasks WHERE project_id = $1 AND status = 'cancelled'", ctx.ProjectID)
 
 	result, _ := json.MarshalIndent(map[string]interface{}{
 		"id":          id,
@@ -2682,7 +2766,8 @@ func (h *MCPHandler) executeGetMyProject(ctx MCPContext) (string, bool) {
 			"in_progress": inProgressTasks,
 			"done":        doneTasks,
 			"blocked":     blockedTasks,
-			"total":       pendingTasks + inProgressTasks + doneTasks + blockedTasks,
+			"cancelled":   cancelledTasks,
+			"total":       pendingTasks + inProgressTasks + doneTasks + blockedTasks + cancelledTasks,
 		},
 	}, "", "  ")
 	return string(result), false
@@ -2754,12 +2839,13 @@ func (h *MCPHandler) executeUpdateMyStatus(args map[string]interface{}, ctx MCPC
 
 	status, ok := args["status"].(string)
 	if !ok {
-		return `{"error": "status is required (idle, working, blocked, offline)"}`, true
+		return fmt.Sprintf(`{"error": "status is required (%s)"}`,
+			models.JoinValues(models.AllAgentStatuses)), true
 	}
 
-	validStatuses := map[string]bool{"idle": true, "working": true, "blocked": true, "offline": true}
-	if !validStatuses[status] {
-		return `{"error": "Invalid status. Must be one of: idle, working, blocked, offline"}`, true
+	if !models.IsValidAgentStatus(status) {
+		return fmt.Sprintf(`{"error": "invalid status, must be one of: %s"}`,
+			models.JoinValues(models.AllAgentStatuses)), true
 	}
 
 	query := "UPDATE agents SET status = $1, updated_at = NOW() WHERE id = $2"
@@ -2798,6 +2884,63 @@ func (h *MCPHandler) executeUpdateMyStatus(args map[string]interface{}, ctx MCPC
 	return string(resultJSON), false
 }
 
+// claimTaskSQL is the atomic claim statement.
+//
+// The ownership guard lives in the UPDATE itself so two agents racing for the
+// same task cannot both succeed: whoever loses the race updates zero rows and
+// gets a refusal, instead of silently overwriting the winner's assignment.
+// Reading the current assignee first and updating afterwards is a check-then-act
+// race, and that is the bug this statement replaces.
+//
+// Terminal tasks are not claimable, so a late heartbeat cannot resurrect
+// finished work. Re-claiming a task this agent already owns is idempotent and
+// allowed: an agent retrying after a dropped connection should not be punished
+// for it.
+//
+// Package-level so TestClaimTaskStatementCarriesOwnershipGuard can assert on
+// its shape — see that test for what the assertion does and does not prove.
+const claimTaskSQL = `
+		UPDATE tasks
+		   SET assigned_to = $1,
+		       status      = 'in_progress',
+		       updated_at  = NOW()
+		 WHERE id = $2
+		   AND (assigned_to IS NULL OR assigned_to = $1)
+		   AND status NOT IN ('done', 'cancelled')
+		   AND ($3::uuid IS NULL OR project_id = $3)
+		RETURNING id, title, project_id, status`
+
+// completeTaskSQL mirrors the claim: same ownership guard, same project scope,
+// same refusal semantics. The two statements are deliberately identical in
+// shape so the invariant "one agent owns a task" is enforced the same way on
+// the way in and on the way out.
+const completeTaskSQL = `
+		UPDATE tasks
+		   SET status     = 'done',
+		       updated_at = NOW()
+		 WHERE id = $2
+		   AND (assigned_to IS NULL OR assigned_to = $1)
+		   AND status NOT IN ('done', 'cancelled')
+		   AND ($3::uuid IS NULL OR project_id = $3)
+		RETURNING title`
+
+// nullableProjectID converts an empty project binding to SQL NULL.
+//
+// A connection with no project_id is deliberately unscoped — that is how a
+// first-time agent using register_self works — so the guard has to be a
+// "no opinion" comparison rather than an equality that never matches. A
+// malformed id, by contrast, is an error rather than a silent wildcard.
+func nullableProjectID(projectID string) (any, error) {
+	if projectID == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(projectID)
+	if err != nil {
+		return nil, fmt.Errorf("project_id must be a uuid: %w", err)
+	}
+	return id, nil
+}
+
 func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContext) (string, bool) {
 	if ctx.AgentID == "" {
 		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
@@ -2812,28 +2955,83 @@ func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContex
 		return `{"error": "task_id is required"}`, true
 	}
 
-	// Verify task exists and get its current assignment
-	var currentAssignment interface{}
-	var title string
-	err := h.db.QueryRow("SELECT title, assigned_to FROM tasks WHERE id = $1", taskID).Scan(&title, &currentAssignment)
-	if err != nil {
-		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
-	}
-
-	// Update task assignment and set status to in_progress
-	query := "UPDATE tasks SET assigned_to = $1, status = 'in_progress', updated_at = NOW() WHERE id = $2"
-	_, err = h.db.Exec(query, ctx.AgentID, taskID)
+	// The guard belongs in the statement; see claimTaskSQL.
+	//
+	// project_id is part of the WHERE clause rather than checked afterwards: an
+	// MCP connection is scoped to a project, so an agent bound to one project
+	// must not be able to name another project's task id and take it. Scoping
+	// in the statement keeps it atomic with the ownership check instead of
+	// being a second read-then-act step.
+	var claimedID, claimedTitle, claimedStatus string
+	var claimedProjectID uuid.UUID
+	scopeArg, err := nullableProjectID(ctx.ProjectID)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
+	err = h.db.QueryRow(claimTaskSQL, ctx.AgentID, taskID, scopeArg).
+		Scan(&claimedID, &claimedTitle, &claimedProjectID, &claimedStatus)
+
+	// database.DB embeds *sql.DB, so QueryRow returns a *sql.Row and a refused
+	// guard surfaces as sql.ErrNoRows — not a driver-specific sentinel. Matching
+	// the wrong error is how this whole diagnosis branch becomes dead code.
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// The guard rejected the claim. Say which condition failed rather than
+		// returning a bare "not found", so the agent can decide whether to
+		// retry, pick different work, or stop.
+		var lookupTitle, currentStatus string
+		var currentAssignee *uuid.UUID
+		var taskProjectID uuid.UUID
+		if lookupErr := h.db.QueryRow(
+			"SELECT title, assigned_to, status, project_id FROM tasks WHERE id = $1", taskID,
+		).Scan(&lookupTitle, &currentAssignee, &currentStatus, &taskProjectID); lookupErr != nil {
+			return fmt.Sprintf(`{"error": "Task not found: %s"}`, lookupErr.Error()), true
+		}
+		switch {
+		// Checked before ownership: a task outside this connection's project is
+		// invisible to it, and reporting "already claimed" would send an agent
+		// looking for a contention problem that does not exist.
+		case ctx.ProjectID != "" && taskProjectID.String() != ctx.ProjectID:
+			return fmt.Sprintf(
+				`{"error": "Task is not in the project this connection is bound to", "task_id": %q, "bound_project_id": %q, "task_project_id": %q}`,
+				taskID, ctx.ProjectID, taskProjectID.String()), true
+		case models.IsTerminalTaskStatus(currentStatus):
+			return fmt.Sprintf(
+				`{"error": "Task is already %s and cannot be claimed", "task_id": %q, "title": %q, "status": %q}`,
+				currentStatus, taskID, lookupTitle, currentStatus), true
+		case currentAssignee != nil && currentAssignee.String() != ctx.AgentID:
+			return fmt.Sprintf(
+				`{"error": "Task is already claimed by another agent", "task_id": %q, "title": %q, "claimed_by": %q, "status": %q}`,
+				taskID, lookupTitle, currentAssignee.String(), currentStatus), true
+		default:
+			return fmt.Sprintf(
+				`{"error": "Task could not be claimed", "task_id": %q, "title": %q, "status": %q}`,
+				taskID, lookupTitle, currentStatus), true
+		}
+	case err != nil:
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
+	}
+
+	// project_id comes back from the UPDATE, so the UI reflects the claim
+	// live without a second round trip.
+	if h.hub != nil {
+		h.hub.BroadcastToProject(claimedProjectID, "task_update", map[string]interface{}{
+			"id":          claimedID,
+			"project_id":  claimedProjectID,
+			"title":       claimedTitle,
+			"status":      claimedStatus,
+			"assigned_to": ctx.AgentID,
+		})
+	}
 
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
-		"success":  true,
-		"task_id":  taskID,
-		"title":    title,
-		"agent_id": ctx.AgentID,
-		"status":   "in_progress",
-		"message":  "Task claimed and status set to in_progress",
+		"success":   true,
+		"task_id":   taskID,
+		"title":     claimedTitle,
+		"agent_id":  ctx.AgentID,
+		"status":    claimedStatus,
+		"message":   "Task claimed and status set to in_progress",
+		"broadcast": h.hub != nil,
 	}, "", "  ")
 	return string(resultJSON), false
 }
@@ -2852,26 +3050,41 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 		return `{"error": "task_id is required"}`, true
 	}
 
-	// Verify task is assigned to this agent
-	var assignedTo interface{}
+	// Complete atomically, with the same ownership guard, project scope and
+	// refusal semantics as the claim — the statement is the package-level
+	// completeTaskSQL, deliberately identical in shape to claimTaskSQL so the
+	// invariant "one agent owns a task" is enforced the same way on the way in
+	// and on the way out.
 	var title string
-	err := h.db.QueryRow("SELECT title, assigned_to FROM tasks WHERE id = $1", taskID).Scan(&title, &assignedTo)
+	scopeArg, err := nullableProjectID(ctx.ProjectID)
 	if err != nil {
-		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
+		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
+	err = h.db.QueryRow(completeTaskSQL, ctx.AgentID, taskID, scopeArg).Scan(&title)
 
-	// Allow completion only if assigned to this agent (or unassigned)
-	if assignedTo != nil && assignedTo != ctx.AgentID {
-		assignedStr, _ := assignedTo.(string)
-		if assignedStr != "" && assignedStr != ctx.AgentID {
-			return fmt.Sprintf(`{"error": "Task is assigned to a different agent: %s"}`, assignedStr), true
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// Diagnose rather than returning a bare not-found, exactly as the claim
+		// path does: the agent needs to know whether the task moved, finished,
+		// or never existed.
+		var lookupTitle, currentStatus string
+		var currentAssignee *uuid.UUID
+		if lookupErr := h.db.QueryRow(
+			"SELECT title, assigned_to, status FROM tasks WHERE id = $1", taskID,
+		).Scan(&lookupTitle, &currentAssignee, &currentStatus); lookupErr != nil {
+			return fmt.Sprintf(`{"error": "Task not found: %s"}`, lookupErr.Error()), true
 		}
-	}
-
-	// Update task status to done
-	query := "UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = $1"
-	_, err = h.db.Exec(query, taskID)
-	if err != nil {
+		switch {
+		case currentAssignee != nil && currentAssignee.String() != ctx.AgentID:
+			return fmt.Sprintf(
+				`{"error": "Task is assigned to a different agent", "task_id": %q, "title": %q, "assigned_to": %q, "status": %q}`,
+				taskID, lookupTitle, currentAssignee.String(), currentStatus), true
+		default:
+			return fmt.Sprintf(
+				`{"error": "Task is already %s and cannot be completed", "task_id": %q, "title": %q, "status": %q}`,
+				currentStatus, taskID, lookupTitle, currentStatus), true
+		}
+	case err != nil:
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
 
@@ -2880,7 +3093,7 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 		"task_id":  taskID,
 		"title":    title,
 		"agent_id": ctx.AgentID,
-		"status":   "done",
+		"status":   string(models.StatusTaskDone),
 		"message":  "Task marked as completed",
 	}, "", "  ")
 	return string(resultJSON), false

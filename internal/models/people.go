@@ -92,6 +92,12 @@ const (
 // message names the offending field so the UI can show it.
 var ErrInvalidPerson = errors.New("invalid person")
 
+// ErrPersonNotFound is returned when a lookup by id matches no row. It exists
+// so a caller can distinguish "no such principal" from "the directory is
+// unreachable" with errors.Is, instead of matching on the message text — the
+// key mint path turns it into a 404 naming the offending field.
+var ErrPersonNotFound = errors.New("person not found")
+
 // Validate normalises and checks a create request.
 //
 // It mutates the receiver so the caller cannot accidentally persist the

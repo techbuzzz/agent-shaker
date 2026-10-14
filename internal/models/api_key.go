@@ -59,6 +59,41 @@ func ParseScope(s string) (Scope, error) {
 	}
 }
 
+// ScopesFromStrings converts a scanned Postgres text array into typed scopes.
+//
+// Needed because pq.Array cannot scan into []Scope: it builds a scanner for
+// []string and for types implementing sql.Scanner, and Scope is a bare string
+// type implementing neither. Scanning directly fails at runtime with
+// "pq: scanning to models.Scope is not implemented" — on the auth hot path,
+// which is why an issued key could never actually authenticate.
+//
+// An unknown value is an error rather than a silent skip. Dropping it would
+// quietly widen a key's authority, and a key row is exactly the place where a
+// surprising value must be loud.
+func ScopesFromStrings(in []string) ([]Scope, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]Scope, 0, len(in))
+	for _, raw := range in {
+		s, err := ParseScope(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// ScopeStrings renders scopes for a Postgres array parameter.
+func ScopeStrings(in []Scope) []string {
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = string(s)
+	}
+	return out
+}
+
 // NormalizeScopes validates, de-duplicates and orders a requested scope set.
 // Ordering matters: it makes the stored array deterministic, so re-issuing a
 // key with the same scopes produces the same row and a diff of two keys is

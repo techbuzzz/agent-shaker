@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/techbuzzz/agent-shaker/internal/a2a/models"
+	"github.com/techbuzzz/agent-shaker/internal/mcp"
 )
 
 // AgentCardHandler handles requests for the A2A agent card
@@ -91,8 +92,12 @@ func (h *AgentCardHandler) generateAgentCard(baseURL string) models.AgentCard {
 		},
 
 		Capabilities: models.Capabilities{
-			A2AVersion:                "1.0",
-			MCPVersion:                "0.6",
+			A2AVersion: "1.0",
+			// Read from the MCP package rather than hardcoded. This used to be
+			// "0.6", which is not a revision of the Model Context Protocol — a
+			// peer reading the card had no way to tell which revision it would
+			// actually be served, and the two values could drift apart silently.
+			MCPVersion:                mcp.DefaultProtocolVersion(),
 			SupportedMessageParts:     []string{"text", "file", "data"},
 			SupportsPushNotifications: true,
 		},

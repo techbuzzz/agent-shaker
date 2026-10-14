@@ -40,6 +40,7 @@ type AgentStats struct {
 	Total   int `json:"total"`
 	Active  int `json:"active"`
 	Idle    int `json:"idle"`
+	Blocked int `json:"blocked"`
 	Offline int `json:"offline"`
 }
 
@@ -50,6 +51,7 @@ type TaskStats struct {
 	InProgress int `json:"in_progress"`
 	Done       int `json:"done"`
 	Blocked    int `json:"blocked"`
+	Cancelled  int `json:"cancelled"`
 }
 
 // ContextStats represents context statistics.
@@ -73,8 +75,8 @@ func (h *DashboardHandler) GetDashboardStats(w http.ResponseWriter, r *http.Requ
 	}
 	httpx.WriteJSON(w, http.StatusOK, DashboardStats{
 		Projects: ProjectStats{Total: internal.Projects.Total, Active: internal.Projects.Active, Archived: internal.Projects.Archived},
-		Agents:   AgentStats{Total: internal.Agents.Total, Active: internal.Agents.Active, Idle: internal.Agents.Idle, Offline: internal.Agents.Offline},
-		Tasks:    TaskStats{Total: internal.Tasks.Total, Pending: internal.Tasks.Pending, InProgress: internal.Tasks.InProgress, Done: internal.Tasks.Done, Blocked: internal.Tasks.Blocked},
+		Agents:   AgentStats{Total: internal.Agents.Total, Active: internal.Agents.Active, Idle: internal.Agents.Idle, Blocked: internal.Agents.Blocked, Offline: internal.Agents.Offline},
+		Tasks:    TaskStats{Total: internal.Tasks.Total, Pending: internal.Tasks.Pending, InProgress: internal.Tasks.InProgress, Done: internal.Tasks.Done, Blocked: internal.Tasks.Blocked, Cancelled: internal.Tasks.Cancelled},
 		Contexts: ContextStats{Total: internal.Contexts.Total},
 	})
 }

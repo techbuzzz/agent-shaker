@@ -25,6 +25,7 @@ type AgentBucket struct {
 	Total   int
 	Active  int
 	Idle    int
+	Blocked int
 	Offline int
 }
 
@@ -34,6 +35,7 @@ type TaskBucket struct {
 	InProgress int
 	Done       int
 	Blocked    int
+	Cancelled  int
 }
 
 type ContextBucket struct {
@@ -99,9 +101,10 @@ func (s *DashboardStore) agentStats(ctx context.Context) (AgentBucket, error) {
 			COUNT(*) AS total,
 			COUNT(*) FILTER (WHERE status = 'active')  AS active,
 			COUNT(*) FILTER (WHERE status = 'idle')    AS idle,
+			COUNT(*) FILTER (WHERE status = 'blocked') AS blocked,
 			COUNT(*) FILTER (WHERE status = 'offline') AS offline
 		FROM agents
-	`).Scan(&b.Total, &b.Active, &b.Idle, &b.Offline)
+	`).Scan(&b.Total, &b.Active, &b.Idle, &b.Blocked, &b.Offline)
 	if err != nil {
 		return AgentBucket{}, err
 	}
@@ -110,15 +113,19 @@ func (s *DashboardStore) agentStats(ctx context.Context) (AgentBucket, error) {
 
 func (s *DashboardStore) taskStats(ctx context.Context) (TaskBucket, error) {
 	var b TaskBucket
+	// Every status in the vocabulary gets its own bucket, so the buckets sum to
+	// the total. A cancelled task is still a task: hiding it made the breakdown
+	// fail to add up, which reads as a bug to anyone checking the arithmetic.
 	err := s.q.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) AS total,
 			COUNT(*) FILTER (WHERE status = 'pending')     AS pending,
 			COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
 			COUNT(*) FILTER (WHERE status = 'done')        AS done,
-			COUNT(*) FILTER (WHERE status = 'blocked')     AS blocked
+			COUNT(*) FILTER (WHERE status = 'blocked')     AS blocked,
+			COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled
 		FROM tasks
-	`).Scan(&b.Total, &b.Pending, &b.InProgress, &b.Done, &b.Blocked)
+	`).Scan(&b.Total, &b.Pending, &b.InProgress, &b.Done, &b.Blocked, &b.Cancelled)
 	if err != nil {
 		return TaskBucket{}, err
 	}

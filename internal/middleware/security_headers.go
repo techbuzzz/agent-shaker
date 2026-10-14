@@ -80,8 +80,48 @@ func requestIsHTTPS(r *http.Request) bool {
 }
 
 // DefaultSPA_CSP returns a Content Security Policy suitable for serving the
-// bundled Nuxt SPA. Adjust via your build pipeline (hash-based script-src
-// instead of 'self' if the SPA inlines scripts).
+// bundled Nuxt frontend.
+//
+// Verified against the rendered HTML rather than assumed. `npm run build`
+// followed by a fetch of the SSR output shows four inline <script> tags, two
+// of which execute: the Nuxt runtime config (window.__NUXT__.config) and the
+// colour-mode bootstrap. A `script-src 'self'` policy therefore does not harden
+// this page, it breaks it — the app renders unstyled with no runtime config.
+// That is why script-src carries 'unsafe-inline'.
+//
+// The directives that actually stop an injected payload from doing damage are
+// the ones that do not need it: object-src and frame-ancestors deny plugin and
+// framing vectors outright, base-ancestors-free base-uri stops a hijacked base
+// tag, and form-action stops credential exfiltration through an injected form.
+//
+// Replacing 'unsafe-inline' with per-request nonces is the real fix, and it
+// needs the SSR entry to propagate a nonce into both inline scripts. That is a
+// frontend change with a build-pipeline contract, so it is tracked separately
+// rather than half-done here.
 func DefaultSPA_CSP() string {
-	return "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss:"
+	return strings.Join([]string{
+		"default-src 'self'",
+		"script-src 'self' 'unsafe-inline'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data:",
+		"font-src 'self' data:",
+		"connect-src 'self' ws: wss:",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"frame-ancestors 'none'",
+		"form-action 'self'",
+	}, "; ")
+}
+
+// ContentSecurityPolicy sets the given policy on a response and returns the
+// writer so it can wrap a handler in one line.
+func ContentSecurityPolicy(policy string) Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if policy != "" {
+				w.Header().Set("Content-Security-Policy", policy)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
