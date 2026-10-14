@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import type { Agent } from '~/types/api'
+import type { Agent, AgentStatus } from '~/types/api'
+import { AGENT_STATUSES, AGENT_STATUS_LABELS, statusItems } from '~/types/api'
 
 useHead({ title: 'Agents · Agent Shaker' })
 
 const api = useApi()
 const toast = useToastBus()
 const search = ref('')
-const statusFilter = ref<'all' | Agent['status']>('all')
+const statusFilter = ref<'all' | AgentStatus>('all')
+
+// Mirrors AgentCard's map. Kept as a local copy rather than extracted to a
+// shared module because it is four entries used in two places; if a fifth
+// status is added and one map is missed, typecheck fails on the Record.
+const STATUS_COLOR: Record<AgentStatus, 'success' | 'warning' | 'error' | 'neutral'> = {
+  active: 'success',
+  idle: 'warning',
+  blocked: 'error',
+  offline: 'neutral'
+}
+const statusColor = (s: AgentStatus) => STATUS_COLOR[s] ?? 'neutral'
 
 const { data: agents, status, refresh } = await useFetch<Agent[]>('/agents', {
   baseURL: api.apiBase,
@@ -54,12 +66,7 @@ async function confirmDelete() {
         <UInput v-model="search" icon="i-lucide-search" placeholder="Search…" size="sm" class="w-full sm:w-64" />
         <USelectMenu
           v-model="statusFilter"
-          :items="[
-            { label: 'All statuses', value: 'all' },
-            { label: 'Active', value: 'active' },
-            { label: 'Idle', value: 'idle' },
-            { label: 'Offline', value: 'offline' }
-          ]"
+          :items="[{ label: 'All statuses', value: 'all' }, ...statusItems(AGENT_STATUSES, AGENT_STATUS_LABELS)]"
           value-key="value"
           size="sm"
         />
@@ -84,7 +91,7 @@ async function confirmDelete() {
             <p class="text-xs text-muted mt-1">{{ a.team || '—' }}</p>
             <NuxtLink :to="`/projects/${a.project_id}`" class="text-xs text-primary hover:underline">View project</NuxtLink>
           </div>
-          <UBadge :color="a.status === 'active' ? 'success' : a.status === 'idle' ? 'warning' : 'neutral'" variant="subtle" size="xs">
+          <UBadge :color="statusColor(a.status)" variant="subtle" size="xs">
             {{ a.status }}
           </UBadge>
         </div>
@@ -92,11 +99,7 @@ async function confirmDelete() {
         <div class="mt-3 pt-3 border-t border-default flex items-center justify-between text-xs">
           <USelectMenu
             :model-value="a.status"
-            :items="[
-              { label: 'Active', value: 'active' },
-              { label: 'Idle', value: 'idle' },
-              { label: 'Offline', value: 'offline' }
-            ]"
+            :items="statusItems(AGENT_STATUSES, AGENT_STATUS_LABELS)"
             value-key="value"
             size="xs"
             @update:model-value="(v) => updateStatus(a, v as Agent['status'])"

@@ -30,12 +30,19 @@ function cancel() { emit('cancel'); emit('update:modelValue', false) }
 </script>
 
 <template>
+  <!--
+    `open`, not `model-value`. UModal (Nuxt UI v4) takes its visibility from the
+    `open` prop and emits `update:open`; passing model-value forwarded an
+    unrecognised attribute to the dialog root and left the modal permanently
+    closed. The component's own public API stays v-model so its caller is
+    unaffected.
+  -->
   <UModal
-    :model-value="props.modelValue"
+    :open="props.modelValue"
     :title="title"
     :description="description"
     :icon="icon"
-    @update:model-value="(v: boolean) => emit('update:modelValue', v)"
+    @update:open="(v: boolean) => emit('update:modelValue', v)"
   >
     <template #footer>
       <div class="flex justify-end gap-2 w-full">

@@ -14,8 +14,8 @@ const { data: stats, status: statsStatus, error: statsError, refresh: refreshSta
     key: 'dashboard:stats',
     default: () => ({
       projects: { total: 0, active: 0, archived: 0 },
-      agents:   { total: 0, active: 0, idle: 0, offline: 0 },
-      tasks:    { total: 0, pending: 0, in_progress: 0, done: 0, blocked: 0 },
+      agents:   { total: 0, active: 0, idle: 0, blocked: 0, offline: 0 },
+      tasks:    { total: 0, pending: 0, in_progress: 0, done: 0, blocked: 0, cancelled: 0 },
       contexts: { total: 0 }
     })
   })

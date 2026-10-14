@@ -24,6 +24,10 @@
 /** Name used for the server entry in every generated file. */
 const SERVER_NAME = 'agent-shaker'
 
+// Relative, not '~/': vitest runs without a Nuxt config here, so the '~' alias
+// does not resolve and these pure builders would fail to load in unit tests.
+import { AGENT_STATUSES } from '../types/api'
+
 /** Environment variable the generated configs expect to find. */
 export const API_KEY_ENV_VAR = 'AGENT_SHAKER_API_KEY'
 
@@ -170,7 +174,9 @@ Authentication: \`Authorization: Bearer \${env:${API_KEY_ENV_VAR}}\`
 2. \`get_my_tasks\` for the work assigned to you.
 3. \`claim_task\` before starting, so other agents can see it is in progress.
 4. \`complete_task\` when the work is genuinely done.
-5. \`update_my_status\` when you are blocked or waiting on someone.
+5. \`update_my_status\` when you are blocked or waiting on someone. The accepted
+   values are exactly ${AGENT_STATUSES.map((s) => `\`${s}\``).join(', ')}; anything
+   else is refused, including \`working\`, which was never part of the vocabulary.
 6. Read shared \`list_contexts\` before making a decision, and record the
    decision with \`add_context\` so the next agent inherits it.
 

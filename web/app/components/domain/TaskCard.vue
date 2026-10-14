@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Task, TaskStatus, TaskPriority } from '~/types/api'
+import { TASK_STATUSES, TASK_STATUS_LABELS, statusItems } from '~/types/api'
 
 const props = defineProps<{
   task: Task
@@ -66,13 +67,7 @@ const priorityColor: Record<TaskPriority, 'info' | 'warning' | 'error'> = {
       <div class="flex gap-1 items-center">
         <USelectMenu
           :model-value="task.status"
-          :items="[
-            { label: 'Pending',     value: 'pending' },
-            { label: 'In progress', value: 'in_progress' },
-            { label: 'Blocked',     value: 'blocked' },
-            { label: 'Done',        value: 'done' },
-            { label: 'Cancelled',   value: 'cancelled' }
-          ]"
+          :items="statusItems(TASK_STATUSES, TASK_STATUS_LABELS)"
           value-key="value"
           size="xs"
           @update:model-value="(v) => $emit('change-status', { task, status: v as TaskStatus })"

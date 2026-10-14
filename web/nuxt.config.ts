@@ -16,7 +16,9 @@ export default defineNuxtConfig({
         { name: 'description', content: 'AI Agent Task Coordination System — Backend API & MCP Server UI.' }
       ],
       link: [
-        { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }
+        // SVG rather than a .ico: public/ ships no favicon.ico, so the previous
+        // declaration 404ed on every page load and left the tab icon blank.
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }
       ]
     }
   },
@@ -117,7 +119,47 @@ export default defineNuxtConfig({
   // HTML until the next rebuild — wrong for an app whose entire UI is
   // fetched live from the API. SSR at request time is correct here.
   routeRules: {
-    '/**': { prerender: false }
+    '/**': {
+      prerender: false,
+      // Response security headers.
+      //
+      // This is the server that renders HTML in every supported topology, so
+      // the CSP belongs here rather than on the Go API — a policy attached to
+      // the API would protect no document the browser actually renders.
+      //
+      // script-src carries 'unsafe-inline' because Nuxt inlines two executable
+      // scripts into the SSR output: the runtime config (window.__NUXT__.config)
+      // and the colour-mode bootstrap. Verified against real build output, not
+      // assumed — a strict 'self' policy breaks rendering. The directives that
+      // actually stop an injected payload (object-src, frame-ancestors,
+      // base-uri, form-action) need no such allowance and are enforced.
+      //
+      // Kept byte-identical to internal/middleware.DefaultSPA_CSP so the Go SPA
+      // fallback and this server cannot disagree.
+      headers: {
+        'Content-Security-Policy': [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline'",
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data:",
+          "font-src 'self' data:",
+          "connect-src 'self' ws: wss:",
+          "object-src 'none'",
+          "base-uri 'self'",
+          "frame-ancestors 'none'",
+          "form-action 'self'"
+        ].join('; '),
+        // These must be repeated here, not just on the Go service. The Go
+        // middleware sets them on API responses, but the document the browser
+        // actually renders is served by Nuxt — and a header that never reaches
+        // that response protects nothing. Values match
+        // internal/middleware.SecurityHeaders exactly; change both together.
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Referrer-Policy': 'no-referrer',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+      }
+    }
   },
 
   typescript: {

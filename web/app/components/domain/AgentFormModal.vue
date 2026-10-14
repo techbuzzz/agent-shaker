@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Agent, CreateAgentInput, AgentStatus } from '~/types/api'
+import { AGENT_STATUSES, AGENT_STATUS_LABELS, statusItems } from '~/types/api'
 
 const props = defineProps<{
   modelValue: boolean
@@ -75,11 +76,7 @@ async function onSubmit() {
           </UFormField>
         </div>
         <UFormField label="Initial status">
-          <USelect v-model="form.status" :items="[
-            { label: 'Active', value: 'active' },
-            { label: 'Idle', value: 'idle' },
-            { label: 'Offline', value: 'offline' }
-          ]" value-key="value" />
+          <USelect v-model="form.status" :items="statusItems(AGENT_STATUSES, AGENT_STATUS_LABELS)" value-key="value" />
         </UFormField>
       </UForm>
     </template>

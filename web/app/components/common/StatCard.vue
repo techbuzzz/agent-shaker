@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { NuxtLink } from '#components'
+
 interface Breakdown { label: string; value: number; color?: string }
 
 const props = withDefaults(defineProps<{
@@ -39,11 +41,15 @@ const bgGradient = computed(() => {
 </script>
 
 <template>
-  <component
-    :is="href ? resolveComponent('NuxtLink') : 'div'"
-    v-bind="href ? { to: href } : {}"
-    class="block rounded-xl bg-elevated border border-default hover:border-primary/30 transition-all hover:shadow-sm group"
-  >
+  <!--
+    Rendered as two explicit branches rather than a dynamic `<component :is>`.
+    `resolveComponent('NuxtLink')` was evaluated at render time and returned
+    null in this app, so every stat card silently rendered as a plain div: the
+    arrow icon showed, the card looked clickable, and clicking did nothing.
+    Naming the components directly also removes the runtime resolution, so a
+    typo becomes a compile error instead of a silent downgrade to <div>.
+  -->
+  <NuxtLink v-if="href" :to="href" class="block rounded-xl bg-elevated border border-default hover:border-primary/30 transition-all hover:shadow-sm group">
     <div class="p-5">
       <div class="flex items-start justify-between mb-3">
         <div class="flex items-center gap-3">
@@ -56,7 +62,6 @@ const bgGradient = computed(() => {
           <span class="text-sm font-medium text-muted">{{ title }}</span>
         </div>
         <UIcon
-          v-if="href"
           name="i-lucide-arrow-right"
           class="w-4 h-4 text-muted opacity-0 group-hover:opacity-100 transition-opacity"
         />
@@ -79,5 +84,38 @@ const bgGradient = computed(() => {
         </div>
       </div>
     </div>
-  </component>
+  </NuxtLink>
+
+  <div v-else class="block rounded-xl bg-elevated border border-default group">
+    <div class="p-5">
+      <div class="flex items-start justify-between mb-3">
+        <div class="flex items-center gap-3">
+          <div
+            class="w-10 h-10 rounded-lg flex items-center justify-center bg-gradient-to-br"
+            :class="bgGradient"
+          >
+            <UIcon :name="icon" class="w-5 h-5" :class="accentColor" />
+          </div>
+          <span class="text-sm font-medium text-muted">{{ title }}</span>
+        </div>
+      </div>
+
+      <div class="text-3xl font-semibold tabular-nums">{{ value }}</div>
+
+      <div v-if="breakdown.length" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        <div
+          v-for="row in breakdown"
+          :key="row.label"
+          class="inline-flex items-center gap-1.5"
+        >
+          <span
+            class="inline-block w-2 h-2 rounded-full"
+            :style="{ backgroundColor: row.color }"
+          />
+          <span class="text-muted">{{ row.label }}:</span>
+          <span class="font-medium">{{ row.value }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>

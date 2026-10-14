@@ -1,16 +1,21 @@
 <script setup lang="ts">
-import type { Agent } from '~/types/api'
+import type { Agent, AgentStatus } from '~/types/api'
 
 defineProps<{ agent: Agent }>()
 defineEmits<{ (e: 'edit', a: Agent): void; (e: 'delete', a: Agent): void }>()
 
 const { relativeTime } = useFormatters()
 
-const statusColor = computed(() => {
-  // Not used as computed inside template directly; expose via getter.
-  return (s: Agent['status']) =>
-    s === 'active' ? 'success' : s === 'idle' ? 'warning' : 'neutral'
-})
+// Explicit map rather than a ternary chain: adding a status to AGENT_STATUSES
+// must produce a deliberate colour, not a silent fall-through to 'neutral'.
+const STATUS_COLOR: Record<AgentStatus, 'success' | 'warning' | 'error' | 'neutral'> = {
+  active: 'success',
+  idle: 'warning',
+  blocked: 'error',
+  offline: 'neutral'
+}
+
+const statusColor = (s: AgentStatus) => STATUS_COLOR[s] ?? 'neutral'
 </script>
 
 <template>

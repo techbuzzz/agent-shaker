@@ -17,6 +17,10 @@ import type {
   ProjectRepo, CreateProjectRepoInput,
   GlobalContext, CreateGlobalContextInput, UpdateGlobalContextInput
 } from '~/types/api'
+import type {
+  Person, CreatePersonInput, APIKey, CreateKeyInput, IssuedAPIKey,
+  PeopleResponse, KeysResponse
+} from '~/types/admin'
 
 export class ApiConnectionError extends Error {
   constructor(message: string, public readonly url: string) {
@@ -99,6 +103,20 @@ export interface UseApi {
   createGlobalContext: (input: CreateGlobalContextInput) => Promise<GlobalContext>
   updateGlobalContext: (id: string, input: UpdateGlobalContextInput) => Promise<GlobalContext>
   deleteGlobalContext: (id: string) => Promise<void>
+  // People & keys (gated by the admin scope)
+  listPeople: () => Promise<Person[]>
+  getPerson: (id: string) => Promise<Person>
+  createPerson: (input: CreatePersonInput) => Promise<Person>
+  /**
+   * Revoked keys are hidden unless `include_revoked` is true — the handler
+   * parses that flag strictly, so a malformed value is a 400 rather than a
+   * silently-false one. The flag is stringified here because the query is
+   * serialised, and `include_revoked=false` must stay distinguishable from
+   * "not sent" only in intent, not in syntax.
+   */
+  listKeys: (filters?: { principal_id?: string; include_revoked?: boolean }) => Promise<APIKey[]>
+  createKey: (input: CreateKeyInput) => Promise<IssuedAPIKey>
+  revokeKey: (id: string) => Promise<APIKey>
 }
 
 function toParams(obj: Record<string, string | number | undefined | null>): Record<string, string> {
@@ -232,6 +250,24 @@ export function useApi(): UseApi {
     getGlobalContext:    (id)           => request<GlobalContext>(`/global_contexts/${id}`),
     createGlobalContext: (input)        => request<GlobalContext>('/global_contexts', { method: 'POST', body: input }),
     updateGlobalContext: (id, input)    => request<GlobalContext>(`/global_contexts/${id}`, { method: 'PUT', body: input }),
-    deleteGlobalContext: async (id)      => { await request<void>(`/global_contexts/${id}`, { method: 'DELETE' }) }
+    deleteGlobalContext: async (id)      => { await request<void>(`/global_contexts/${id}`, { method: 'DELETE' }) },
+
+    // People & keys
+    //
+    // These two unwrap the list envelopes the handlers return — unlike every
+    // other method above, /people and /keys answer `{"people": [...]}` and
+    // `{"keys": [...]}` rather than a bare array. Unwrapping here keeps the
+    // page components free of envelope plumbing.
+    listPeople:         ()      => request<PeopleResponse>('/people').then(r => r.people),
+    getPerson:          (id)    => request<Person>(`/people/${id}`),
+    createPerson:       (input) => request<Person>('/people', { method: 'POST', body: input }),
+    listKeys:           (filters = {}) => request<KeysResponse>('/keys', {
+      params: toParams({
+        principal_id: filters.principal_id,
+        include_revoked: filters.include_revoked === undefined ? undefined : String(filters.include_revoked)
+      })
+    }).then(r => r.keys),
+    createKey:          (input) => request<IssuedAPIKey>('/keys', { method: 'POST', body: input }),
+    revokeKey:          (id)    => request<APIKey>(`/keys/${id}`, { method: 'DELETE' })
   }
 }

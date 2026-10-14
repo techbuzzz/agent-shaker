@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Task, TaskStatus, TaskPriority } from '~/types/api'
+import { TASK_STATUSES, TASK_STATUS_LABELS, statusItems } from '~/types/api'
 
 useHead({ title: 'Tasks · Agent Shaker' })
 
@@ -59,14 +60,7 @@ async function confirmDelete() {
         <UInput v-model="search" icon="i-lucide-search" placeholder="Search…" size="sm" class="w-full sm:w-64" />
         <USelectMenu
           v-model="statusFilter"
-          :items="[
-            { label: 'All statuses', value: 'all' },
-            { label: 'Pending', value: 'pending' },
-            { label: 'In progress', value: 'in_progress' },
-            { label: 'Blocked', value: 'blocked' },
-            { label: 'Done', value: 'done' },
-            { label: 'Cancelled', value: 'cancelled' }
-          ]"
+          :items="[{ label: 'All statuses', value: 'all' }, ...statusItems(TASK_STATUSES, TASK_STATUS_LABELS)]"
           value-key="value"
           size="sm"
         />
