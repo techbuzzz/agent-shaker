@@ -106,7 +106,7 @@ async function handleDelete() {
     <ProjectFormModal
       v-model="showCreate"
       :initial="editing"
-      @submit="editing ? handleEdit($event) : handleCreate($event)"
+      :on-submit="editing ? handleEdit : handleCreate"
     />
     <ConfirmDialog
       v-model="deletingOpen"

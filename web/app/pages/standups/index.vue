@@ -4,9 +4,10 @@ import type { Standup, Agent, Project } from '~/types/api'
 useHead({ title: 'Standups · Agent Shaker' })
 
 const api = useApi()
+import { NO_SELECTION, isNone } from '~/utils/select'
 const toast = useToastBus()
-const projectFilter = ref<string>('')
-const agentFilter = ref<string>('')
+const projectFilter = ref<string>(NO_SELECTION)
+const agentFilter = ref<string>(NO_SELECTION)
 
 const { data: standups, status, refresh } = await useFetch<Standup[]>('/standups', {
   baseURL: api.apiBase,
@@ -27,13 +28,13 @@ const { data: projects } = await useFetch<Project[]>('/projects', {
   default: () => []
 })
 const projectOptions = computed(() => [
-  { label: 'All projects', value: '' },
+  { label: 'All projects', value: NO_SELECTION },
   ...(projects.value ?? []).map((p) => ({ label: p.name, value: p.id }))
 ])
 
 const filtered = computed(() => (standups.value ?? []).filter((s) => {
-  if (projectFilter.value && s.project_id !== projectFilter.value) return false
-  if (agentFilter.value && s.agent_id !== agentFilter.value) return false
+  if (!isNone(projectFilter.value) && s.project_id !== projectFilter.value) return false
+  if (!isNone(agentFilter.value) && s.agent_id !== agentFilter.value) return false
   return true
 }))
 
@@ -61,7 +62,7 @@ async function confirmDelete(s: Standup) {
         <UFormField label="Agent">
           <USelect
             v-model="agentFilter"
-            :items="[{ label: 'All agents', value: '' }, ...(agents ?? []).map(a => ({ label: a.name, value: a.id }))]"
+            :items="[{ label: 'All agents', value: NO_SELECTION }, ...(agents ?? []).map(a => ({ label: a.name, value: a.id }))]"
             value-key="value"
           />
         </UFormField>

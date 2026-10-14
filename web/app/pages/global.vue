@@ -87,7 +87,7 @@ async function confirmDelete() {
       v-model="showPublish"
       :agent-id="settings.recentAgentId ?? ''"
       initial-scope="global"
-      @submit="handlePublish"
+      :on-submit="handlePublish"
     />
 
     <ConfirmDialog

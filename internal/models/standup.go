@@ -53,13 +53,30 @@ type StandupWithAgent struct {
 	AgentTeam string `json:"agent_team" db:"agent_team"`
 }
 
-// AgentHeartbeat represents a heartbeat signal from an agent
+// AgentHeartbeat represents a heartbeat signal from an agent.
+//
+// The coordination plane (migration 015) added project_id, task_id and
+// progress_pct to the same table, so this one struct serves both features
+// rather than there being two shapes for one row.
 type AgentHeartbeat struct {
 	ID            uuid.UUID              `json:"id" db:"id"`
 	AgentID       uuid.UUID              `json:"agent_id" db:"agent_id"`
 	HeartbeatTime time.Time              `json:"heartbeat_time" db:"heartbeat_time"`
 	Status        string                 `json:"status" db:"status"`
 	Metadata      map[string]interface{} `json:"metadata" db:"metadata"`
+
+	// --- Coordination Plane (migration 015) ---
+
+	// A heartbeat without a project cannot be broadcast to anyone, which is why
+	// these are pointers rather than plain fields: rows written by the older
+	// standup path have neither, and must still read back cleanly.
+	ProjectID *uuid.UUID `json:"project_id" db:"project_id"`
+	TaskID    *uuid.UUID `json:"task_id" db:"task_id"`
+
+	// ProgressPct is a pointer because "no progress reported" and "0% progress"
+	// are different answers: the first means the agent has not started, the
+	// second means it just started.
+	ProgressPct *int `json:"progress_pct" db:"progress_pct"`
 }
 
 // CreateHeartbeatRequest represents a request to record a heartbeat

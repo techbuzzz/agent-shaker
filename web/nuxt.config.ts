@@ -38,6 +38,18 @@ export default defineNuxtConfig({
     '@vueuse/nuxt'
   ],
 
+  // @nuxt/ui v4 pulls webfonts through unifont (Google / Fontshare / …) at
+  // render time. Two costs that are not acceptable for this app:
+  //   1. every render depends on a third-party host being reachable, and a
+  //      failed font fetch aborts the SSR request — it took dev SSR down with
+  //      an "IPC connection closed" 500 on /tasks;
+  //   2. it phones home to Google/Fontshare on every cold render.
+  // The app ships its own font stack in app/assets/css/main.css, so the
+  // remote providers are switched off and rendering stays self-contained.
+  ui: {
+    fonts: false
+  },
+
   css: ['~/assets/css/main.css'],
 
   // Backend wiring.
@@ -75,8 +87,14 @@ export default defineNuxtConfig({
     }
   },
 
-  // Dev: forward /api/* and /ws/* to the Go backend on :8080 (matches the old Vite proxy).
-  // Prod: server/routes/api/[...path].ts proxies /api/*, server/routes/ws.ts handles /ws.
+  // /ws is dev-proxied straight to the Go hub. /api is deliberately NOT
+  // listed: a devProxy entry wins over a Nitro route, so proxying /api here
+  // bypassed server/routes/api/[...path].ts — the only place that injects
+  // NUXT_API_KEY. Dev therefore talked to the Go service as an anonymous
+  // caller and every write failed (POST /api/projects → 401/404), while reads
+  // appeared to work only because SSR ran server-side. Letting /api fall
+  // through to the Nitro route makes dev and production the same code path,
+  // which is the point of having one proxy in the first place.
   nitro: {
     // `pinia` must be INLINED, not left external.
     //
@@ -99,10 +117,6 @@ export default defineNuxtConfig({
       websocket: true
     },
     devProxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true
-      },
       '/ws': {
         target: 'ws://localhost:8080',
         ws: true,

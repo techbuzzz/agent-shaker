@@ -2,7 +2,10 @@
 import { statusItems } from '~/types/api'
 import { KEY_SCOPES, KEY_SCOPE_LABELS } from '~/types/admin'
 import type { CreateKeyInput, KeyScope, Person } from '~/types/admin'
+import { NO_SELECTION, optionalId } from '~/utils/select'
 import type { Project } from '~/types/api'
+import type { FormValidator } from '~/utils/formValidation'
+import { compose, requiredChoice } from '~/utils/formValidation'
 
 const props = defineProps<{
   modelValue: boolean
@@ -10,12 +13,14 @@ const props = defineProps<{
   projects: Project[]
   /** Pre-selected principal, e.g. when minting from a person's "Keys" button. */
   principalId?: string
+  /**
+   * Runs the write. A prop rather than a `submit` event so the dialog can wait
+   * for the answer — see the note in useFormModal.
+   */
+  onSubmit: (payload: CreateKeyInput) => Promise<unknown>
 }>()
 
-const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
-  (e: 'submit', payload: CreateKeyInput): Promise<void> | void
-}>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
 const open = computed({
   get: () => props.modelValue,
@@ -29,17 +34,48 @@ const principalItems = computed(() =>
 )
 
 const projectItems = computed(() => [
-  { label: 'All projects', value: '' },
+  { label: 'All projects', value: NO_SELECTION },
   ...props.projects.map(p => ({ label: p.name, value: p.id }))
 ])
 
-const form = reactive<{ principal_id: string; project_id: string; scopes: KeyScope[] }>({
+type KeyForm = { principal_id: string; project_id: string; scopes: KeyScope[] }
+
+const form = reactive<KeyForm>({
   principal_id: '',
-  project_id: '',
+  project_id: NO_SELECTION,
   scopes: ['read']
 })
 
-const submitting = ref(false)
+/**
+ * A key with no scopes would authenticate nothing, so it is a mistake rather
+ * than a minimal request. This used to be a silently disabled button, which
+ * left the person looking at a form that refused to respond with no reason.
+ */
+const atLeastOneScope: FormValidator<KeyForm> = values =>
+  values.scopes.length === 0 ? { scopes: 'Pick at least one scope' } : {}
+
+const validate = compose<KeyForm>(
+  requiredChoice('principal_id', 'the principal this key authenticates as'),
+  atLeastOneScope
+)
+
+const { errors, submitting, submitError, submit } = useFormModal({
+  form,
+  validate,
+  // "All projects" is the sentinel, not an empty id; the API distinguishes an
+  // omitted project_id (server-wide key) from a project-bound one.
+  onSubmit: (payload) => {
+    const input: CreateKeyInput = {
+      principal_id: payload.principal_id,
+      scopes: [...payload.scopes]
+    }
+    const projectId = optionalId(payload.project_id)
+    if (projectId) input.project_id = projectId
+    return props.onSubmit(input)
+  },
+  close: () => { open.value = false },
+  failureMessage: 'Could not issue the key'
+})
 
 watch(open, (v) => {
   if (!v) return
@@ -47,70 +83,71 @@ watch(open, (v) => {
   form.project_id = ''
   form.scopes = ['read']
 })
-
-async function onSubmit() {
-  if (!form.principal_id || form.scopes.length === 0) return
-  submitting.value = true
-  try {
-    const payload: CreateKeyInput = {
-      principal_id: form.principal_id,
-      scopes: [...form.scopes]
-    }
-    if (form.project_id) payload.project_id = form.project_id
-    await emit('submit', payload)
-    open.value = false
-  } finally {
-    submitting.value = false
-  }
-}
 </script>
 
 <template>
-  <UModal v-model:open="open" title="Issue API key" icon="i-lucide-key-round">
-    <template #body>
-      <UForm :state="form" class="space-y-4" @submit.prevent="onSubmit">
-        <UFormField
-          label="Principal"
-          required
-          :help="people.length ? 'Who this key authenticates as.' : 'The directory is empty — add a principal first.'"
-        >
-          <USelect
-            v-model="form.principal_id"
-            :items="principalItems"
-            value-key="value"
-            :disabled="people.length === 0"
-            placeholder="Select a principal"
-          />
-        </UFormField>
+  <FormModal
+    v-model:open="open"
+    title="Issue API key"
+    description="A key acts as its principal on every call it makes."
+    icon="i-lucide-key-round"
+    submit-label="Issue key"
+    :submitting="submitting"
+    :error="submitError"
+    @submit="submit"
+  >
+    <FormField
+      label="Principal"
+      name="principal_id"
+      required
+      autofocus
+      :hint="people.length
+        ? 'Who this key authenticates as.'
+        : 'The directory is empty — add a principal first.'"
+      :error="errors.principal_id"
+    >
+      <USelect
+        v-model="form.principal_id"
+        name="principal_id"
+        class="w-full"
+        :items="principalItems"
+        value-key="value"
+        :disabled="people.length === 0"
+        placeholder="Select a principal"
+      />
+    </FormField>
 
-        <UFormField label="Scopes" required help="At least one. `admin` grants access to this very page.">
-          <USelectMenu
-            v-model="form.scopes"
-            :items="scopeItems"
-            value-key="value"
-            multiple
-            placeholder="Select scopes"
-            class="w-full"
-          />
-        </UFormField>
+    <FormField
+      label="Scopes"
+      name="scopes"
+      required
+      hint="At least one. `admin` grants access to this very page."
+      :error="errors.scopes"
+    >
+      <USelectMenu
+        v-model="form.scopes"
+        name="scopes"
+        :items="scopeItems"
+        value-key="value"
+        multiple
+        placeholder="Select scopes"
+        class="w-full"
+      />
+    </FormField>
 
-        <UFormField label="Project scope" help="Optional. Limits the key to one project.">
-          <USelect v-model="form.project_id" :items="projectItems" value-key="value" />
-        </UFormField>
-      </UForm>
-    </template>
-    <template #footer>
-      <div class="flex justify-end gap-2 w-full">
-        <UButton variant="ghost" color="neutral" @click="open = false">Cancel</UButton>
-        <UButton
-          color="primary"
-          :loading="submitting"
-          :disabled="!form.principal_id || form.scopes.length === 0"
-          @click="onSubmit"
-        >
-          Issue key
-        </UButton>
-      </div>
-    </template>
-  </UModal>
+    <FormField
+      label="Project scope"
+      name="project_id"
+      hint="Optional. Limits the key to one project."
+      :error="errors.project_id"
+    >
+      <USelect
+        v-model="form.project_id"
+        name="project_id"
+        class="w-full"
+        :items="projectItems"
+        value-key="value"
+      />
+    </FormField>
+  </FormModal>
 </template>

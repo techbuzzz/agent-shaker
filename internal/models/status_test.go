@@ -108,7 +108,12 @@ func TestCoordinationVocabularyExcludesA2AValues(t *testing.T) {
 // cannot recover without guessing.
 func TestJoinValuesFeedsErrorMessages(t *testing.T) {
 	got := JoinValues(AllTaskStatuses)
-	want := "pending, in_progress, blocked, done, cancelled"
+	// "ready" joined the vocabulary with the Coordination Plane
+	// (migrations/015_coordination_plane.up.sql, which widens
+	// tasks_status_check). Keep this string in step with that CHECK — if the two
+	// drift, the failure this test exists to prevent is exactly what happens: an
+	// agent is told about a status the database then rejects.
+	want := "pending, blocked, ready, in_progress, done, cancelled"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

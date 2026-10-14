@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useMcpSetup, buildSetupFiles, API_KEY_ENV_VAR, type SetupFile } from '~/composables/useMcpSetup'
+import { NO_SELECTION, optionalId } from '~/utils/select'
 
 const props = defineProps<{
   modelValue: boolean
@@ -19,9 +20,9 @@ const open = computed({
 
 const { downloadFile, downloadAll } = useMcpSetup()
 
-const selectedAgentId = ref('')
+const selectedAgentId = ref<string>(NO_SELECTION)
 watch(() => props.modelValue, (v) => {
-  if (v) selectedAgentId.value = props.defaultAgentId ?? ''
+  if (v) selectedAgentId.value = props.defaultAgentId ?? NO_SELECTION
 })
 
 /**
@@ -34,12 +35,14 @@ watch(() => props.modelValue, (v) => {
  */
 const origin = import.meta.client ? window.location.origin : ''
 
+const agentId = computed(() => optionalId(selectedAgentId.value))
+
 const input = computed(() => ({
   origin,
   projectId: props.projectId,
   projectName: props.projectName,
-  agentId: selectedAgentId.value || undefined,
-  agentName: props.agents?.find((a) => a.id === selectedAgentId.value)?.name
+  agentId: agentId.value,
+  agentName: props.agents?.find((a) => a.id === agentId.value)?.name
 }))
 
 /**
@@ -100,7 +103,7 @@ function copyEndpoint() {
         >
           <USelect
             v-model="selectedAgentId"
-            :items="[{ label: '— not bound —', value: '' }, ...(agents ?? []).map((a) => ({ label: a.name, value: a.id }))]"
+            :items="[{ label: '— not bound —', value: NO_SELECTION }, ...(agents ?? []).map((a) => ({ label: a.name, value: a.id }))]"
             value-key="value"
           />
         </UFormField>

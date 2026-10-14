@@ -14,13 +14,14 @@ import type { Project } from '~/types/api'
 useHead({ title: 'Access · Agent Shaker' })
 
 const api = useApi()
+import { NO_SELECTION, isNone } from '~/utils/select'
 const toast = useToastBus()
 const projectsStore = useProjectsStore()
 
 const peopleError = ref<string | null>(null)
 const keysError = ref<string | null>(null)
 const includeRevoked = ref(false)
-const principalFilter = ref<string>('')
+const principalFilter = ref<string>(NO_SELECTION)
 
 const { data: people, status: peopleStatus, refresh: refreshPeople } = await useAsyncData(
   'access:people',
@@ -53,12 +54,12 @@ const projects = computed<Project[]>(() => projectsStore.recent)
 const projectNames = computed(() => Object.fromEntries(projects.value.map(p => [p.id, p.name])))
 
 const filteredKeys = computed(() => {
-  if (!principalFilter.value) return keys.value ?? []
+  if (isNone(principalFilter.value)) return keys.value ?? []
   return (keys.value ?? []).filter(k => k.principal_id === principalFilter.value)
 })
 
 const principalOptions = computed(() => [
-  { label: 'All principals', value: '' },
+  { label: 'All principals', value: NO_SELECTION },
   ...(people.value ?? []).map(p => ({ label: p.display_name, value: p.id }))
 ])
 
@@ -91,6 +92,11 @@ function onSecretDismissed() {
 /**
  * Unwraps the backend error envelope `{"error":{"code","message","request_id"}}`
  * (internal/httpx/errors.go), falling back to the transport message.
+ *
+ * Only used for the write paths that have no dialog of their own — revoke and
+ * the other inline actions. A failed create/edit is reported by the form modal
+ * itself, which keeps the message on screen while the input that caused it is
+ * still there.
  */
 function errMessage(err: unknown, fallback: string): string {
   const fe = err as { data?: { error?: { message?: string } }; message?: string }
@@ -98,14 +104,9 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 async function handleCreatePerson(input: CreatePersonInput) {
-  try {
-    await api.createPerson(input)
-    await refreshPeople()
-    toast.success(`${input.display_name} added to the directory`)
-  } catch (err: unknown) {
-    toast.error(errMessage(err, 'Could not add principal'))
-    throw err
-  }
+  await api.createPerson(input)
+  await refreshPeople()
+  toast.success(`${input.display_name} added to the directory`)
 }
 
 function openMint(principalId = '') {
@@ -114,13 +115,7 @@ function openMint(principalId = '') {
 }
 
 async function handleCreateKey(input: CreateKeyInput) {
-  let result: IssuedAPIKey
-  try {
-    result = await api.createKey(input)
-  } catch (err: unknown) {
-    toast.error(errMessage(err, 'Could not issue key'))
-    throw err
-  }
+  const result = await api.createKey(input)
   await refreshKeys()
   issued.value = result
   issuedOpen.value = true
@@ -254,14 +249,14 @@ async function confirmRevoke() {
       </div>
     </section>
 
-    <PersonFormModal v-model="showPersonForm" @submit="handleCreatePerson" />
+    <PersonFormModal v-model="showPersonForm" :on-submit="handleCreatePerson" />
 
     <KeyFormModal
       v-model="showKeyForm"
       :people="people ?? []"
       :projects="projects"
       :principal-id="mintFor"
-      @submit="handleCreateKey"
+      :on-submit="handleCreateKey"
     />
 
     <IssuedKeyModal v-model="issuedOpen" :issued="issued" @dismissed="onSecretDismissed" />

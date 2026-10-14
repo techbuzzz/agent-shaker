@@ -27,6 +27,20 @@ type Task struct {
 	Tags        pq.StringArray `json:"tags" db:"tags"`
 	CreatedAt   time.Time      `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at" db:"updated_at"`
+
+	// --- Coordination Plane (migration 015) ---
+
+	// PredecessorTaskID is the task this one was handed off from, if any. It is
+	// recorded even when there is no dependency edge, because "this task exists
+	// because that one finished" is a fact about the history of the work that
+	// survives a dependency being added after the fact.
+	PredecessorTaskID *uuid.UUID `json:"predecessor_task_id" db:"predecessor_task_id"`
+
+	// HandoffContext is what the predecessor left behind for whoever picks this
+	// up: the API shape, the branch, the gotcha. A successor task without it
+	// forces the next agent to rediscover what the previous one already learned,
+	// which is the whole cost the handoff exists to avoid.
+	HandoffContext string `json:"handoff_context" db:"handoff_context"`
 }
 
 type CreateTaskRequest struct {
@@ -47,4 +61,25 @@ type UpdateTaskRequest struct {
 
 type ReassignTaskRequest struct {
 	AssignedTo uuid.UUID `json:"assigned_to"`
+}
+
+// CompleteTaskWithHandoffRequest closes a task and opens its successor in one
+// call.
+//
+// The two halves belong together on purpose. Creating the successor as a
+// separate call would leave a window where the work is finished but nothing
+// knows about the next step, and an agent that crashes in that window leaves a
+// completed task and no follow-up.
+type CompleteTaskWithHandoffRequest struct {
+	TaskID uuid.UUID `json:"task_id"`
+	Output string    `json:"output"`
+
+	SuccessorTitle       string     `json:"successor_title"`
+	SuccessorDescription string     `json:"successor_description"`
+	SuccessorAssignedTo  *uuid.UUID `json:"successor_assigned_to,omitempty"`
+	SuccessorPriority    string     `json:"successor_priority,omitempty"`
+	SuccessorMilestoneID *uuid.UUID `json:"successor_milestone_id,omitempty"`
+
+	// HandoffContext is the part that is not re-derivable from the work itself.
+	HandoffContext string `json:"handoff_context"`
 }

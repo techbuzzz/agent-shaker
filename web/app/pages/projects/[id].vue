@@ -202,6 +202,38 @@ async function handleCreateProjectGctx(input: CreateGlobalContextInput) {
   await api.createGlobalContext(input); await refreshGctx(); toast.success('Doc published')
 }
 
+/**
+ * Agent form submit. Editing an agent only ever changes its status — the
+ * backend exposes PUT /agents/{id}/status and nothing else — so the edit path
+ * ignores name/role/team instead of silently promising more than it can save.
+ */
+async function handleSubmitAgent(input: CreateAgentInput) {
+  if (editingAgent.value) {
+    await api.updateAgentStatus(editingAgent.value.id, input.status || 'active')
+    await refreshAgents()
+    toast.success('Agent status updated')
+    return
+  }
+  await handleCreateAgent(input)
+}
+
+async function handleSubmitContext(input: CreateContextInput) {
+  if (editingContext.value) {
+    await api.updateContext(editingContext.value.id, input)
+    await refreshContexts()
+    toast.success('Context updated')
+    return
+  }
+  await handleCreateContext(input)
+}
+
+/** Task form submit: same dialog creates and edits, chosen by what is loaded. */
+function handleSubmitTask(input: CreateTaskInput) {
+  return editingTask.value
+    ? handleUpdateTask(editingTask.value.id, input)
+    : handleCreateTask(input)
+}
+
 async function deleteAgent() {
   if (!deletingAgent.value) return
   await api.deleteAgent(deletingAgent.value.id); await refreshAgents()
@@ -454,24 +486,24 @@ const currentAgentIsPM = computed(() => {
     </UTabs>
 
     <!-- Modals -->
-    <AgentFormModal v-model="showAgent" :project-id="projectId" :initial="editingAgent" @submit="editingAgent ? api.updateAgentStatus(editingAgent.id, $event.status || 'active') : handleCreateAgent($event)" />
-    <TaskFormModal v-model="showTask" :project-id="projectId" :agents="agentsForSelect" :milestones="milestones ?? []" :initial="editingTask" @submit="editingTask ? handleUpdateTask(editingTask.id, $event) : handleCreateTask($event)" />
-    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" @submit="editingContext ? api.updateContext(editingContext.id, $event).then(() => refreshContexts()) : handleCreateContext($event)" />
-    <StandupFormModal v-model="showStandup" :project-id="projectId" :agents="agentsForSelect" @submit="handleCreateStandup" />
+    <AgentFormModal v-model="showAgent" :project-id="projectId" :initial="editingAgent" :on-submit="handleSubmitAgent" />
+    <TaskFormModal v-model="showTask" :project-id="projectId" :agents="agentsForSelect" :milestones="milestones ?? []" :initial="editingTask" :on-submit="handleSubmitTask" />
+    <ContextFormModal v-model="showContext" :project-id="projectId" :agents="agentsForSelect" :initial="editingContext" :on-submit="handleSubmitContext" />
+    <StandupFormModal v-model="showStandup" :project-id="projectId" :agents="agentsForSelect" :on-submit="handleCreateStandup" />
 
     <MilestoneFormModal
       v-model="showMilestone"
       :project-id="projectId"
       :created-by="settings.recentAgentId ?? ''"
       :initial="editingMilestone"
-      @submit="handleCreateMilestone"
+      :on-submit="handleCreateMilestone"
     />
 
     <ProjectRepoFormModal
       v-model="showRepo"
       :project-id="projectId"
       :agents="agentsForSelect"
-      @submit="handleCreateRepo"
+      :on-submit="handleCreateRepo"
     />
 
     <GlobalContextFormModal

@@ -24,14 +24,25 @@ const (
 	StatusTaskBlocked    TaskStatus = "blocked"
 	StatusTaskDone       TaskStatus = "done"
 	StatusTaskCancelled  TaskStatus = "cancelled"
+
+	// StatusTaskReady is a task whose dependencies are all satisfied and which
+	// nobody has claimed yet.
+	//
+	// Added by the Coordination Plane (migration 015). It is deliberately not
+	// folded into "pending": "pending" means nobody has picked this up, "ready"
+	// means it is claimable. The reaper returns work to pending and the
+	// dependency resolver promotes work to ready, and those two facts are what
+	// the dashboard reports on.
+	StatusTaskReady TaskStatus = "ready"
 )
 
 // AllTaskStatuses is the authoritative task vocabulary, in display order.
 // Used to build MCP tool enums and error messages so they cannot drift.
 var AllTaskStatuses = []TaskStatus{
 	StatusTaskPending,
-	StatusTaskInProgress,
 	StatusTaskBlocked,
+	StatusTaskReady,
+	StatusTaskInProgress,
 	StatusTaskDone,
 	StatusTaskCancelled,
 }

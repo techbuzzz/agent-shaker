@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +41,55 @@ type Agent struct {
 	Status    string    `json:"status" db:"status"`
 	LastSeen  time.Time `json:"last_seen" db:"last_seen"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
+
+	// --- Coordination Plane (migration 015) ---
+
+	// LeaseExpiresAt is the deadline the server returned with the last
+	// heartbeat. It is the only thing the reaper reads, and it is what makes
+	// liveness a lease rather than a timeout heuristic: the deadline is set by
+	// the server that answered the ping, so clock skew between an agent and the
+	// server cannot expire a live lease.
+	//
+	// NULL means the agent never heartbeated. Agents created through the UI have
+	// no runtime of their own to send one, so the reaper must not evict them.
+	LeaseExpiresAt *time.Time `json:"lease_expires_at" db:"lease_expires_at"`
+
+	// CurrentTaskID is what the agent last reported working on. Denormalised
+	// from the heartbeat so "who is on what" is one probe rather than a scan of
+	// the heartbeat history.
+	CurrentTaskID *uuid.UUID `json:"current_task_id" db:"current_task_id"`
+
+	// HeartbeatPayload is the agent's own last report — progress, ETA, and
+	// whatever else it chose to send. Stored as JSONB because its shape is the
+	// agent's business, not ours; the server reads two known keys and ignores
+	// the rest.
+	HeartbeatPayload []byte `json:"heartbeat_payload" db:"heartbeat_payload"`
+}
+
+// SendHeartbeatRequest is what an agent reports about itself.
+//
+// It is the coordination-plane request. The older standup-feature request
+// (CreateHeartbeatRequest in standup.go) recorded that an agent was alive and
+// nothing more; this one also says what it is working on, so the two cannot be
+// served by the same call without losing the difference between "ping" and
+// "report".
+type SendHeartbeatRequest struct {
+	Status      string          `json:"status"`
+	TaskID      *uuid.UUID      `json:"task_id,omitempty"`
+	ProgressPct *int            `json:"progress_pct,omitempty"`
+	ETA         *time.Time      `json:"eta,omitempty"`
+	Metadata    json.RawMessage `json:"metadata,omitempty"`
+}
+
+// HeartbeatResponse is the lease the agent has to renew.
+//
+// Returning the deadline explicitly — rather than letting the agent compute it
+// from its own TTL constant — keeps a client that hardcodes the TTL working
+// after the server's configuration changes, and tells a drifting agent exactly
+// how far behind it already is.
+type HeartbeatResponse struct {
+	LeaseTTLSeconds     int       `json:"lease_ttl_seconds"`
+	NextHeartbeatBefore time.Time `json:"next_heartbeat_before"`
 }
 
 type CreateAgentRequest struct {

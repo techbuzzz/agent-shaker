@@ -12,8 +12,11 @@ html {
   scroll-behavior: smooth;
 }
 
+/* No @font-face: unifont/webfonts are disabled in nuxt.config (see the note
+   there). 'Inter' resolves only when the user happens to have it installed;
+   the rest of the stack is what actually carries the UI. */
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   line-height: 1.6;
   font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }

@@ -1,22 +1,27 @@
 <script setup lang="ts">
 import type { Agent, CreateAgentInput, AgentStatus } from '~/types/api'
 import { AGENT_STATUSES, AGENT_STATUS_LABELS, statusItems } from '~/types/api'
+import { compose, maxLength, required } from '~/utils/formValidation'
 
 const props = defineProps<{
   modelValue: boolean
   projectId: string
   initial?: Agent | null
+  /**
+   * Runs the write. A prop rather than a `submit` event so the dialog can wait
+   * for the answer — see the note in useFormModal.
+   */
+  onSubmit: (payload: CreateAgentInput) => Promise<unknown>
 }>()
 
-const emit = defineEmits<{
-  (e: 'update:modelValue', v: boolean): void
-  (e: 'submit', payload: CreateAgentInput): Promise<void> | void
-}>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
 const open = computed({
   get: () => props.modelValue,
-  set: (v) => emit('update:modelValue', v)
+  set: (v: boolean) => emit('update:modelValue', v)
 })
+
+const isEdit = computed(() => !!props.initial)
 
 const form = reactive<CreateAgentInput>({
   project_id: props.projectId,
@@ -24,6 +29,23 @@ const form = reactive<CreateAgentInput>({
   role: 'backend',
   team: '',
   status: 'active' as AgentStatus
+})
+
+const validate = compose<CreateAgentInput>(
+  // 255 matches agents.name VARCHAR(255) and agents.team VARCHAR(255) in
+  // migrations/001_init.up.sql; the limits belong next to the constraints,
+  // not only in the database.
+  required('name', 'An agent name'),
+  maxLength('name', 255, 'The name'),
+  maxLength('team', 255, 'The team')
+)
+
+const { errors, submitting, submitError, submit } = useFormModal({
+  form,
+  validate,
+  onSubmit: props.onSubmit,
+  close: () => { open.value = false },
+  failureMessage: 'Could not register the agent'
 })
 
 watch(() => props.modelValue, (v) => {
@@ -35,56 +57,92 @@ watch(() => props.modelValue, (v) => {
     form.status = props.initial?.status ?? 'active'
   }
 })
-
-const submitting = ref(false)
-
-async function onSubmit() {
-  submitting.value = true
-  try {
-    await emit('submit', { ...form })
-    open.value = false
-  } finally {
-    submitting.value = false
-  }
-}
 </script>
 
 <template>
-  <UModal v-model:open="open" title="Register agent" icon="i-lucide-bot">
-    <template #body>
-      <UForm :state="form" class="space-y-4" @submit.prevent="onSubmit">
-        <UFormField label="Name" required>
-          <UInput v-model="form.name" placeholder="Backend-Copilot" required />
-        </UFormField>
-        <div class="grid grid-cols-2 gap-4">
-          <UFormField label="Role" required>
-            <USelect
-              v-model="form.role"
-              :items="[
-                { label: 'Project Manager', value: 'pm' },
-                { label: 'Backend',         value: 'backend' },
-                { label: 'Frontend',        value: 'frontend' },
-                { label: 'DevOps',          value: 'devops' },
-                { label: 'Design',          value: 'design' },
-                { label: 'QA',              value: 'qa' }
-              ]"
-              value-key="value"
-            />
-          </UFormField>
-          <UFormField label="Team">
-            <UInput v-model="form.team" placeholder="Backend Team" />
-          </UFormField>
-        </div>
-        <UFormField label="Initial status">
-          <USelect v-model="form.status" :items="statusItems(AGENT_STATUSES, AGENT_STATUS_LABELS)" value-key="value" />
-        </UFormField>
-      </UForm>
-    </template>
-    <template #footer>
-      <div class="flex justify-end gap-2 w-full">
-        <UButton variant="ghost" color="neutral" @click="open = false">Cancel</UButton>
-        <UButton color="primary" :loading="submitting" @click="onSubmit">Register agent</UButton>
-      </div>
-    </template>
-  </UModal>
+  <FormModal
+    v-model:open="open"
+    :title="isEdit ? 'Edit agent' : 'Register agent'"
+    :description="isEdit
+      ? `Changes apply to ${initial?.name}.`
+      : 'An agent is whoever does the work here: a service, a person, or a bot.'"
+    icon="i-lucide-bot"
+    :submit-label="isEdit ? 'Save changes' : 'Register agent'"
+    :submitting="submitting"
+    :error="submitError"
+    size="sm"
+    @submit="submit"
+  >
+    <FormField
+      label="Name"
+      name="name"
+      required
+      hint="How the agent is listed in pickers and standups."
+      :aside="`${form.name.length}/255`"
+      :error="errors.name"
+    >
+      <UInput
+        v-model="form.name"
+        name="name"
+        autofocus
+        placeholder="Backend-Copilot"
+        class="w-full"
+        maxlength="255"
+      />
+    </FormField>
+
+    <FormField
+      label="Role"
+      name="role"
+      required
+      hint="Decides what this agent is asked for; defaults to backend."
+      :error="errors.role"
+    >
+      <USelect
+        v-model="form.role"
+        name="role"
+        class="w-full"
+        :items="[
+          { label: 'Project Manager', value: 'pm' },
+          { label: 'Backend',         value: 'backend' },
+          { label: 'Frontend',        value: 'frontend' },
+          { label: 'DevOps',          value: 'devops' },
+          { label: 'Design',          value: 'design' },
+          { label: 'QA',              value: 'qa' }
+        ]"
+        value-key="value"
+      />
+    </FormField>
+
+    <FormField
+      label="Team"
+      name="team"
+      hint="Optional. Groups agents in the roster."
+      :aside="`${form.team.length}/255`"
+      :error="errors.team"
+    >
+      <UInput
+        v-model="form.team"
+        name="team"
+        placeholder="Backend Team"
+        class="w-full"
+        maxlength="255"
+      />
+    </FormField>
+
+    <FormField
+      label="Initial status"
+      name="status"
+      hint="Paused agents keep their history but stop being assigned work."
+      :error="errors.status"
+    >
+      <USelect
+        v-model="form.status"
+        name="status"
+        class="w-full"
+        :items="statusItems(AGENT_STATUSES, AGENT_STATUS_LABELS)"
+        value-key="value"
+      />
+    </FormField>
+  </FormModal>
 </template>
