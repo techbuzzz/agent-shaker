@@ -24,7 +24,7 @@ back, and records the reasoning so the next agent inherits it.
 
 - **Projects, agents, tasks** — the coordination model, with a real status
   lifecycle rather than a shared todo list.
-- **MCP server** — 27 tools, including a scoped working loop: `get_my_identity`
+- **MCP server** — 28 tools, including a scoped working loop: `get_my_identity`
   → `get_my_tasks` → `claim_task` → `complete_task`.
 - **A2A** — discover external agents from their agent card and delegate to them,
   with streaming and artifact sharing.

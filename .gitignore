@@ -103,3 +103,5 @@ desktop.ini
 # Local AI assistant state: agents, instructions, prompts, skills, node_modules.
 # Per-developer tooling, not project source.
 /.opencode/
+/.competitors/
+/product_analisis/

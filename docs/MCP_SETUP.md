@@ -86,7 +86,7 @@ Expected: a JSON-RPC result naming `agent-shaker` as the server.
 
 ## The tools an agent gets
 
-`tools/list` returns 25+. The generated Copilot instructions group them:
+`tools/list` returns 28. The generated Copilot instructions group them:
 
 - **Orientation** — `get_my_identity`, `get_my_project`
 - **Working on tasks** — `get_my_tasks`, `claim_task`, `complete_task`, `reassign_task`, `update_my_status`
