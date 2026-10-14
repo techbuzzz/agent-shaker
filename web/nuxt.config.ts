@@ -117,8 +117,14 @@ export default defineNuxtConfig({
       websocket: true
     },
     devProxy: {
+      // Derived from NUXT_API_UPSTREAM rather than hardcoded. It used to be a
+      // literal ws://localhost:8080, so pointing the app at any other backend —
+      // a second instance on another port, a colleague's machine — connected
+      // REST to one server and the live event stream to another. Nothing
+      // announced that; the UI simply stopped updating while every request
+      // still succeeded.
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: (process.env.NUXT_API_UPSTREAM || 'http://127.0.0.1:8080').replace(/^http/, 'ws'),
         ws: true,
         changeOrigin: true
       }

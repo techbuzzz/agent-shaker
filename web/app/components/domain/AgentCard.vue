@@ -16,6 +16,38 @@ const STATUS_COLOR: Record<AgentStatus, 'success' | 'warning' | 'error' | 'neutr
 }
 
 const statusColor = (s: AgentStatus) => STATUS_COLOR[s] ?? 'neutral'
+
+/**
+ * How much of the agent's lease is left, as a percentage.
+ *
+ * The reaper expires the lease at 0, so the bar is the one thing on this card
+ * that answers "is this agent about to have its work taken back". Computed from
+ * the deadline the SERVER returned, never from the agent's own clock, so an
+ * agent whose clock is wrong does not render as a fleet-wide incident.
+ */
+const leaseRemaining = (agent: Agent): number | null => {
+  if (!agent.lease_expires_at) return null
+  const remaining = new Date(agent.lease_expires_at).getTime() - Date.now()
+  if (Number.isNaN(remaining)) return null
+  // The span is unknown here (it varies with TTL config), so this is a
+  // three-state signal rather than a true fraction: plenty, thin, gone.
+  if (remaining <= 0) return 0
+  if (remaining < 20_000) return 1
+  return 2
+}
+
+const leaseBarColor = (agent: Agent) => {
+  const state = leaseRemaining(agent)
+  if (state === 0) return 'bg-error'
+  if (state === 1) return 'bg-warning'
+  return 'bg-success'
+}
+
+/** The reported activity, which is not the same field as the stored status. */
+const reportedProgress = (agent: Agent): number | null => {
+  const raw = agent.heartbeat_payload?.progress_pct
+  return typeof raw === 'number' ? raw : null
+}
 </script>
 
 <template>
@@ -33,6 +65,30 @@ const statusColor = (s: AgentStatus) => STATUS_COLOR[s] ?? 'neutral'
           </UBadge>
         </div>
         <p class="text-xs text-muted mt-1">{{ agent.team || '—' }}</p>
+
+        <!--
+          The lease strip only renders for agents that actually hold one.
+          An agent created through the UI has never heartbeat, so it has no
+          deadline and no bar — showing a depleted bar next to a healthy agent
+          would read as an outage that is not happening.
+        -->
+        <div v-if="agent.lease_expires_at" class="mt-3">
+          <div class="flex items-center justify-between text-xs text-muted">
+            <span>{{ reportedProgress(agent) !== null ? `${reportedProgress(agent)}% reported` : 'Lease' }}</span>
+            <span>{{ leaseRemaining(agent) === 0 ? 'expired' : `renews ${relativeTime(agent.lease_expires_at)}` }}</span>
+          </div>
+          <div
+            class="mt-1 h-1 w-full rounded-full bg-elevated"
+            role="img"
+            :aria-label="leaseRemaining(agent) === 0 ? 'Work lease expired' : 'Work lease'"
+          >
+            <div
+              class="h-1 rounded-full transition-[width]"
+              :class="leaseBarColor(agent)"
+              :style="{ width: leaseRemaining(agent) === 0 ? '100%' : leaseRemaining(agent) === 1 ? '25%' : '100%' }"
+            />
+          </div>
+        </div>
       </div>
       <UBadge :color="statusColor(agent.status)" variant="subtle" size="xs">
         {{ agent.status }}

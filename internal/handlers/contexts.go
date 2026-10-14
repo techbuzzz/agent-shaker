@@ -38,7 +38,7 @@ func (h *ContextHandler) CreateContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validator.ValidateCreateContextRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 
@@ -193,7 +193,7 @@ func (h *ContextHandler) UpdateContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validator.ValidateUpdateContextRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 	current, err := h.store.GetContext(r.Context(), id)

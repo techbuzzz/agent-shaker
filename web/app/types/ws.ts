@@ -8,7 +8,7 @@
  * global contexts, and the `task_added` shortcut.
  */
 
-import type { Task, Agent, Context, Milestone, ProjectRepo, GlobalContext } from './api'
+import type { Task, Agent, Context, Milestone, ProjectRepo, GlobalContext, Blocker, BlockerType } from './api'
 
 export type WsEventType =
   | 'task_update'
@@ -25,6 +25,14 @@ export type WsEventType =
   | 'global_context_updated'
   | 'global_context_deleted'
   | 'heartbeat'
+  // Coordination Plane (migrations/015). Each one is a state change a human has
+  // to react to, which is why they are broadcast at all: nothing here is
+  // recoverable by polling.
+  | 'blocker_raised'
+  | 'blocker_resolved'
+  | 'task_ready'
+  | 'agent_gone_stale'
+  | 'agent_heartbeat'
 
 interface BaseEvent<T extends WsEventType, P> {
   type: T
@@ -47,6 +55,71 @@ export type GlobalContextUpdatedEvent = BaseEvent<'global_context_updated', Glob
 export type GlobalContextDeletedEvent = BaseEvent<'global_context_deleted', { id: string }>
 export type HeartbeatEvent = BaseEvent<'heartbeat', { agent_id: string; status: string }>
 
+// --- Coordination Plane events -------------------------------------------
+//
+// blocker_raised and blocker_resolved carry the whole blocker rather than an
+// id: the panel renders the card from the event, so an operator who is looking
+// at the screen when an agent gets stuck sees it appear without waiting for a
+// refetch.
+
+export interface BlockerRaisedEvent extends BaseEvent<
+  'blocker_raised',
+  {
+    blocker_id: string
+    task_id: string
+    agent_id: string
+    agent_name: string
+    blocker_type: BlockerType
+    title: string
+    description?: string
+  }
+> {}
+
+/**
+ * Emitted by BOTH resolve and dismiss.
+ *
+ * `status` is what tells them apart: a resolved blocker carries an answer the
+ * agent acts on, a dismissed one carries only a reason it should stop asking.
+ * Without it a client files every dismissal under "Answer".
+ */
+export interface BlockerResolvedEvent extends BaseEvent<
+  'blocker_resolved',
+  {
+    blocker_id: string
+    task_id: string
+    agent_id: string
+    status: 'resolved' | 'dismissed'
+    resolution: string
+  }
+> {}
+
+export interface TaskReadyEvent extends BaseEvent<
+  'task_ready',
+  { task_id: string; title: string; status: string; assigned_to: string }
+> {}
+
+/**
+ * An agent whose lease expired. `reassigned_task` lists the tasks that went
+ * back to the backlog — the reason this event matters to an operator, because
+ * "an agent went offline" is only interesting if work was stranded.
+ */
+export interface AgentGoneStaleEvent extends BaseEvent<
+  'agent_gone_stale',
+  { agent_id: string; agent_name: string; reassigned_task: string[] }
+> {}
+
+export interface AgentHeartbeatEvent extends BaseEvent<
+  'agent_heartbeat',
+  {
+    agent_id: string
+    agent_name: string
+    status: string
+    task_id: string | null
+    progress_pct: number | null
+    next_heartbeat_before: string | null
+  }
+> {}
+
 export type WsEvent =
   | TaskEvent
   | TaskAddedEvent
@@ -62,6 +135,14 @@ export type WsEvent =
   | GlobalContextUpdatedEvent
   | GlobalContextDeletedEvent
   | HeartbeatEvent
+  | BlockerRaisedEvent
+  | BlockerResolvedEvent
+  | TaskReadyEvent
+  | AgentGoneStaleEvent
+  | AgentHeartbeatEvent
+
+/** The blocker kinds of payload the panel can build a card from. */
+export type BlockerLike = Blocker
 
 /**
  * Narrow the union to the single variant carrying a given `type` tag.

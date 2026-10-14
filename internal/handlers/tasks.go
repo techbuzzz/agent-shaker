@@ -3,12 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 
+	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
@@ -19,10 +21,46 @@ import (
 type TaskHandler struct {
 	store *queries.TasksStore
 	hub   *websocket.Hub
+	// resolver promotes dependent tasks when a predecessor finishes. It is nil
+	// when the server runs without a database.
+	resolver *coordination.DependencyResolver
 }
 
-func NewTaskHandler(store *queries.TasksStore, hub *websocket.Hub) *TaskHandler {
-	return &TaskHandler{store: store, hub: hub}
+// NewTaskHandler builds the task handler. The resolver is optional: a server
+// without a database has no dependencies to resolve, and a nil resolver must
+// degrade to "just update the status" rather than panic.
+func NewTaskHandler(store *queries.TasksStore, hub *websocket.Hub, resolver *coordination.DependencyResolver) *TaskHandler {
+	return &TaskHandler{store: store, hub: hub, resolver: resolver}
+}
+
+// resolveDependents runs the dependency resolver after a task reaches done.
+//
+// This is here, not only in the MCP complete_task tool, because a task can be
+// finished from the dashboard or the A2A surface too. When only the tool did
+// it, a task completed from the UI left every task that depended on it blocked
+// forever — the one failure the whole dependency mechanism exists to prevent,
+// and one with no symptom anywhere except a task that never appears in the
+// ready list.
+func (h *TaskHandler) resolveDependents(r *http.Request, taskID uuid.UUID) {
+	if h.resolver == nil {
+		return
+	}
+	promoted, err := h.resolver.ResolveAfterCompletion(r.Context(), taskID)
+	if err != nil {
+		// The task itself is already saved. Failing the whole request here would
+		// tell the caller their update did not happen, which is worse than a
+		// dependency that stays blocked until the next completion touches it.
+		slog.Error("resolving dependents failed", "task_id", taskID, "error", err)
+		return
+	}
+	for _, id := range promoted {
+		if task, err := h.store.GetTask(r.Context(), id); err == nil {
+			h.hub.BroadcastToProject(task.ProjectID, "task_ready", map[string]any{
+				"task_id": task.ID, "project_id": task.ProjectID, "title": task.Title,
+				"status": string(models.StatusTaskReady),
+			})
+		}
+	}
 }
 
 func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +74,7 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validator.ValidateCreateTaskRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 	tags := pq.StringArray(req.Tags)
@@ -128,7 +166,7 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validator.ValidateCreateTaskRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 	task, err := h.store.GetTask(r.Context(), id)
@@ -175,6 +213,10 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		httpx.WriteError(w, r, err)
 		return
+	}
+	// Reaching done is the transition the dependency resolver keys on.
+	if req.Status == models.StatusTaskDone {
+		h.resolveDependents(r, id)
 	}
 	task, err := h.store.GetTask(r.Context(), id)
 	if err != nil {

@@ -38,15 +38,20 @@ type routeDeps struct {
 	globalContextHandler *handlers.GlobalContextHandler
 	peopleHandler        *handlers.PeopleHandler
 	apiKeysHandler       *handlers.APIKeysHandler
-	mcpHandler           *mcp.MCPHandler
-	agentCardHandler     *server.AgentCardHandler
-	a2aHandler           *server.A2AHandler
-	streamingHandler     *server.StreamingHandler
-	artifactHandler      *server.ArtifactHandler
-	obs                  *observability.Metrics
-	maxBodyBytes         int64
-	corsOrigins          []string
-	corsAllowCreds       bool
+	// blockerHandler and the coordination stores are nil when the server runs
+	// without a database. The routes are registered behind a nil check for the
+	// same reason the milestone routes are: a nil handler would panic on the
+	// first request instead of returning the 503 the other handlers write.
+	blockerHandler   *handlers.BlockerHandler
+	mcpHandler       *mcp.MCPHandler
+	agentCardHandler *server.AgentCardHandler
+	a2aHandler       *server.A2AHandler
+	streamingHandler *server.StreamingHandler
+	artifactHandler  *server.ArtifactHandler
+	obs              *observability.Metrics
+	maxBodyBytes     int64
+	corsOrigins      []string
+	corsAllowCreds   bool
 	// assumeTLS is an operator override, not the primary mechanism. HSTS is
 	// decided per request from r.TLS / X-Forwarded-Proto; see
 	// middleware.SecurityHeaders. Set only when the fronting proxy does not set
@@ -345,6 +350,29 @@ func (d routeDeps) apiRouter() http.Handler {
 	// Heartbeats
 	mux.HandleFunc("POST /api/heartbeats", d.standupHandler.RecordHeartbeat)
 	mux.HandleFunc("GET /api/agents/{id}/heartbeats", d.standupHandler.GetAgentHeartbeats)
+
+	// --- Coordination Plane (migration 015) ---
+	//
+	// The agent-facing lease heartbeat. Deliberately distinct from
+	// POST /api/heartbeats above, which is the standup feature's liveness ping:
+	// that one records that an agent exists, this one renews the lease the
+	// reaper enforces and carries the progress and ETA the dashboard shows.
+	//
+	// Registered under the project because a heartbeat is only meaningful with a
+	// project to broadcast into, and because the project in the path is checked
+	// against the agent's own — a route that did not check would let a caller
+	// renew someone else's lease under their own project id.
+	if d.agentHandler != nil {
+		mux.HandleFunc("POST /api/projects/{project_id}/agents/{agent_id}/heartbeat", d.agentHandler.Heartbeat)
+	}
+	if d.blockerHandler != nil {
+		mux.HandleFunc("GET /api/projects/{project_id}/blockers", d.blockerHandler.ListBlockers)
+		mux.HandleFunc("POST /api/projects/{project_id}/blockers", d.blockerHandler.RaiseBlocker)
+		mux.HandleFunc("GET /api/projects/{project_id}/blockers/{blocker_id}", d.blockerHandler.GetBlocker)
+		mux.HandleFunc("PUT /api/projects/{project_id}/blockers/{blocker_id}/resolve", d.blockerHandler.ResolveBlocker)
+		mux.HandleFunc("PUT /api/projects/{project_id}/blockers/{blocker_id}/dismiss", d.blockerHandler.DismissBlocker)
+	}
+
 	// Milestones (Phase 1)
 	if d.milestoneHandler != nil {
 		mux.HandleFunc("GET /api/milestones", d.milestoneHandler.ListMilestones)

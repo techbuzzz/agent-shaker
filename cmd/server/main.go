@@ -16,6 +16,7 @@ import (
 	"time"
 
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
+	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
@@ -144,6 +145,13 @@ func main() {
 	peopleStore := queries.NewPeopleStore(querier)
 	apiKeysStore := queries.NewAPIKeysStore(querier)
 
+	// Coordination Plane stores (migration 015). They share the one querier
+	// like every other store, so they inherit the same tracing and the same
+	// nil-interface handling.
+	blockersStore := queries.NewBlockersStore(querier)
+	depsStore := queries.NewTaskDependenciesStore(querier)
+	heartbeatsStore := queries.NewHeartbeatsStore(querier)
+
 	// Database-backed credential resolution.
 	//
 	// The env list (API_KEYS) stays supported as the bootstrap path so a fresh
@@ -162,9 +170,29 @@ func main() {
 	} else {
 		slog.Warn("no database available; API_KEYS is the only credential source and scoped keys are unavailable")
 	}
+	// Coordination Plane wiring. The resolver is shared by the REST task and
+	// blocker endpoints and the MCP tools on purpose: all three surfaces can
+	// finish a task, and three implementations of "does this completion unblock
+	// anything" would drift.
+	//
+	// It is built before the handlers because TaskHandler needs it. Every store
+	// is built from the same `querier`, which is a literal nil interface when the
+	// database is down; the handlers' Available() short-circuit depends on that
+	// being a true nil, so nothing here may substitute a non-nil wrapper.
+	var (
+		dependencyResolver *coordination.DependencyResolver
+		blockerHandler     *handlers.BlockerHandler
+	)
+	if db != nil {
+		dependencyResolver = coordination.NewDependencyResolver(depsStore, tasksQueryStore, hub)
+		blockerHandler = handlers.NewBlockerHandler(
+			blockersStore, depsStore, agentStore, tasksQueryStore, dependencyResolver, hub,
+		)
+	}
+
 	projectHandler := handlers.NewProjectHandler(projectStore, hub)
-	agentHandler := handlers.NewAgentHandler(agentStore, hub)
-	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub)
+	agentHandler := handlers.NewAgentHandler(agentStore, tasksQueryStore, heartbeatsStore, hub)
+	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub, dependencyResolver)
 	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub)
 	standupHandler := handlers.NewStandupHandler(standupsQueryStore, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
@@ -174,7 +202,10 @@ func main() {
 	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	peopleHandler := handlers.NewPeopleHandler(peopleStore)
 	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeysStore, peopleStore, keyResolver)
-	mcpHandler := mcp.NewMCPHandler(db, hub)
+
+	mcpHandler := mcp.NewMCPHandlerWithCoordination(
+		db, hub, blockersStore, depsStore, agentStore, tasksQueryStore, heartbeatsStore,
+	)
 
 	// A2A Protocol Setup.
 	//
@@ -339,6 +370,7 @@ func main() {
 		globalContextHandler: globalContextHandler,
 		peopleHandler:        peopleHandler,
 		apiKeysHandler:       apiKeysHandler,
+		blockerHandler:       blockerHandler,
 		mcpHandler:           mcpHandler,
 		agentCardHandler:     agentCardHandler,
 		a2aHandler:           a2aHandler,
@@ -384,7 +416,15 @@ func main() {
 		"github", "https://github.com/techbuzzz/agent-shaker",
 	)
 
-	if err := runServer(":"+port, handler, hub); err != nil {
+	// The stale agent reaper is the only background worker that writes to the
+	// database. It is built here, where the stores exist, and started inside
+	// runServer on that function's shutdown context.
+	var reaper *coordination.StaleAgentReaper
+	if db != nil {
+		reaper = coordination.NewStaleAgentReaper(coordination.AgentStore{Store: agentStore}, hub, coordinationConfig())
+	}
+
+	if err := runServer(":"+port, handler, hub, reaper); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
@@ -393,7 +433,14 @@ func main() {
 // runServer starts an http.Server and blocks until a SIGINT/SIGTERM arrives,
 // then drains in-flight requests (graceful shutdown) and finally closes the
 // WebSocket hub so all client pumps exit cleanly.
-func runServer(addr string, h http.Handler, hub *websocket.Hub) error {
+// runServer serves the handler until a signal arrives.
+//
+// reaper may be nil: the server runs without a database, and the reaper's only
+// job is to expire leases, which cannot exist without one. It is passed in
+// rather than constructed here because the stores it needs are built in main,
+// and it starts on this function's rootCtx so a SIGTERM stops the sweep and lets
+// the current transaction finish before the connections drain.
+func runServer(addr string, h http.Handler, hub *websocket.Hub, reaper *coordination.StaleAgentReaper) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
@@ -408,6 +455,11 @@ func runServer(addr string, h http.Handler, hub *websocket.Hub) error {
 	defer stop()
 
 	errCh := make(chan error, 1)
+
+	if reaper != nil {
+		go reaper.Run(rootCtx)
+	}
+
 	go func() {
 		slog.Info("server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -436,6 +488,45 @@ func runServer(addr string, h http.Handler, hub *websocket.Hub) error {
 	hub.Shutdown()
 	slog.Info("server stopped")
 	return nil
+}
+
+// coordinationConfig reads the Coordination Plane timings from the
+// environment, falling back to the documented defaults.
+//
+// Both values are validated rather than trusted: a lease shorter than the reaper
+// interval is not a faster feedback loop, it is an agent that is declared dead
+// between two heartbeats. Clamping to "lease > interval" keeps a typo in a
+// deployment manifest from silently evicting a healthy fleet.
+func coordinationConfig() coordination.Config {
+	cfg := coordination.DefaultConfig()
+
+	if raw := strings.TrimSpace(os.Getenv("AGENT_LEASE_TTL")); raw != "" {
+		if d, err := time.ParseDuration(raw); err != nil {
+			slog.Warn("ignoring unparseable AGENT_LEASE_TTL", "value", raw, "error", err)
+		} else if d <= 0 {
+			slog.Warn("ignoring non-positive AGENT_LEASE_TTL", "value", raw)
+		} else {
+			cfg.LeaseTTL = d
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("REAPER_INTERVAL")); raw != "" {
+		if d, err := time.ParseDuration(raw); err != nil {
+			slog.Warn("ignoring unparseable REAPER_INTERVAL", "value", raw, "error", err)
+		} else if d <= 0 {
+			slog.Warn("ignoring non-positive REAPER_INTERVAL", "value", raw)
+		} else {
+			cfg.ReaperInterval = d
+		}
+	}
+
+	if cfg.LeaseTTL <= cfg.ReaperInterval {
+		adjusted := cfg.ReaperInterval * 2
+		slog.Warn("lease TTL must exceed the reaper interval; clamping",
+			"lease_ttl", cfg.LeaseTTL, "reaper_interval", cfg.ReaperInterval, "using", adjusted)
+		cfg.LeaseTTL = adjusted
+	}
+	return cfg
 }
 
 func runMigrations(db *database.DB) error {

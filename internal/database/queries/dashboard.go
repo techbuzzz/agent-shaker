@@ -30,8 +30,12 @@ type AgentBucket struct {
 }
 
 type TaskBucket struct {
-	Total      int
-	Pending    int
+	Total   int
+	Pending int
+	// Ready counts tasks whose dependencies are satisfied and which nobody has
+	// claimed. Added with the Coordination Plane; without it the buckets stop
+	// summing to the total the moment one task is unblocked.
+	Ready      int
 	InProgress int
 	Done       int
 	Blocked    int
@@ -116,16 +120,19 @@ func (s *DashboardStore) taskStats(ctx context.Context) (TaskBucket, error) {
 	// Every status in the vocabulary gets its own bucket, so the buckets sum to
 	// the total. A cancelled task is still a task: hiding it made the breakdown
 	// fail to add up, which reads as a bug to anyone checking the arithmetic.
+	// 'ready' is in the list for the same reason — the Coordination Plane added
+	// it, and a bucket that silently omits it makes the total not add up again.
 	err := s.q.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) AS total,
 			COUNT(*) FILTER (WHERE status = 'pending')     AS pending,
+			COUNT(*) FILTER (WHERE status = 'ready')       AS ready,
 			COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
 			COUNT(*) FILTER (WHERE status = 'done')        AS done,
 			COUNT(*) FILTER (WHERE status = 'blocked')     AS blocked,
 			COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled
 		FROM tasks
-	`).Scan(&b.Total, &b.Pending, &b.InProgress, &b.Done, &b.Blocked, &b.Cancelled)
+	`).Scan(&b.Total, &b.Pending, &b.Ready, &b.InProgress, &b.Done, &b.Blocked, &b.Cancelled)
 	if err != nil {
 		return TaskBucket{}, err
 	}

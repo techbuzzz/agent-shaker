@@ -55,6 +55,43 @@ realtime.on('global_context_updated',() => refreshGctx())
 realtime.on('global_context_deleted',() => refreshGctx())
 realtime.on('task_added', () => refreshTasks())
 
+// --- Coordination Plane ---------------------------------------------------
+//
+// These five carry state changes a person has to react to, which is why they
+// are announced rather than silently refreshed. The agent_gone_stale message
+// names the tasks that went back to the backlog, because "an agent went
+// offline" is only actionable next to what it stranded.
+realtime.on('blocker_raised', (e) => {
+  toast.error(`Blocked: ${e.payload.title}`, {
+    description: `${e.payload.agent_name} is waiting on an answer`
+  })
+})
+realtime.on('blocker_resolved', (e) => {
+  toast.success(`Answered: ${e.payload.resolution.slice(0, 60)}`)
+  refreshTasks()
+})
+realtime.on('task_ready', (e) => {
+  toast.info(`Ready: ${e.payload.title}`)
+  refreshTasks()
+})
+realtime.on('agent_gone_stale', (e) => {
+  const stranded = e.payload.reassigned_task.length
+  toast.warn(
+    `${e.payload.agent_name} stopped reporting`,
+    {
+      description: stranded
+        ? `${stranded} task${stranded === 1 ? '' : 's'} returned to the backlog`
+        : 'No tasks were stranded'
+    }
+  )
+  refreshAgents()
+  refreshTasks()
+})
+// The heartbeat is deliberately NOT toasted: it arrives every 30 seconds per
+// agent, and a toast per heartbeat is how a notification list becomes noise.
+// The AgentCard lease strip reads the same state on the next refresh.
+realtime.on('agent_heartbeat', () => refreshAgents())
+
 // Tabs (UTabs in v3)
 const tabItems = [
   { label: 'Overview',   value: 'overview', icon: 'i-lucide-info' },
@@ -64,7 +101,8 @@ const tabItems = [
   { label: 'Milestones', value: 'milestones', icon: 'i-lucide-flag' },
   { label: 'Repos',      value: 'repos',    icon: 'i-lucide-git-branch' },
   { label: 'Contexts',   value: 'contexts', icon: 'i-lucide-book-text' },
-  { label: 'Standups',   value: 'standups', icon: 'i-lucide-calendar-days' }
+  { label: 'Standups',   value: 'standups', icon: 'i-lucide-calendar-days' },
+  { label: 'Blockers',   value: 'blockers', icon: 'i-lucide-hand' }
 ]
 const activeTab = ref<string>('overview')
 
@@ -482,6 +520,14 @@ const currentAgentIsPM = computed(() => {
             <StandupCard v-for="s in standups" :key="s.id" :standup="s" :agent-name="agentsById[s.agent_id]" @delete="(s) => api.deleteStandup(s.id).then(() => refreshStandups())" />
           </div>
         </div>
+
+        <!-- BLOCKERS -->
+        <!--
+          The panel owns its own data and its own realtime subscription: a
+          blocker is a queue for a person, and a person arrives here directly
+          via this tab rather than through the page's other lists.
+        -->
+        <BlockerPanel v-else-if="item.value === 'blockers'" class="py-4" :project-id="projectId" />
       </template>
     </UTabs>
 

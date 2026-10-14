@@ -66,6 +66,73 @@ type Agent struct {
 	HeartbeatPayload []byte `json:"heartbeat_payload" db:"heartbeat_payload"`
 }
 
+// StaleAgent is one agent whose lease has expired, as the reaper sees it.
+//
+// It carries only what the reaper has to act on and broadcast. Pulling the full
+// agent row would mean an extra round trip per stale agent for fields the
+// reaper never reads.
+type StaleAgent struct {
+	ID        uuid.UUID `json:"id"`
+	ProjectID uuid.UUID `json:"project_id"`
+	Name      string    `json:"name"`
+}
+
+// HeartbeatStatus is what an agent says it is doing right now.
+//
+// It is deliberately NOT AgentStatus. An agent's stored status answers "is it
+// available to the fleet" and is constrained by the database to
+// (active, idle, blocked, offline). A heartbeat answers a different question —
+// "what is it doing" — and its most useful answer, "working", has no
+// counterpart in the stored vocabulary. Migration 014 normalised a hand-written
+// 'working' down to 'active' for exactly this reason, and a heartbeat that
+// could not say "working" would leave the dashboard unable to distinguish an
+// agent deep in a task from one idling with a finished lease.
+type HeartbeatStatus string
+
+const (
+	HeartbeatWorking HeartbeatStatus = "working"
+	HeartbeatIdle    HeartbeatStatus = "idle"
+	HeartbeatBlocked HeartbeatStatus = "blocked"
+)
+
+// AllHeartbeatStatuses is the authoritative heartbeat vocabulary, used to build
+// the MCP tool enum and the validation message so the two cannot drift.
+var AllHeartbeatStatuses = []HeartbeatStatus{
+	HeartbeatWorking,
+	HeartbeatIdle,
+	HeartbeatBlocked,
+}
+
+// IsValidHeartbeatStatus reports whether s is a member of the heartbeat
+// vocabulary.
+//
+// "offline" is absent on purpose: an agent that is heartbeating is by
+// definition not offline. Letting it report that state would be a way to take
+// itself out of the fleet's accounting while still holding a live lease.
+func IsValidHeartbeatStatus(s string) bool {
+	for _, valid := range AllHeartbeatStatuses {
+		if string(valid) == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ToAgentStatus maps a reported activity onto the stored agent status.
+//
+// working → active, because "active" is what the stored vocabulary calls an
+// agent that is present and busy; anything reported as blocked keeps the agent
+// blocked so the fleet's view and the agent's own view agree.
+func (h HeartbeatStatus) ToAgentStatus() string {
+	if h == HeartbeatBlocked {
+		return "blocked"
+	}
+	if h == HeartbeatIdle {
+		return "idle"
+	}
+	return "active"
+}
+
 // SendHeartbeatRequest is what an agent reports about itself.
 //
 // It is the coordination-plane request. The older standup-feature request
@@ -74,6 +141,8 @@ type Agent struct {
 // served by the same call without losing the difference between "ping" and
 // "report".
 type SendHeartbeatRequest struct {
+	// Status is a HeartbeatStatus ("working", "idle", "blocked"), not an
+	// AgentStatus. See HeartbeatStatus for why the two vocabularies differ.
 	Status      string          `json:"status"`
 	TaskID      *uuid.UUID      `json:"task_id,omitempty"`
 	ProgressPct *int            `json:"progress_pct,omitempty"`

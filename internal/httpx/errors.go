@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -81,6 +82,16 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 // classify maps a Go error to an HTTP status code and a stable error code
 // identifier that clients can switch on.
 func classify(err error) (code, msg string, httpStatus int) {
+	// The default message is the error's own text with the wrapped sentinel's
+	// prefix removed.
+	//
+	// It used to be the empty string. Handlers wrap these sentinels exactly as
+	// documented — fmt.Errorf("%w: progress_pct must be between 0 and 100",
+	// ErrBadRequest) — and every one of those responses went out with
+	// "message": "". The status was right, the code was right, and the part a
+	// person or an agent actually reads was missing. A UI that renders
+	// error.message showed an empty red box.
+	msg = withoutSentinelPrefix(err)
 	switch {
 	// Phase-1 milestone close guard. errMilestoneOpenTasks.Error() contains
 	// "milestone has N open task(s)" — match on the prefix so the wire stays
@@ -120,6 +131,46 @@ func classify(err error) (code, msg string, httpStatus int) {
 	// diagnose from logs, but never leak it to unauthenticated callers in
 	// production. (Auth is out of scope; this matches current behaviour.)
 	return "internal", err.Error(), http.StatusInternalServerError
+}
+
+// withoutSentinelPrefix strips a leading "<sentinel>: " from a wrapped error.
+//
+// The sentinels are transport vocabulary, not something to show a caller:
+// "not found: agent 8f2… not found" is the same fact twice, and the duplicate is
+// the part that leaks the implementation. What is left after the prefix is the
+// part the handler wrote for the reader.
+func withoutSentinelPrefix(err error) string {
+	text := err.Error()
+	for _, sentinel := range []error{ErrBadRequest, ErrUnauthorized, ErrForbidden, ErrNotFound, ErrUnavailable} {
+		prefix := sentinel.Error() + ": "
+		if strings.HasPrefix(text, prefix) {
+			return strings.TrimPrefix(text, prefix)
+		}
+	}
+	return text
+}
+
+// WriteValidationError writes a 400 for a rejected request body.
+//
+// It exists because the alternative was a 500. Handlers wrapped the validator's
+// error as fmt.Errorf("validation: %w", err) and handed it to WriteError, which
+// classifies by sentinel — an unwrapped error is "unknown", so a caller that
+// posted a task without an agent_id got a 500 and a server-error page, for what
+// is a client mistake with a perfectly good explanation attached.
+//
+// The message is kept verbatim, because the validator's text ("agent_id is
+// required") is the part the caller needs; the prefix is dropped so it does not
+// leak the internal naming of the layer that produced it.
+func WriteValidationError(w http.ResponseWriter, r *http.Request, err error) {
+	if err == nil {
+		return
+	}
+	WriteError(w, r, fmt.Errorf("%w: %s", ErrBadRequest, withoutPrefix(err.Error(), "validation: ")))
+}
+
+// withoutPrefix removes a leading "prefix" if present.
+func withoutPrefix(text, prefix string) string {
+	return strings.TrimPrefix(text, prefix)
 }
 
 // WriteJSON writes payload as JSON with the supplied status code. Encode

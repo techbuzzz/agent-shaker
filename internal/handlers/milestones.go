@@ -49,7 +49,7 @@ func (h *MilestoneHandler) CreateMilestone(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err := validator.ValidateCreateMilestoneRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 

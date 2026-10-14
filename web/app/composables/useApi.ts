@@ -15,7 +15,9 @@ import type {
   // Mesh-app additions — Phase 1/2/3
   Milestone, CreateMilestoneInput, UpdateMilestoneStatusInput,
   ProjectRepo, CreateProjectRepoInput,
-  GlobalContext, CreateGlobalContextInput, UpdateGlobalContextInput
+  GlobalContext, CreateGlobalContextInput, UpdateGlobalContextInput,
+  // Coordination Plane (migrations/015)
+  Blocker, BlockerStatus, ResolveBlockerInput, DismissBlockerInput
 } from '~/types/api'
 import type {
   Person, CreatePersonInput, APIKey, CreateKeyInput, IssuedAPIKey,
@@ -103,6 +105,22 @@ export interface UseApi {
   createGlobalContext: (input: CreateGlobalContextInput) => Promise<GlobalContext>
   updateGlobalContext: (id: string, input: UpdateGlobalContextInput) => Promise<GlobalContext>
   deleteGlobalContext: (id: string) => Promise<void>
+  // Coordination Plane (migrations/015)
+  //
+  // Blockers are project-scoped in the URL, not filtered by query only: the
+  // handler checks the blocker against the project in the path and answers 404
+  // on a mismatch, so a caller cannot read another project's blocker by getting
+  // the id right and the path wrong.
+  listBlockers: (projectId: string, status?: BlockerStatus) => Promise<Blocker[]>
+  getBlocker: (projectId: string, id: string) => Promise<Blocker>
+  /**
+   * Closing a blocker needs a written answer, and the server rejects an empty
+   * one: a blocker resolved with no resolution leaves the agent with nothing to
+   * act on, which is the same state as leaving it open but with less visibility.
+   */
+  resolveBlocker: (projectId: string, id: string, input: ResolveBlockerInput) => Promise<Blocker>
+  /** Closing without an answer needs a reason, for the same reason. */
+  dismissBlocker: (projectId: string, id: string, input: DismissBlockerInput) => Promise<Blocker>
   // People & keys (gated by the admin scope)
   listPeople: () => Promise<Person[]>
   getPerson: (id: string) => Promise<Person>
@@ -251,6 +269,19 @@ export function useApi(): UseApi {
     createGlobalContext: (input)        => request<GlobalContext>('/global_contexts', { method: 'POST', body: input }),
     updateGlobalContext: (id, input)    => request<GlobalContext>(`/global_contexts/${id}`, { method: 'PUT', body: input }),
     deleteGlobalContext: async (id)      => { await request<void>(`/global_contexts/${id}`, { method: 'DELETE' }) },
+
+    // Coordination Plane. The paths are project-scoped because the handler
+    // checks the blocker against the project in the path and answers 404 on a
+    // mismatch — a caller cannot read another project's blocker by having the
+    // id right and the project wrong.
+    listBlockers: (projectId, status) =>
+      request<Blocker[]>(`/projects/${projectId}/blockers`, { params: status ? { status } : undefined }),
+    getBlocker: (projectId, id) =>
+      request<Blocker>(`/projects/${projectId}/blockers/${id}`),
+    resolveBlocker: (projectId, id, input) =>
+      request<Blocker>(`/projects/${projectId}/blockers/${id}/resolve`, { method: 'PUT', body: input }),
+    dismissBlocker: (projectId, id, input) =>
+      request<Blocker>(`/projects/${projectId}/blockers/${id}/dismiss`, { method: 'PUT', body: input }),
 
     // People & keys
     //

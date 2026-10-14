@@ -25,7 +25,13 @@ defineEmits<{ (e: 'toggle'): void }>()
   >
     <!-- Brand header -->
     <div class="px-3 h-16 flex items-center border-b border-default flex-shrink-0">
-      <NuxtLink to="/" class="flex items-center gap-2 overflow-hidden" :aria-label="'Home'">
+      <!--
+        The aria-label used to be just "Home", which is a label-in-name
+        violation: the link visibly says "Agent Shaker / MCP Task Tracker" and a
+        screen reader announced only "Home", so the product was never named. The
+        label now carries the visible words plus the destination.
+      -->
+      <NuxtLink to="/" class="flex items-center gap-2 overflow-hidden" aria-label="Agent Shaker — MCP Task Tracker, home">
         <img src="/icon.png" alt="" class="w-8 h-8 rounded-lg flex-shrink-0" />
         <Transition>
           <div v-if="!collapsed" class="flex flex-col leading-tight">

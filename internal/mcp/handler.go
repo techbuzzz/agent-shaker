@@ -21,6 +21,7 @@ import (
 
 	a2aClient "github.com/techbuzzz/agent-shaker/internal/a2a/client"
 	a2aModels "github.com/techbuzzz/agent-shaker/internal/a2a/models"
+	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
 	"github.com/techbuzzz/agent-shaker/internal/models"
@@ -136,6 +137,23 @@ type MCPHandler struct {
 	db       *database.DB
 	hub      *websocket.Hub
 	sessions sync.Map
+
+	// --- Coordination Plane stores (see NewMCPHandlerWithCoordination) ---
+	//
+	// They are pointers rather than values so that a handler built by the plain
+	// NewMCPHandler compiles and behaves exactly as before: a nil store means
+	// "this server does not serve that feature", which the coordination tools
+	// report as an error rather than dereferencing.
+	blockers   *queries.BlockersStore
+	deps       *queries.TaskDependenciesStore
+	agents     *queries.AgentsStore
+	tasks      *queries.TasksStore
+	heartbeats *queries.HeartbeatsStore
+
+	// resolver promotes tasks whose dependencies are satisfied. It is built only
+	// when a hub is present: DependencyResolver broadcasts unconditionally when
+	// it moves a task, so it is unusable without one.
+	resolver *coordination.DependencyResolver
 }
 
 type Session struct {
@@ -191,6 +209,29 @@ func NewMCPHandler(db *database.DB, hub *websocket.Hub) *MCPHandler {
 		db:  db,
 		hub: hub,
 	}
+}
+
+// NewMCPHandlerWithCoordination is NewMCPHandler plus the Coordination Plane
+// stores: blockers, task dependencies, agents, tasks and the heartbeat history.
+//
+// The stores are passed in rather than built here so that one Querier backs all
+// of them — mixing connections would let a mutation commit against a different
+// snapshot than the read that justified it.
+//
+// NewMCPHandler stays valid on its own: the tools that need these stores answer
+// with a clear "not available on this server" error when they are absent, so a
+// deployment without the Coordination Plane still serves the rest of the surface.
+func NewMCPHandlerWithCoordination(db *database.DB, hub *websocket.Hub, blockers *queries.BlockersStore, deps *queries.TaskDependenciesStore, agents *queries.AgentsStore, tasks *queries.TasksStore, heartbeats *queries.HeartbeatsStore) *MCPHandler {
+	h := NewMCPHandler(db, hub)
+	h.blockers = blockers
+	h.deps = deps
+	h.agents = agents
+	h.tasks = tasks
+	h.heartbeats = heartbeats
+	if hub != nil && deps != nil && tasks != nil {
+		h.resolver = coordination.NewDependencyResolver(deps, tasks, hub)
+	}
+	return h
 }
 
 // extractContext extracts project_id and agent_id from URL params or headers
@@ -1002,6 +1043,178 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 				},
 			},
 		},
+		// Coordination Plane tools
+		{
+			Name: "send_heartbeat",
+			Description: "Report that you are alive and renew your work lease. Send it every 30 seconds while you are " +
+				"working, and after every meaningful state change. An agent whose lease expires is marked offline " +
+				"and its tasks are taken back, so a missed heartbeat ends your assignment. The agent reported is " +
+				"always the one this MCP connection is bound to; you cannot report for another agent.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Your current presence: " + models.JoinValues(models.AllHeartbeatStatuses),
+						"enum":        models.StringSlice(models.AllHeartbeatStatuses),
+					},
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task you are working on. Shown to humans as 'who is on what'.",
+					},
+					"progress_pct": map[string]interface{}{
+						"type":        "integer",
+						"description": "How far along the current task you are, 0-100.",
+						"minimum":     0,
+						"maximum":     100,
+					},
+					"eta": map[string]interface{}{
+						"type":        "string",
+						"description": "When you expect to finish, RFC3339 (e.g. 2026-01-31T15:04:05Z). Advisory only.",
+					},
+					"metadata": map[string]interface{}{
+						"type":        "object",
+						"description": "Anything else worth recording with this beat: branch name, current step, what you are waiting on.",
+					},
+				},
+				Required: []string{"status"},
+			},
+		},
+		{
+			Name: "complete_task_with_handoff",
+			Description: "Close a task you own and, in the same call, create the follow-up task it implies — linked by a " +
+				"dependency edge and carrying your handoff context. Use this instead of complete_task whenever finishing " +
+				"the work reveals the next step, so there is never a window where the work is done and nobody knows " +
+				"what comes next. The successor starts blocked if something else is outstanding, and every other task " +
+				"waiting on the completed one is unblocked.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task to complete. You must be the assignee.",
+					},
+					"output": map[string]interface{}{
+						"type":        "string",
+						"description": "What you produced: the answer, the file changed, the decision taken.",
+					},
+					"successor_title": map[string]interface{}{
+						"type":        "string",
+						"description": "Title of the follow-up task this handoff creates.",
+					},
+					"successor_description": map[string]interface{}{
+						"type":        "string",
+						"description": "What the successor task has to achieve.",
+					},
+					"successor_assigned_to": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the agent that should pick up the successor. Leave unset to leave it unassigned.",
+					},
+					"handoff_context": map[string]interface{}{
+						"type":        "string",
+						"description": "What the next agent needs and cannot re-derive: the API shape, the branch, the gotcha, what you already tried. Required — a successor without it makes the next agent repeat your work.",
+					},
+				},
+				Required: []string{"task_id", "successor_title", "handoff_context"},
+			},
+		},
+		{
+			Name: "add_task_dependency",
+			Description: "Record that a task cannot start until another one is done, and block the waiting task until " +
+				"then. Use it when you discover the ordering yourself — the blocked task is promoted to ready " +
+				"automatically when its last predecessor completes. A cycle is refused.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task that has to wait.",
+					},
+					"depends_on_task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task that must be done first.",
+					},
+				},
+				Required: []string{"task_id", "depends_on_task_id"},
+			},
+		},
+		{
+			Name: "get_task_dependencies",
+			Description: "List both directions of a task's dependency edges: what it waits for, and what it unblocks. " +
+				"Use it before starting work to see whether a task is claimable, and before completing one to see what " +
+				"your finish will release.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task to inspect.",
+					},
+				},
+				Required: []string{"task_id"},
+			},
+		},
+		{
+			Name: "raise_blocker",
+			Description: "Report that you cannot proceed until a human decides or provides something, and block your " +
+				"task and yourself. Use it for the work that will not move without a person: an approval, a design " +
+				"decision, a missing credential, access to a system. Do not use it for ordinary dependencies between " +
+				"tasks — use add_task_dependency for those. One blocker per distinct ask; several on one task are " +
+				"legitimate, and none of them is replaced by another.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the task that is stuck.",
+					},
+					"blocker_type": map[string]interface{}{
+						"type":        "string",
+						"description": "What kind of help you need: " + models.JoinValues(models.AllBlockerTypes),
+						"enum":        models.StringSlice(models.AllBlockerTypes),
+					},
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "One line naming what you need, 500 characters or fewer.",
+					},
+					"description": map[string]interface{}{
+						"type":        "string",
+						"description": "What you tried, what you already ruled out, and what a good answer would let you do next.",
+					},
+				},
+				Required: []string{"task_id", "blocker_type", "title"},
+			},
+		},
+		{
+			Name: "check_blocker_status",
+			Description: "Check whether a blocker you raised has been answered, and read the answer. Use it instead " +
+				"of re-raising the blocker when polling. Only the agent that raised it can read it.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"blocker_id": map[string]interface{}{
+						"type":        "string",
+						"description": "UUID of the blocker to check, as returned by raise_blocker.",
+					},
+				},
+				Required: []string{"blocker_id"},
+			},
+		},
+		{
+			Name: "get_my_blockers",
+			Description: "List the blockers you raised, newest first, optionally filtered by status. Use it after " +
+				"reconnecting to catch up on answers you missed while offline.",
+			InputSchema: InputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"status": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional blocker status filter: " + models.JoinValues(models.AllBlockerStatuses),
+						"enum":        models.StringSlice(models.AllBlockerStatuses),
+					},
+				},
+			},
+		},
 	}
 
 	return ToolsListResult{Tools: tools}, nil
@@ -1112,6 +1325,21 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 		resultText, isError = h.executeListGlobalContexts(callParams.Arguments, ctx)
 	case "read_global_context":
 		resultText, isError = h.executeReadGlobalContext(callParams.Arguments)
+	// Coordination Plane tools
+	case "send_heartbeat":
+		resultText, isError = h.executeSendHeartbeat(callParams.Arguments, ctx)
+	case "complete_task_with_handoff":
+		resultText, isError = h.executeCompleteTaskWithHandoff(callParams.Arguments, ctx)
+	case "add_task_dependency":
+		resultText, isError = h.executeAddTaskDependency(callParams.Arguments, ctx)
+	case "get_task_dependencies":
+		resultText, isError = h.executeGetTaskDependencies(callParams.Arguments, ctx)
+	case "raise_blocker":
+		resultText, isError = h.executeRaiseBlocker(callParams.Arguments, ctx)
+	case "check_blocker_status":
+		resultText, isError = h.executeCheckBlockerStatus(callParams.Arguments, ctx)
+	case "get_my_blockers":
+		resultText, isError = h.executeGetMyBlockers(callParams.Arguments, ctx)
 	default:
 		span.RecordError(fmt.Errorf("unknown tool: %s", callParams.Name))
 		span.SetStatus(codes.Error, "unknown tool")
@@ -3087,6 +3315,12 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 	case err != nil:
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
 	}
+
+	// A task completing through the ordinary path has to unblock its dependents
+	// exactly as one completing through a handoff does: the resolver is the only
+	// place that decides readiness, and a completion that skipped it would leave
+	// the next task blocked forever.
+	h.resolveAfterCompletion(ctx.requestContext(), taskID)
 
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":  true,

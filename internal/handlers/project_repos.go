@@ -33,7 +33,7 @@ func (h *ProjectRepoHandler) CreateRepo(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := validator.ValidateCreateProjectRepoRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 	if req.Branch == "" {
@@ -110,7 +110,7 @@ func (h *ProjectRepoHandler) UpdateRepo(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := validator.ValidateCreateProjectRepoRequest(&req); err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("validation: %w", err))
+		httpx.WriteValidationError(w, r, err)
 		return
 	}
 	current, err := h.store.Get(r.Context(), id)

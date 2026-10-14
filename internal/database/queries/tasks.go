@@ -24,11 +24,27 @@ func NewTasksStore(q Querier) *TasksStore {
 // Available reports whether the store has a usable Querier.
 func (s *TasksStore) Available() bool { return s.q != nil }
 
+// tagsColumnValue turns a tag list into something writable to a NOT NULL column.
+//
+// pq.Array(nil) marshals to SQL NULL, and tasks.tags is NOT NULL, so creating a
+// task without tags — the common case, and the one the handoff tool always
+// hits — failed with
+//
+//	null value in column "tags" ... violates not-null constraint
+//
+// An empty array is the value that actually means "no tags".
+func tagsColumnValue(tags []string) any {
+	if tags == nil {
+		return pq.Array([]string{})
+	}
+	return pq.Array(tags)
+}
+
 func (s *TasksStore) CreateTask(ctx context.Context, t *models.Task) error {
 	_, err := s.q.ExecContext(ctx, `
-		INSERT INTO tasks (id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, t.ID, t.ProjectID, t.Title, t.Description, string(t.Status), t.Priority, t.CreatedBy, t.AssignedTo, t.Output, t.MilestoneID, pq.Array(t.Tags), t.CreatedAt, t.UpdatedAt)
+		INSERT INTO tasks (id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at, predecessor_task_id, handoff_context)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, t.ID, t.ProjectID, t.Title, t.Description, string(t.Status), t.Priority, t.CreatedBy, t.AssignedTo, t.Output, t.MilestoneID, tagsColumnValue(t.Tags), t.CreatedAt, t.UpdatedAt, t.PredecessorTaskID, t.HandoffContext)
 	if err != nil {
 		return fmt.Errorf("insert task: %w", err)
 	}
@@ -37,7 +53,7 @@ func (s *TasksStore) CreateTask(ctx context.Context, t *models.Task) error {
 
 func (s *TasksStore) ListTasks(ctx context.Context, projectID *uuid.UUID, status string) ([]models.Task, error) {
 	args := []any{}
-	q := `SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at FROM tasks WHERE 1=1`
+	q := `SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at, predecessor_task_id, handoff_context FROM tasks WHERE 1=1`
 	if projectID != nil {
 		q += " AND project_id = $1"
 		args = append(args, *projectID)
@@ -86,13 +102,14 @@ func scanTaskRow(row rowScanner, t *models.Task) error {
 		statusStr   sql.NullString
 		priority    sql.NullString
 		output      sql.NullString
+		handoff     sql.NullString
 		createdAt   sql.NullTime
 		updatedAt   sql.NullTime
 	)
 	if err := row.Scan(
 		&t.ID, &t.ProjectID, &t.Title, &description, &statusStr, &priority,
 		&t.CreatedBy, &t.AssignedTo, &output, &t.MilestoneID, &t.Tags,
-		&createdAt, &updatedAt,
+		&createdAt, &updatedAt, &t.PredecessorTaskID, &handoff,
 	); err != nil {
 		return fmt.Errorf("scan task: %w", err)
 	}
@@ -100,6 +117,10 @@ func scanTaskRow(row rowScanner, t *models.Task) error {
 	t.Description = description.String
 	t.Priority = priority.String
 	t.Output = output.String
+	// handoff_context is NULL for every task that was not created by a handoff,
+	// which is every task that existed before migration 015. Scanning it into a
+	// plain string fails the whole listing on those rows, not one row.
+	t.HandoffContext = handoff.String
 	t.CreatedAt = createdAt.Time
 	t.UpdatedAt = updatedAt.Time
 
@@ -113,7 +134,7 @@ func scanTaskRow(row rowScanner, t *models.Task) error {
 func (s *TasksStore) GetTask(ctx context.Context, id uuid.UUID) (*models.Task, error) {
 	var t models.Task
 	err := scanTaskRow(s.q.QueryRowContext(ctx, `
-		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at
+		SELECT id, project_id, title, description, status, priority, created_by, assigned_to, output, milestone_id, tags, created_at, updated_at, predecessor_task_id, handoff_context
 		FROM tasks WHERE id = $1
 	`, id), &t)
 	if err != nil {
@@ -143,6 +164,32 @@ func (s *TasksStore) UpdateTaskStatus(ctx context.Context, id uuid.UUID, status 
 	`, status, id)
 	if err != nil {
 		return fmt.Errorf("update task status: %w", err)
+	}
+	rows, err := tag.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if rows == 0 {
+		return fmt.Errorf("task %s not found", id)
+	}
+	return nil
+}
+
+// UpdateTaskStatusTx is UpdateTaskStatus inside a caller's transaction.
+//
+// It exists because the Coordination Plane moves a task to blocked and back as
+// part of a larger unit of work — resolving a blocker writes to blockers, tasks
+// and agents together, and a task left out of that transaction is a task whose
+// state disagrees with the blocker that explains it.
+//
+// The plain UpdateTaskStatus stays as it is for callers that genuinely have
+// nothing else to commit.
+func (s *TasksStore) UpdateTaskStatusTx(ctx context.Context, q Querier, id uuid.UUID, status string) error {
+	tag, err := q.ExecContext(ctx, `
+		UPDATE tasks SET status = $1, updated_at = NOW() WHERE id = $2
+	`, status, id)
+	if err != nil {
+		return fmt.Errorf("update task status in tx: %w", err)
 	}
 	rows, err := tag.RowsAffected()
 	if err != nil {

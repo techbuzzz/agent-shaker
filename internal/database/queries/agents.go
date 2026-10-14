@@ -98,6 +98,24 @@ func (s *AgentsStore) UpdateAgentStatus(ctx context.Context, id uuid.UUID, statu
 	return nil
 }
 
+// UpdateAgentStatusTx is UpdateAgentStatus inside a caller's transaction.
+//
+// The agent's status is part of the same fact as the task's: an agent reporting
+// "blocked" while its task says "in progress" tells an operator two different
+// stories about why nothing is moving. Both are written in one transaction.
+func (s *AgentsStore) UpdateAgentStatusTx(ctx context.Context, q Querier, id uuid.UUID, status string, lastSeen any) error {
+	if q == nil {
+		q = s.q
+	}
+	_, err := q.ExecContext(ctx, `
+		UPDATE agents SET status = $1, last_seen = $2 WHERE id = $3
+	`, status, lastSeen, id)
+	if err != nil {
+		return fmt.Errorf("update agent status in tx: %w", err)
+	}
+	return nil
+}
+
 // DeleteAgentCascade removes an agent and its related rows in a single
 // transaction. Caller owns the transaction.
 func (s *AgentsStore) DeleteAgentCascade(ctx context.Context, tx Querier, id uuid.UUID) (projectID uuid.UUID, err error) {

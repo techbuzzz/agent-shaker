@@ -16,9 +16,19 @@ defineEmits<{
 
 const { relativeTime, truncate } = useFormatters()
 
+/**
+ * Status colours.
+ *
+ * 'ready' is deliberately not the same colour as 'pending'. A ready task is
+ * claimable work waiting for someone to pick it up — the most actionable state
+ * on this card — while a pending one is not yet eligible because something it
+ * depends on has not finished. Collapsing them would make the dependency
+ * resolver's work invisible: the card would look identical before and after.
+ */
 const statusColor: Record<TaskStatus, 'neutral' | 'info' | 'warning' | 'success' | 'error'> = {
   pending: 'neutral',
-  in_progress: 'info',
+  ready: 'info',
+  in_progress: 'warning',
   blocked: 'error',
   done: 'success',
   cancelled: 'neutral'
@@ -54,6 +64,21 @@ const priorityColor: Record<TaskPriority, 'info' | 'warning' | 'error'> = {
           </UBadge>
         </div>
         <p class="text-sm text-muted mt-2 line-clamp-2">{{ truncate(task.description, 200) }}</p>
+
+        <!--
+          The handoff note is the one piece of a task's history that cannot be
+          reconstructed later: it exists because the predecessor knew something
+          the successor would otherwise have to rediscover. It is shown rather
+          than hidden behind a click, because the reader of this card is
+          usually deciding whether to pick the task up.
+        -->
+        <div
+          v-if="task.handoff_context"
+          class="mt-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2"
+        >
+          <p class="text-xs font-medium text-primary">From the previous task</p>
+          <p class="text-sm text-default mt-1 whitespace-pre-wrap">{{ task.handoff_context }}</p>
+        </div>
       </div>
     </div>
 
