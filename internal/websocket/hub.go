@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -196,27 +197,16 @@ func (h *Hub) broadcastMessage(message *Message) {
 		return
 	}
 
-	// Extract project ID from payload
-	var projectID uuid.UUID
-
-	// Try to extract from different payload types
-	switch payload := message.Payload.(type) {
-	case map[string]interface{}:
-		if pid, ok := payload["project_id"].(string); ok {
-			projectID, _ = uuid.Parse(pid)
-		}
-	default:
-		// Try to use reflection to get ProjectID field
-		// This handles structs like models.Task, models.Agent, etc.
-		payloadBytes, err := json.Marshal(payload)
-		if err == nil {
-			var temp map[string]interface{}
-			if json.Unmarshal(payloadBytes, &temp) == nil {
-				if pid, ok := temp["project_id"].(string); ok {
-					projectID, _ = uuid.Parse(pid)
-				}
-			}
-		}
+	projectID, ok := projectIDFromPayload(message.Payload)
+	if !ok {
+		// Previously this silently returned, which made every broadcast that
+		// carried a non-string project id vanish: no client was told, no log
+		// line, and the sender saw a perfectly successful request. An agent
+		// heartbeat, a task update and a blocker raise all "worked" and none of
+		// them reached a browser.
+		slog.Error("websocket broadcast dropped: payload has no usable project_id",
+			"event_type", message.Type)
+		return
 	}
 
 	// Hold the write lock for the whole broadcast so map mutations on overflow
@@ -240,6 +230,50 @@ func (h *Hub) broadcastMessage(message *Message) {
 	}
 	if len(projectClients) == 0 {
 		delete(h.projects, projectID)
+	}
+}
+
+// projectIDFromPayload finds the project a broadcast belongs to.
+//
+// It accepts a string, a uuid.UUID, or anything fmt.Stringer, because handlers
+// build these payloads by hand and half of them pass a typed uuid — the
+// difference between `payload["project_id"].(string)` succeeding and silently
+// failing, which is precisely the bug this function exists to remove.
+func projectIDFromPayload(payload interface{}) (uuid.UUID, bool) {
+	// Maps are the common case; check the raw value first so a string wins
+	// without a marshal round trip.
+	if m, ok := payload.(map[string]interface{}); ok {
+		if id, ok := parseProjectID(m["project_id"]); ok {
+			return id, true
+		}
+	}
+
+	// Everything else — models.Task, models.Agent, a struct with a
+	// ProjectID field — goes through JSON so the lookup is field-name based
+	// rather than type based.
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	var temp map[string]interface{}
+	if err := json.Unmarshal(raw, &temp); err != nil {
+		return uuid.Nil, false
+	}
+	return parseProjectID(temp["project_id"])
+}
+
+func parseProjectID(value interface{}) (uuid.UUID, bool) {
+	switch v := value.(type) {
+	case string:
+		id, err := uuid.Parse(v)
+		return id, err == nil
+	case uuid.UUID:
+		return v, true
+	case fmt.Stringer:
+		id, err := uuid.Parse(v.String())
+		return id, err == nil
+	default:
+		return uuid.Nil, false
 	}
 }
 
