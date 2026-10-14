@@ -158,6 +158,63 @@ therefore additive and needs no downtime:
 Never edit a key in place on a running container — restart with a different
 `API_KEYS` than a client holds and that client is locked out until it is fixed.
 
+## Two credential paths: environment keys and scoped database keys
+
+There are two sources of credentials, and they coexist.
+
+**Environment keys (`API_KEYS`)** are shared secrets with no identity attached.
+A request presenting one resolves to a synthetic principal that holds every
+scope — it is the bootstrap and emergency-access path, and it is what lets a
+fresh install secure itself before anyone has logged in to mint a scoped key.
+
+**Scoped database keys** are rows in `api_keys`, each bound to a principal (a
+row in `people`) and carrying explicit scopes: `read`, `write`, `admin`. A
+successful resolution produces a `Principal` naming that principal, and
+authorisation is enforced per scope rather than by possession of a secret.
+Scopes are checked in the middleware, not in handlers: `RequireMethodScope()`
+grades every non-safe HTTP method as needing `write`, and
+`RequireScopeOnPaths(ScopeAdmin, "/api/keys", "/api/people")` gates the
+administrative surface regardless of method.
+
+**Which path runs.** When the service can reach a database, the resolver is the
+authority for any credential it recognises. A credential it does not recognise
+falls back to the `API_KEYS` list — that fallback is what keeps a deployment
+reachable, since minting the first scoped key requires the `admin` scope, which
+only an environment key holds.
+
+A **revoked** database key is authoritative and is never satisfied by the
+environment list, so a revocation cannot be bypassed by presenting the same
+value as an environment key.
+
+### Managing keys
+
+```
+GET    /api/keys?principal_id=<uuid>&include_revoked=true|false
+POST   /api/keys   {"principal_id":"<uuid>","project_id":"<uuid>","scopes":["read"]}
+DELETE /api/keys/{id}
+```
+
+All three require the `admin` scope. The plaintext of a minted key is returned
+**once**, in the `POST` response, and is never stored — only its SHA-256 digest
+and a short display prefix are persisted. That response carries
+`Cache-Control: no-store`. There is no endpoint that can retrieve it again, so
+a lost key is replaced, not recovered.
+
+`scopes` is required: an omitted or empty set means "unrestricted" to
+`models.Allows`, so minting one that never asked for a wildcard credential is
+refused.
+
+The same `admin` gate covers the principal directory (`/api/people`), because
+the key's `principal_kind` is copied from the people row rather than accepted
+from the request body — otherwise a caller could mint a key claiming to belong
+to a human while pointing at a service account, laundering approval rights.
+
+### Without a database
+
+If no database is reachable, there is no resolver and `API_KEYS` is the only
+credential source; scoped keys are unavailable. The server logs this at startup
+rather than silently degrading.
+
 ## Implementation notes
 
 - **Constant-time comparison.** `internal/middleware/auth.go` compares the
@@ -218,4 +275,4 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/healthz
 
 Through the web UI (which injects the key for you) the same endpoints return
 200 — if a page starts returning `401` after enabling auth, `NUXT_API_KEY` is
-missing or does not match any entry in `API_KEYS`.
+missing, or matches neither an entry in `API_KEYS` nor a live row in `api_keys`.

@@ -8,6 +8,110 @@ import remarkGfm from 'remark-gfm'
 // Path to the main docs folder (relative to docs-site)
 const DOCS_DIR = path.join(process.cwd(), '..', 'docs')
 
+// Directories under docs/ that are not product documentation.
+//
+// `releases/` is the release-note archive: a release note is the historical
+// record of a given version, so it is kept in the repository but is not part of
+// the documentation a visitor is reading to evaluate the product. Excluding the
+// directory rather than three filenames means a future release note needs no
+// edit here.
+const EXCLUDED_DIRS = new Set(['releases'])
+
+// Individual pages under docs/ that must not be published.
+//
+// This is an explicit list on purpose. The alternative — a broad glob such as
+// `*_SUMMARY.md` or `*_REPORT.md` — looks tidier and is wrong: it silently
+// swallows a genuinely new page that happens to match, and nobody notices
+// because a missing page is invisible in a build log. An explicit list forces a
+// deliberate decision per page, and anything genuinely new under docs/ keeps
+// publishing without touching this file.
+//
+// The three groups, and why each is excluded:
+//
+//   1. Superseded attempts. The VS2026_* set targets a `web/src/` tree that no
+//      longer exists; each file carries a SUPERSEDED banner for readers who land
+//      on it directly in the repository, but a visitor arriving from search has
+//      no way to know that before they have read it.
+//   2. Internal work logs — fix reports, verification passes, completion
+//      summaries, file-by-file change lists. These are engineering records of
+//      what we did, written for us, not documentation of the product. They are
+//      the main reason a prospect evaluating the project was reading our
+//      internal process instead of our stack.
+//   3. Superseded draft specifications. A2A_PROTOCOL_FEATURE.md shipped, but
+//      its status line and several stories describe work as future; it is kept
+//      as the design record and carries an implementation-status note.
+const EXCLUDED_FILES = new Set([
+  // 1. Superseded attempts (docs/VS2026_*.md)
+  'VS2026_MCP_SETUP.md',
+  'VS2026_IMPLEMENTATION_GUIDE.md',
+  'VS2026_FEATURE_SUMMARY.md',
+  'VS2026_DOCUMENTATION_INDEX.md',
+  'VS2026_COMPLETION_SUMMARY.md',
+
+  // 2. Internal work logs
+  'AGENTS_PAGE_IMPLEMENTATION.md',
+  'A2A_COMPATIBILITY_FIX.md',
+  'A2A_EXTERNAL_AGENT_TEST_REPORT.md',
+  'API_FIXES_SUMMARY.md',
+  'ARCHITECTURE_SUMMARY.md',
+  'ARCHITECTURE_VERIFICATION.md',
+  'CONTEXT_SHARING_SUMMARY.md',
+  'DASHBOARD_IMPLEMENTATION.md',
+  'DEPLOYMENT_SUCCESS.md',
+  'DELETE_ENDPOINTS_FIX.md',
+  'DOCS_VIEWER_COMPLETE.md',
+  'DUAL_FRONTEND_SUMMARY.md',
+  'FILE_CHANGES.md',
+  'IMPLEMENTATION_SUMMARY.md',
+  'MCP_COMPOSABLE_INTEGRATION_COMPLETE.md',
+  'MCP_ENDPOINTS_FIX.md',
+  'MCP_SETUP_COMPLETION_SUMMARY.md',
+  'MCP_SETUP_VERIFICATION_SUMMARY.md',
+  'MARKDOWN_CONTEXT_SHARING_COMPLETE.md',
+  'MCP_SETUP_REVIEW.md',
+  'MIGRATION_IMPLEMENTATION.md',
+  'NGINX_FIX.md',
+  'README_COMPLETION_REPORT.md',
+  'README_FINAL_STATUS.md',
+  'README_UPDATE_SUMMARY.md',
+  'README_VERIFICATION.md',
+  'REFACTORING_COMPLETE.md',
+  'REFACTORING_SUMMARY.md',
+  'TASK_ASSIGNMENT_FIX.md',
+  'UPDATE_SUMMARY.md',
+  'VALIDATION_REPORT.md',
+  'VERIFICATION_CHECKLIST.md',
+  'VERIFICATION_REPORT_v0.3.5.md',
+  'VUE_ACTUALIZATION_SUMMARY.md',
+  'VUE_SETUP_COMPLETE.md',
+  'VUE_VERIFICATION_REPORT.md',
+  'WEBSOCKET_FIX.md',
+
+  // 3. Superseded draft specifications
+  'A2A_PROTOCOL_FEATURE.md',
+])
+
+/**
+ * Reports whether a file under docs/ is excluded from publication.
+ *
+ * Takes the path relative to DOCS_DIR. Both parts are normalised to forward
+ * slashes because the relative path is built with path.sep, which is a
+ * backslash on Windows — matching on the raw string would silently exclude
+ * nothing on the platform most contributors build on.
+ */
+function isExcluded(relativeToDocs: string): boolean {
+  const normalized = relativeToDocs.split(path.sep).join('/')
+  const segments = normalized.split('/')
+
+  // Check every directory level, so a nested obsolete page is caught too and a
+  // nested *new* page still publishes.
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (EXCLUDED_DIRS.has(segments[i])) return true
+  }
+
+  return EXCLUDED_FILES.has(segments[segments.length - 1])
+}
+
 export interface DocMeta {
   slug: string
   title: string
@@ -25,6 +129,12 @@ export interface DocContent {
 
 /**
  * Get all markdown files from the docs directory recursively
+ *
+ * This is the single choke point for page collection: getAllDocsMeta (the
+ * index, the featured list, the search, and generateStaticParams) and
+ * getDocBySlug all read through here. Applying the exclusion list here means an
+ * excluded page is not listed, not searchable, not statically generated, and
+ * not resolvable by slug — rather than being linked and then 404ing.
  */
 export function getAllDocFiles(): string[] {
   const files: string[] = []
@@ -39,6 +149,7 @@ export function getAllDocFiles(): string[] {
         walkDir(fullPath, baseDir)
       } else if (entry.name.endsWith('.md')) {
         const relativePath = path.relative(baseDir, fullPath)
+        if (isExcluded(relativePath)) continue
         files.push(relativePath)
       }
     }

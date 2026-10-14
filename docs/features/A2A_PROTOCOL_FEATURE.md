@@ -4,7 +4,32 @@
 **Backend:** Go  
 **Version:** 1.0  
 **Date:** 2026-01-23  
-**Status:** Draft
+**Status:** Implemented (inbound task execution deliberately out of scope)
+
+> **Implementation status, verified against source.** This specification is
+> retained as the original design record and is *not* a description of future
+> work — the stories below shipped. What actually exists:
+>
+> - **Outbound delegation works.** `internal/a2a/client` discovers a remote
+>   agent from its card, sends messages, follows and lists tasks, streams
+>   updates over SSE, and reads artifacts; `internal/a2a/mapper` translates
+>   between MCP and A2A models. Covered by
+>   `tests/a2a/external_agent_test.go`.
+> - **Inbound task execution is deliberately not implemented, and says so.** The
+>   task `Manager` is constructed without a `TaskExecutor`, so a submitted
+>   inbound task reaches the terminal `failed` state carrying the explicit reason
+>   `ErrNoExecutor` — "no task executor configured: this deployment does not
+>   execute A2A tasks" (`internal/task/manager.go`). This replaced an earlier
+>   behaviour that echoed the message back and reported `completed`, which told a
+>   remote agent that work had been done when none had. The agent card repeats
+>   the same statement in its `task_submission` skill description
+>   (`internal/a2a/server/agent_card.go`).
+> - Agent Shaker is a **coordination plane, not a runtime**. Assign work to
+>   registered agents through the MCP surface.
+>
+> Note that the A2A task status vocabulary in `internal/a2a/models` is fixed by
+> the protocol and is deliberately separate from `tasks.status` in
+> `internal/models/status.go`.
 
 ---
 

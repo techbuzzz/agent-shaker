@@ -1,5 +1,15 @@
 # 🚀 Agent Shaker v0.3.5 - Production Hardening & Daily Standups
 
+> **⚠️ Superseded in part — the frontend section below no longer describes the
+> product.** This note is the historical record of what shipped in v0.3.5 and is
+> deliberately left otherwise unedited. The **Frontend Implementation** section
+> documents `web/src/views/*.vue`, Pinia stores and a Vue router; that tree has
+> been replaced by the Nuxt 4 application under `web/app/` and is preserved only
+> as `web/.deprecated-spa/`. For the current frontend layout, the deployment
+> topology and the data model, see [ARCHITECTURE.md](../ARCHITECTURE.md) and
+> [API.md](../API.md). Every other section (standups, migrations, API, WebSocket)
+> remains accurate.
+
 **Release Date:** January 27, 2026
 
 ## Overview
