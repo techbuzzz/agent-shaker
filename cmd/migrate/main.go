@@ -76,6 +76,25 @@ func main() {
 
 	switch *cmd {
 	case "up":
+		// Already at the newest migration: say so and exit 0 before calling Up().
+		//
+		// golang-migrate does not handle this cleanly for a forward-only tree.
+		// With no .down.sql files shipped, Up() at the recorded max version walks
+		// to the next version, finds no file, and then tries to build a better
+		// error message by reading the *down* file — which does not exist either.
+		// The result is
+		//
+		//	up: no migration found for version 15: read down for version 15 .: file does not exist
+		//
+		// on a database that is fully migrated and has nothing to apply. Because
+		// the migrate step gates every `docker compose up`, that turned a
+		// no-op deploy into a failed one.
+		if latest, err := latestMigrationVersion(*dir); err == nil {
+			if v, dirty, verr := m.Version(); verr == nil && !dirty && v == latest {
+				fmt.Println(strconv.Quote(*cmd), "succeeded")
+				return
+			}
+		}
 		if *steps > 0 {
 			err = m.Steps(*steps)
 		} else {
@@ -112,6 +131,37 @@ func main() {
 		fatal("%s: %v", *cmd, err)
 	}
 	fmt.Println(strconv.Quote(*cmd), "succeeded")
+}
+
+// latestMigrationVersion returns the highest version present in dir.
+//
+// Used to short-circuit `-cmd up` when the database is already current. It
+// reads the filenames rather than asking golang-migrate, because asking is
+// exactly what fails in the case this guards.
+func latestMigrationVersion(dir string) (uint, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	var latest uint
+	for _, entry := range entries {
+		name := entry.Name()
+		if !migrationFilePattern.MatchString(name) {
+			continue
+		}
+		prefix, _, ok := strings.Cut(name, "_")
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(prefix, 10, 64)
+		if err != nil {
+			continue
+		}
+		if uint(v) > latest {
+			latest = uint(v)
+		}
+	}
+	return latest, nil
 }
 
 // migrationFilePattern matches the only filenames golang-migrate's file source
