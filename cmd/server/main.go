@@ -192,7 +192,7 @@ func main() {
 
 	projectHandler := handlers.NewProjectHandler(projectStore, hub)
 	agentHandler := handlers.NewAgentHandler(agentStore, tasksQueryStore, heartbeatsStore, hub)
-	taskHandler := handlers.NewTaskHandler(tasksQueryStore, hub, dependencyResolver)
+	taskHandler := handlers.NewTaskHandler(tasksQueryStore, agentStore, hub, dependencyResolver)
 	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub)
 	standupHandler := handlers.NewStandupHandler(standupsQueryStore, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)

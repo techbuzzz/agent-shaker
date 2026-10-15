@@ -21,6 +21,9 @@ import (
 type TaskHandler struct {
 	store *queries.TasksStore
 	hub   *websocket.Hub
+	// agents is used to check that an assignee belongs to the task's project
+	// before writing it; see ReassignTask.
+	agents *queries.AgentsStore
 	// resolver promotes dependent tasks when a predecessor finishes. It is nil
 	// when the server runs without a database.
 	resolver *coordination.DependencyResolver
@@ -29,8 +32,8 @@ type TaskHandler struct {
 // NewTaskHandler builds the task handler. The resolver is optional: a server
 // without a database has no dependencies to resolve, and a nil resolver must
 // degrade to "just update the status" rather than panic.
-func NewTaskHandler(store *queries.TasksStore, hub *websocket.Hub, resolver *coordination.DependencyResolver) *TaskHandler {
-	return &TaskHandler{store: store, hub: hub, resolver: resolver}
+func NewTaskHandler(store *queries.TasksStore, agents *queries.AgentsStore, hub *websocket.Hub, resolver *coordination.DependencyResolver) *TaskHandler {
+	return &TaskHandler{store: store, agents: agents, hub: hub, resolver: resolver}
 }
 
 // resolveDependents runs the dependency resolver after a task reaches done.
@@ -242,6 +245,35 @@ func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, fmt.Errorf("invalid request body: %w", err))
 		return
 	}
+
+	// The assignee must be an agent of THIS project.
+	//
+	// Reassign used to write the id straight through. The foreign key on
+	// tasks.assigned_to only proves the agent exists, not that it lives in the
+	// same project — so a task could end up owned by an agent belonging to
+	// another project. Nothing complains at that moment; the damage shows up
+	// later and far away: raising a blocker for that task 404s ("agent not
+	// found"), the dashboard's agent filter hides it, and the agent's own
+	// heartbeat publishes into a project it does not belong to.
+	//
+	// 404 rather than 400, because from this task's point of view the agent is
+	// not reachable — the same language the other project-scoped reads use.
+	task, err := h.store.GetTask(r.Context(), id)
+	if err != nil {
+		if isNotFound(err) {
+			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			return
+		}
+		httpx.WriteError(w, r, err)
+		return
+	}
+	assignee, err := h.agents.GetAgent(r.Context(), req.AssignedTo)
+	if err != nil || assignee.ProjectID != task.ProjectID {
+		httpx.WriteError(w, r, fmt.Errorf("%w: agent %s is not available in project %s",
+			httpx.ErrNotFound, req.AssignedTo, task.ProjectID))
+		return
+	}
+
 	if err := h.store.ReassignTask(r.Context(), id, req.AssignedTo); err != nil {
 		if isNotFound(err) {
 			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
@@ -250,7 +282,7 @@ func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
-	task, err := h.store.GetTask(r.Context(), id)
+	task, err = h.store.GetTask(r.Context(), id)
 	if err != nil {
 		httpx.WriteError(w, r, err)
 		return
