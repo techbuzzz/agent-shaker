@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,16 +19,44 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
 
+// taskStore is the slice of the query layer this handler uses.
+//
+// It exists so the handler can be driven by a fake. The rule that a task may
+// only be assigned to an agent of its own project is exactly the kind of rule
+// that regresses silently — it needs a unit test, and a unit test needs a seam.
+type taskStore interface {
+	Available() bool
+	CreateTask(ctx context.Context, t *models.Task) error
+	ListTasks(ctx context.Context, projectID *uuid.UUID, status string) ([]models.Task, error)
+	GetTask(ctx context.Context, id uuid.UUID) (*models.Task, error)
+	UpdateTask(ctx context.Context, t *models.Task) error
+	UpdateTaskStatus(ctx context.Context, id uuid.UUID, status string) error
+	ReassignTask(ctx context.Context, id uuid.UUID, assignedTo uuid.UUID) error
+	DeleteTask(ctx context.Context, id uuid.UUID) error
+}
+
+// agentLookup is the slice of the agents store needed to validate an assignee.
+type agentLookup interface {
+	GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent, error)
+}
+
 type TaskHandler struct {
-	store *queries.TasksStore
+	store taskStore
 	hub   *websocket.Hub
 	// agents is used to check that an assignee belongs to the task's project
 	// before writing it; see ReassignTask.
-	agents *queries.AgentsStore
+	agents agentLookup
 	// resolver promotes dependent tasks when a predecessor finishes. It is nil
 	// when the server runs without a database.
 	resolver *coordination.DependencyResolver
 }
+
+// Compile-time proof that the real stores still satisfy the seams above. A
+// signature change on either side fails the build here, not at a call site.
+var (
+	_ taskStore   = (*queries.TasksStore)(nil)
+	_ agentLookup = (*queries.AgentsStore)(nil)
+)
 
 // NewTaskHandler builds the task handler. The resolver is optional: a server
 // without a database has no dependencies to resolve, and a nil resolver must
@@ -143,7 +172,7 @@ func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 	task, err := h.store.GetTask(r.Context(), id)
 	if err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
@@ -175,7 +204,7 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	task, err := h.store.GetTask(r.Context(), id)
 	if err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
@@ -211,7 +240,7 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.store.UpdateTaskStatus(r.Context(), id, string(req.Status)); err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
@@ -261,7 +290,7 @@ func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
 	task, err := h.store.GetTask(r.Context(), id)
 	if err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
@@ -276,7 +305,7 @@ func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.store.ReassignTask(r.Context(), id, req.AssignedTo); err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
@@ -303,7 +332,7 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.store.DeleteTask(r.Context(), id); err != nil {
 		if isNotFound(err) {
-			httpx.WriteError(w, r, fmt.Errorf("task not found: %w", err))
+			httpx.WriteError(w, r, fmt.Errorf("%w: task %s not found", httpx.ErrNotFound, id))
 			return
 		}
 		httpx.WriteError(w, r, err)
