@@ -161,7 +161,7 @@ func (h *ContextHandler) GetContext(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid context id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	c, err := h.store.GetContext(r.Context(), id)
@@ -184,7 +184,7 @@ func (h *ContextHandler) UpdateContext(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid context id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.UpdateContextRequest
@@ -231,7 +231,7 @@ func (h *ContextHandler) DeleteContext(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid context id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid context id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	projectID, err := h.store.GetContextProjectID(r.Context(), id)

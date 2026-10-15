@@ -72,9 +72,13 @@ func (s *GlobalContextsStore) List(ctx context.Context, scope models.GlobalConte
 	for rows.Next() {
 		var g models.GlobalContext
 		var scopeStr string
-		if err := rows.Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, pq.Array(&g.Tags), &g.CreatedAt, &g.UpdatedAt); err != nil {
+		// tags is TEXT[], so it scans through pq.StringArray; pq.Array over a
+		// *[]string fails at read time. See contexts.go for the same fix.
+		var tags pq.StringArray
+		if err := rows.Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, &tags, &g.CreatedAt, &g.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan global context: %w", err)
 		}
+		g.Tags = []string(tags)
 		g.Scope = models.GlobalContextScope(scopeStr)
 		out = append(out, g)
 	}
@@ -88,16 +92,18 @@ func (s *GlobalContextsStore) List(ctx context.Context, scope models.GlobalConte
 func (s *GlobalContextsStore) Get(ctx context.Context, id uuid.UUID) (*models.GlobalContext, error) {
 	var g models.GlobalContext
 	var scopeStr string
+	var tags pq.StringArray
 	err := s.q.QueryRowContext(ctx, `
 		SELECT id, scope, project_id, agent_id, title, content, tags, created_at, updated_at
 		FROM global_contexts WHERE id = $1
-	`, id).Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, pq.Array(&g.Tags), &g.CreatedAt, &g.UpdatedAt)
+	`, id).Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, &tags, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("global context %s not found", id)
 		}
 		return nil, fmt.Errorf("select global context: %w", err)
 	}
+	g.Tags = []string(tags)
 	g.Scope = models.GlobalContextScope(scopeStr)
 	return &g, nil
 }
@@ -107,16 +113,18 @@ func (s *GlobalContextsStore) Get(ctx context.Context, id uuid.UUID) (*models.Gl
 func (s *GlobalContextsStore) GetByGlobalTitle(ctx context.Context, title string) (*models.GlobalContext, error) {
 	var g models.GlobalContext
 	var scopeStr string
+	var tags pq.StringArray
 	err := s.q.QueryRowContext(ctx, `
 		SELECT id, scope, project_id, agent_id, title, content, tags, created_at, updated_at
 		FROM global_contexts WHERE scope = 'global' AND title = $1
-	`, title).Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, pq.Array(&g.Tags), &g.CreatedAt, &g.UpdatedAt)
+	`, title).Scan(&g.ID, &scopeStr, &g.ProjectID, &g.AgentID, &g.Title, &g.Content, &tags, &g.CreatedAt, &g.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("global context %q not found", title)
 		}
 		return nil, fmt.Errorf("select global context by title: %w", err)
 	}
+	g.Tags = []string(tags)
 	g.Scope = models.GlobalContextScope(scopeStr)
 	return &g, nil
 }

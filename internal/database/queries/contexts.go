@@ -61,9 +61,15 @@ func (s *ContextsStore) ListContexts(ctx context.Context, projectID uuid.UUID, t
 	var out []models.Context
 	for rows.Next() {
 		var c models.Context
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, pq.Array(&c.Tags), &c.CreatedAt, &c.UpdatedAt); err != nil {
+		// tags is a TEXT[] column, so it has to be scanned through
+		// pq.StringArray. pq.Array(&c.Tags) — a *[]string — builds a generic
+		// array over the slice value and fails at read time with "scanning to
+		// string is not implemented", turning the whole contexts list into a 500.
+		var tags pq.StringArray
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, &tags, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan context: %w", err)
 		}
+		c.Tags = []string(tags)
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -74,16 +80,18 @@ func (s *ContextsStore) ListContexts(ctx context.Context, projectID uuid.UUID, t
 
 func (s *ContextsStore) GetContext(ctx context.Context, id uuid.UUID) (*models.Context, error) {
 	var c models.Context
+	var tags pq.StringArray
 	err := s.q.QueryRowContext(ctx, `
 		SELECT id, project_id, agent_id, task_id, title, content, tags, created_at, updated_at
 		FROM contexts WHERE id = $1
-	`, id).Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, pq.Array(&c.Tags), &c.CreatedAt, &c.UpdatedAt)
+	`, id).Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, &tags, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("context %s not found", id)
 		}
 		return nil, fmt.Errorf("select context: %w", err)
 	}
+	c.Tags = []string(tags)
 	return &c, nil
 }
 
@@ -184,9 +192,11 @@ func (s *ContextsStore) SearchContexts(ctx context.Context, projectID uuid.UUID,
 	var out []models.Context
 	for rows.Next() {
 		var c models.Context
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, pq.Array(&c.Tags), &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var tags pq.StringArray
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.AgentID, &c.TaskID, &c.Title, &c.Content, &tags, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan context: %w", err)
 		}
+		c.Tags = []string(tags)
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {

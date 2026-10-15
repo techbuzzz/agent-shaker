@@ -85,7 +85,7 @@ func (h *ProjectHandler) GetProject(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid project id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid project id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	project, err := h.store.GetProject(r.Context(), id)

@@ -67,15 +67,22 @@ func ValidateCreateTaskRequest(req *models.CreateTaskRequest) error {
 // ValidateUpdateTaskRequest validates task update request
 func ValidateUpdateTaskRequest(req *models.UpdateTaskRequest) error {
 	if !models.IsValidTaskStatus(string(req.Status)) {
-		return ErrInvalidStatus
+		return fmt.Errorf("%w: invalid status %q; must be one of: %s",
+			ErrInvalidStatus, req.Status, models.JoinValues(models.AllTaskStatuses))
 	}
 	return nil
 }
 
-// ValidateUpdateAgentStatusRequest validates agent status update request
+// ValidateUpdateAgentStatusRequest validates agent status update request.
+//
+// The message names the accepted values and the one it was given. A bare
+// "invalid status value" leaves the caller with nothing to act on, and this
+// error is rendered verbatim in the UI — the same reasoning as JoinValues on
+// the MCP surface, where the vocabulary has to be discoverable from the failure.
 func ValidateUpdateAgentStatusRequest(req *models.UpdateAgentStatusRequest) error {
 	if !models.IsValidAgentStatus(req.Status) {
-		return ErrInvalidStatus
+		return fmt.Errorf("%w: invalid status %q; must be one of: %s",
+			ErrInvalidStatus, req.Status, models.JoinValues(models.AllAgentStatuses))
 	}
 	return nil
 }

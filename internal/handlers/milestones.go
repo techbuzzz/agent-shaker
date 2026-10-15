@@ -109,7 +109,7 @@ func (h *MilestoneHandler) GetMilestone(w http.ResponseWriter, r *http.Request) 
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid milestone id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid milestone id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	m, err := h.store.Get(r.Context(), id)
@@ -126,7 +126,7 @@ func (h *MilestoneHandler) UpdateMilestoneStatus(w http.ResponseWriter, r *http.
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid milestone id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid milestone id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.UpdateMilestoneRequest
@@ -175,7 +175,7 @@ func (h *MilestoneHandler) DeleteMilestone(w http.ResponseWriter, r *http.Reques
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid milestone id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid milestone id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	// Look up first so we know where to broadcast.

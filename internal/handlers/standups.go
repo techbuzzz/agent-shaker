@@ -92,7 +92,7 @@ func (h *StandupHandler) GetStandup(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid standup id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid standup id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	st, err := h.store.GetStandup(r.Context(), id)
@@ -115,7 +115,7 @@ func (h *StandupHandler) UpdateStandup(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid standup id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid standup id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.UpdateStandupRequest
@@ -154,7 +154,7 @@ func (h *StandupHandler) DeleteStandup(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid standup id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid standup id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	if err := h.store.DeleteStandup(r.Context(), id); err != nil {
@@ -200,7 +200,7 @@ func (h *StandupHandler) GetAgentHeartbeats(w http.ResponseWriter, r *http.Reque
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid agent id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	since := time.Now().Add(-24 * time.Hour)

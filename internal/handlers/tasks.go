@@ -137,7 +137,7 @@ func (h *TaskHandler) GetTask(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid task id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid task id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	task, err := h.store.GetTask(r.Context(), id)
@@ -160,7 +160,7 @@ func (h *TaskHandler) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid task id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid task id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.CreateTaskRequest
@@ -201,7 +201,7 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid task id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid task id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.UpdateTaskRequest
@@ -237,7 +237,7 @@ func (h *TaskHandler) ReassignTask(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid task id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid task id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.ReassignTaskRequest
@@ -298,7 +298,7 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid task id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid task id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	if err := h.store.DeleteTask(r.Context(), id); err != nil {

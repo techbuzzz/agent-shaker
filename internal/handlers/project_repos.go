@@ -86,7 +86,7 @@ func (h *ProjectRepoHandler) GetRepo(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid repo id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid repo id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	repo, err := h.store.Get(r.Context(), id)
@@ -101,7 +101,7 @@ func (h *ProjectRepoHandler) UpdateRepo(w http.ResponseWriter, r *http.Request) 
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid repo id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid repo id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.CreateProjectRepoRequest
@@ -139,7 +139,7 @@ func (h *ProjectRepoHandler) DeleteRepo(w http.ResponseWriter, r *http.Request) 
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid repo id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid repo id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	pid, err := h.store.GetProjectID(r.Context(), id)

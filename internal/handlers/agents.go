@@ -99,7 +99,7 @@ func (h *AgentHandler) GetAgent(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid agent id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	agent, err := h.store.GetAgent(r.Context(), id)
@@ -122,7 +122,7 @@ func (h *AgentHandler) UpdateAgentStatus(w http.ResponseWriter, r *http.Request)
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid agent id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 	var req models.UpdateAgentStatusRequest
@@ -159,7 +159,7 @@ func (h *AgentHandler) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	vars := muxVars(r)
 	id, err := uuid.Parse(vars["id"])
 	if err != nil {
-		httpx.WriteError(w, r, fmt.Errorf("invalid agent id: %w", err))
+		httpx.WriteError(w, r, fmt.Errorf("%w: invalid agent id: %v", httpx.ErrBadRequest, err))
 		return
 	}
 
