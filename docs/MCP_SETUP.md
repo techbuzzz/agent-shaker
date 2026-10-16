@@ -1,23 +1,45 @@
 # Connecting an AI agent (MCP setup)
 
 Agent Shaker is only useful if agents can actually reach it. This is how you
-connect one — Copilot, Claude, or any MCP host — to a project.
+connect one — Claude Code, Codex, Cursor, Copilot, or any MCP host — to a
+project.
 
-The UI has a generator for this: open a project, then **Connect an AI agent →
-Get config**. It produces four files you commit to the agent's repository.
+There are two halves to it, and they are separable on purpose:
+
+1. **The configuration** — which file goes where, and which URL it points at.
+   Generated for one agent by `GET /api/agents/{id}/config`.
+2. **The credential** — a key bound to that agent.
+   Issued by `POST /api/agents/{id}/connection`, shown once.
+
+In the UI they are one flow: **Agents → an agent → the plug icon → Create
+connection**. You get the files and the key together, and the key is copied into
+the file in your browser.
 
 > **Status:** implemented. The `docs/VS2026_*.md` set describes an earlier
 > attempt that targeted the pre-Nuxt `web/src/` tree and never reached the
 > backend or the UI; it is superseded by this document.
 
-## The four generated files
+## Choosing the tool
 
-| File | Read by | Purpose |
-| --- | --- | --- |
-| `.mcp.json` | Visual Studio 2026, MCP hosts using this convention | The server connection |
-| `.vscode/mcp.json` | Visual Studio Code | Same, under VS Code's `servers` key |
-| `.github/copilot-instructions.md` | GitHub Copilot | Explains what the server is for and how to work with it |
-| `AGENT_SHAKER_SETUP.md` | Humans | Step-by-step setup and how to verify the connection |
+Every agent has a `tool_type` — the client it runs in — set at registration.
+That field is what picks the file layout, so "the file we told you to write" and
+"what this agent actually is" cannot drift apart.
+
+| `tool_type` | File generated |
+| --- | --- |
+| `claude-code` | `.claude/mcp.json` |
+| `codex` | `~/.codex/mcp.json` (user-level — Codex has no per-project config) |
+| `cursor` | `.cursor/mcp.json` |
+| anything else | `.mcp.json`, the convention most MCP hosts read |
+
+OpenCode, Windsurf and both Copilot surfaces are recognised values without a
+dedicated layout yet; those agents get the generic file, which connects. They
+are Phase 3 and Phase 4 work.
+
+Alongside the config, the generator emits `AGENT_SHAKER.md`: how the agent is
+expected to work with the server. It is not decoration — the most common real
+failure is not a broken connection but a *working* one in which the agent never
+calls `send_heartbeat`, because nothing told it a lease existed.
 
 ## The API key is referenced, never embedded
 
@@ -33,19 +55,21 @@ to the agent's repository, and a literal key in a tracked file is a leaked key.
 The operator sets the variable in the agent's environment:
 
 ```bash
-export AGENT_SHAKER_API_KEY=<one of the server's API_KEYS values>
+export AGENT_SHAKER_API_KEY=<the key issued for this agent>
 ```
 
 Keep it in the shell or a git-ignored `.env` — never in a tracked file.
 
-This is also why the UI has no "paste your key" field. The SPA cannot obtain a
-key (it is server-only runtimeConfig), and a form that accepts a live secret is
-one XSS away from exfiltrating it. Generating a reference instead keeps the
-secret entirely out of the browser.
+This holds even in the connection modal, where the plaintext *is* present in the
+browser: **Copy** substitutes it into the file you are about to paste, and
+**Download** deliberately keeps the placeholder, so the file you save is still
+safe to commit. The plaintext lives in one ref for as long as the modal is open
+and is dropped when it closes — the server keeps only a hash and cannot return
+it again.
 
 ## How the connection is scoped
 
-The generated URL binds the project, and optionally the agent:
+The generated URL binds the project and the agent:
 
 ```
 https://<your-host>/mcp?project_id=<uuid>&agent_id=<uuid>
@@ -56,21 +80,38 @@ The Go handler reads `project_id` / `agent_id` from the query string (or the
 without the agent restating its identity on every call — `get_my_tasks` returns
 "my" tasks because the connection says who "my" is.
 
-Leave the agent unbound if the agent should call `register_self` on first
-connect.
+### The URL identity is a claim, not the identity
 
-### Why the URL is derived from the browser origin
+With a key issued for an agent, the **`agent_id` in the URL is checked, not
+believed**. The key names the agent; a URL naming somebody else is refused with
+a 403:
 
-The generator reads `window.location.origin` rather than a configured value.
-That is what makes one config correct in every topology: with the TLS edge the
-browser origin *is* the public origin, and without it the browser origin is the
-Nuxt service. Either way the agent is pointed somewhere reachable from outside
-the container.
+```
+403  agent identity does not match the credential: this credential is bound to
+     agent <uuid>; drop the agent_id from the connection URL
+```
+
+That rule is the reason the connection exists at all. A key scoped only to a
+project, plus an `agent_id` in a query string, let any holder of that key act as
+any agent in the project.
+
+A key with **no** agent binding — every key issued before this existed, and the
+`API_KEYS` shared secrets — still supplies `agent_id` in the URL and is still
+trusted, which is what keeps existing setups working. See
+[AUTHENTICATION.md](./AUTHENTICATION.md).
+
+### Where the URL comes from
+
+The origin is resolved server-side: `BASE_URL` if set, otherwise the request's
+own hop honouring `X-Forwarded-Proto` / `X-Forwarded-Host`, otherwise the
+request's scheme and host. An agent runs outside the compose network, so a
+config advertising `localhost:8080` would send it to a dead address. Set
+`BASE_URL` for a deployment exposed directly to the internet.
 
 ## Verifying the connection
 
 ```bash
-curl -sS -X POST "https://<your-host>/mcp?project_id=<uuid>" \
+curl -sS -X POST "https://<your-host>/mcp?project_id=<uuid>&agent_id=<uuid>" \
   -H "Authorization: Bearer $AGENT_SHAKER_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
@@ -81,17 +122,21 @@ Expected: a JSON-RPC result naming `agent-shaker` as the server.
 | Symptom | Cause |
 | --- | --- |
 | `401` | Wrong or unset key |
+| `403` + "agent identity does not match" | The key is bound to a different agent than the URL names. Drop `agent_id` from the URL, or use the key issued for that agent |
 | `404` | The edge is not routing `/mcp` — that path is only published under the `tls` profile. See [DEPLOYMENT.md](./DEPLOYMENT.md) |
 | Connection refused | `mcp-server` publishes no host port; go through the edge |
 
 ## The tools an agent gets
 
-`tools/list` returns 28. The generated Copilot instructions group them:
+`tools/list` returns 28. The generated instructions group them:
 
 - **Orientation** — `get_my_identity`, `get_my_project`
-- **Working on tasks** — `get_my_tasks`, `claim_task`, `complete_task`, `reassign_task`, `update_my_status`
+- **Working on tasks** — `get_my_tasks`, `claim_task`, `complete_task`, `complete_task_with_handoff`, `reassign_task`, `update_my_status`
+- **Staying visible** — `send_heartbeat`
+- **Blocked** — `raise_blocker`, `check_blocker_status`, `get_my_blockers`
+- **Dependencies** — `add_task_dependency`, `get_task_dependencies`
 - **Tasks and planning** — `list_tasks`, `create_task`, `update_task_status`, `get_dashboard`, `list_milestones`, `create_milestone`, `assign_task_to_milestone`
-- **Shared knowledge** — `list_contexts`, `add_context`, `list_global_contexts`, `read_global_context`, `publish_global_context`
+- **Shared knowledge** — `list_contexts`, `search_contexts`, `add_context`, `list_global_contexts`, `read_global_context`, `publish_global_context`
 - **Other agents** — `discover_a2a_agent`, `delegate_to_a2a_agent`, `get_a2a_task_status`
 - **Onboarding** — `register_self`
 
@@ -106,14 +151,23 @@ here because it is the intended usage:
 1. `get_my_identity` — confirm the connection is bound as expected.
 2. `get_my_tasks` — see what is assigned.
 3. `claim_task` — mark it in progress so other agents can see.
-4. Do the work.
-5. `complete_task` — report back.
-6. `update_my_status` — flag being blocked or waiting.
+4. Do the work, sending `send_heartbeat` throughout.
+5. `complete_task_with_handoff` — report back, passing on context if it helps.
+6. `raise_blocker` the moment you are stuck. Silence is not a report.
 7. `list_contexts` before deciding, `add_context` after — so the next agent
    inherits the reasoning.
 
 Live updates also arrive over the app's WebSocket. MCP is for *acting*; the UI
 is for *watching*.
+
+## Rotating a key
+
+Mint a new one from the agent's Connect action, update the agent's environment,
+then revoke the old key (**Access**). Minting is not idempotent — a retry after a
+timeout leaves a second valid credential, so revoke the one you did not use.
+
+Revoking takes effect on the agent's very next call; the credential cache is
+invalidated rather than waited out.
 
 ## Relationship to A2A
 
@@ -124,10 +178,17 @@ agent it knows nothing about.
 
 ## Implementation
 
-- Generator: `web/app/composables/useMcpSetup.ts` (pure builders, no Vue
-  dependency in the generation path)
-- UI: `web/app/components/domain/McpSetupModal.vue`
-- Wiring: the project detail page, plus a persistent call-to-action above the
-  tabs
-- Server side: `internal/mcp/handler.go` (tool surface) and
-  `cmd/server/routes.go` (routing and auth)
+- Generator: `internal/configgen` — pure, no database and no HTTP, and the
+  single source of truth for a generated file's contents
+- Endpoints: `internal/handlers/agent_config.go`
+  (`GET /api/agents/{id}/config`, `POST /api/agents/{id}/connection`)
+- Origin resolution: `internal/publicurl`, shared with the A2A agent card
+- Identity rule: `internal/mcp/handler.go` (`resolveIdentity`,
+  `applyPrincipalIdentity`)
+- UI: `web/app/components/domain/AgentConnectionModal.vue` (issue a
+  connection), `McpSetupModal.vue` (fetch and download the files)
+- Secret substitution in the browser:
+  `web/app/composables/useAgentConfig.ts` — `split`/`join`, never
+  `String.replace`, because the placeholder contains `$` and `$&` / `` $` ``
+  would be interpreted as substitution patterns
+- Routing and scopes: `cmd/server/routes.go`

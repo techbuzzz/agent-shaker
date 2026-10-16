@@ -10,6 +10,8 @@ import type {
   Project, Agent, Task, Context, Standup, Heartbeat, DashboardStats,
   CreateProjectInput, UpdateProjectStatusInput,
   CreateAgentInput, UpdateAgentStatusInput,
+  // Federation Phase 2 (migrations/017)
+  AgentConfigResponse, AgentConnectionInput, AgentConnectionResponse, ConfigFormat,
   CreateTaskInput, UpdateTaskInput, UpdateTaskStatusInput, ReassignTaskInput,
   CreateContextInput, CreateStandupInput, CreateHeartbeatInput,
   // Mesh-app additions — Phase 1/2/3
@@ -56,6 +58,21 @@ export interface UseApi {
   createAgent: (input: CreateAgentInput) => Promise<Agent>
   updateAgentStatus: (id: string, status: UpdateAgentStatusInput['status']) => Promise<Agent>
   deleteAgent: (id: string) => Promise<void>
+  /**
+   * GET /api/agents/{id}/config — the generated MCP files for one agent.
+   *
+   * `format` is optional; omitted, the server picks the layout matching the
+   * agent's tool_type, which is the whole reason that field exists.
+   */
+  getAgentConfig: (id: string, format?: ConfigFormat) => Promise<AgentConfigResponse>
+  /**
+   * POST /api/agents/{id}/connection — mints a credential bound to this agent
+   * and returns it, once, along with the rendered files.
+   *
+   * NOT idempotent: a retry mints a second credential. The caller is expected to
+   * warn before sending and to revoke the unused one.
+   */
+  mintAgentConnection: (id: string, input?: AgentConnectionInput) => Promise<AgentConnectionResponse>
   // Tasks
   listTasks: (filters?: { project_id?: string; status?: string; priority?: string; assigned_to?: string; agent_id?: string }) => Promise<Task[]>
   getTask: (id: string) => Promise<Task>
@@ -222,6 +239,10 @@ export function useApi(): UseApi {
     createAgent:         (input)      => request<Agent>('/agents', { method: 'POST', body: input }),
     updateAgentStatus:   (id, s)      => request<Agent>(`/agents/${id}/status`, { method: 'PUT', body: { status: s } }),
     deleteAgent:         async (id) => { await request<void>(`/agents/${id}`, { method: 'DELETE' }) },
+    getAgentConfig:      (id, format) => request<AgentConfigResponse>(`/agents/${id}/config`,
+      { params: toParams({ format }) }),
+    mintAgentConnection: (id, input = {}) => request<AgentConnectionResponse>(`/agents/${id}/connection`,
+      { method: 'POST', body: input }),
 
     listTasks:           (filters = {}) => request<Task[]>('/tasks', { params: toParams(filters) }),
     getTask:             (id)            => request<Task>(`/tasks/${id}`),

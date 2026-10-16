@@ -176,6 +176,48 @@ grades every non-safe HTTP method as needing `write`, and
 `RequireScopeOnPaths(ScopeAdmin, "/api/keys", "/api/people")` gates the
 administrative surface regardless of method.
 
+### One key, one agent
+
+A key may additionally name an agent (`api_keys.agent_id`, migration 017). When
+it does, **that binding is the identity on the MCP surface** — the `agent_id` in
+the connection URL becomes a claim to be checked rather than a fact to be
+believed.
+
+The rule this replaces: a key was scoped to a principal and optionally a project,
+and the MCP handler read `agent_id` straight out of the query string without
+authenticating it. Any holder of a project key could therefore act as any agent
+in that project — claiming their tasks, heartbeating on their behalf, completing
+work nobody assigned them. `get_my_identity` reported whatever the URL said, which
+made the answer actively misleading.
+
+Precedence, in full:
+
+| Key is bound to | URL / `X-Agent-ID` says | Result |
+|---|---|---|
+| agent A | *(omitted)* | Acts as A |
+| agent A | agent A | Acts as A |
+| agent A | agent B | **Rejected**, HTTP 403 |
+| *nothing* | anything | Trusts the URL — unchanged behaviour |
+
+The last row is the compatibility guarantee and it covers everything: every key
+issued before migration 017, the `API_KEYS` shared secrets, and auth-disabled
+development. None of them carries a binding, so all of them keep working exactly
+as before.
+
+A rejection is a 403, not a 401 — the credential was valid and accepted for
+authentication; what it may not do is act as that agent. Answering 401 would send
+the client off to fetch a different key, which produces the same refusal.
+
+**Issuing one:** `POST /api/agents/{id}/connection`. The scopes are fixed at
+`read` + `write`; `admin` is never granted to an agent, because that scope mints
+credentials and would let an agent mint a key for another agent and impersonate
+it — the exact thing the binding exists to prevent.
+
+`agent_id` is immutable once set: no endpoint re-binds a key, so a principal
+cached by the resolver can never be stale in this field. Deleting an agent
+cascades to its credentials, which is deliberate — a live key pointing at a row
+that no longer exists would let a heartbeat create work nobody is tracking.
+
 **Which path runs.** When the service can reach a database, the resolver is the
 authority for any credential it recognises. A credential it does not recognise
 falls back to the `API_KEYS` list — that fallback is what keeps a deployment

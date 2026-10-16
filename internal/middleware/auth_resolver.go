@@ -184,6 +184,12 @@ func (r *StoreKeyResolver) ResolveKey(ctx context.Context, presented string) (Pr
 		DisplayName: principalName(key),
 		Scopes:      key.Scopes,
 		ProjectID:   key.ProjectID,
+		// The agent binding, when the key has one. Copied by value rather than
+		// by reference to the row's pointer: the row is a fresh allocation per
+		// lookup, but the cached principal outlives it and outlives every caller
+		// of ResolveKey, so the pointer it holds must not alias anything that
+		// can be written to later.
+		AgentID: copyUUID(key.AgentID),
 	}
 	r.cache.put(digest, principal, nil, r.ttl)
 
@@ -216,6 +222,20 @@ func principalName(key *models.APIKey) string {
 		return "unknown principal"
 	}
 	return string(key.PrincipalType) + " principal"
+}
+
+// copyUUID returns a pointer to a fresh copy of id, or nil.
+//
+// The null case is the load-bearing one: an unbound key must carry a nil
+// AgentID, not a pointer to uuid.Nil, because "this credential names no agent"
+// and "this credential names the zero uuid" are different statements and only
+// the first is true.
+func copyUUID(id *uuid.UUID) *uuid.UUID {
+	if id == nil {
+		return nil
+	}
+	c := *id
+	return &c
 }
 
 // resolverCache is a bounded, TTL'd map of digest to decision.

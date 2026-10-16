@@ -107,9 +107,17 @@ Register a new agent.
   "project_id": "uuid (required)",
   "name": "string (required)",
   "role": "string (optional)",
-  "team": "string (optional)"
+  "team": "string (optional)",
+  "tool_type": "string (optional)"
 }
 ```
+
+`tool_type` is which client this agent runs in, and it decides which
+configuration file is generated for it. It is optional and defaults to
+`unknown`, so a client that predates the field keeps working. Accepted values:
+`claude-code`, `codex`, `opencode`, `copilot-cli`, `copilot-vs`, `cursor`,
+`windsurf`, `a2a`, `generic-mcp`, `unknown`. An unrecognised value is a 400
+listing the accepted ones.
 
 **Response:**
 ```json
@@ -120,10 +128,102 @@ Register a new agent.
   "role": "string",
   "team": "string",
   "status": "active",
+  "tool_type": "claude-code",
   "last_seen": "timestamp",
   "created_at": "timestamp"
 }
 ```
+
+---
+
+#### GET /api/agents/{id}/config
+
+Render the MCP configuration for one agent.
+
+**URL Parameters:**
+- `id` (uuid) - Agent ID
+
+**Query Parameters:**
+- `format` (string, optional) - `claude`, `codex`, `cursor` or `generic`.
+  Omitted, the layout matching the agent's `tool_type` is rendered.
+
+**Response:**
+```json
+{
+  "agent": { "id": "uuid", "tool_type": "claude-code" },
+  "format": "claude",
+  "files": [
+    {
+      "format": "claude",
+      "filename": ".claude/mcp.json",
+      "target": "",
+      "description": "Claude Code reads this from the project directory or ~/.claude",
+      "content": "{ \"mcpServers\": { ... } }",
+      "install": ""
+    }
+  ],
+  "env_var": "AGENT_SHAKER_API_KEY",
+  "endpoints": { "mcp": "https://shaker.example.com/mcp?project_id=...&agent_id=..." }
+}
+```
+
+**No credential appears in the response.** Every rendered file references
+`${env:AGENT_SHAKER_API_KEY}` instead, which is what makes a downloaded file safe
+to commit. The plaintext lives only in the `POST .../connection` response below.
+
+Requires the `read` scope. An unsupported `format` is a 400 whose message
+enumerates the formats this server supports.
+
+---
+
+#### POST /api/agents/{id}/connection
+
+Issue a credential bound to one agent, and render its configuration.
+
+**URL Parameters:**
+- `id` (uuid) - Agent ID
+
+**Request Body:**
+```json
+{ "format": "claude" }
+```
+
+Both the body and the `format` field are optional.
+
+**Response (201):**
+```json
+{
+  "key": {
+    "id": "uuid",
+    "key_prefix": "ask_abcdefgh",
+    "principal_id": "uuid",
+    "agent_id": "uuid",
+    "scopes": ["read", "write"],
+    "secret": "ask_..."
+  },
+  "agent": { "id": "uuid" },
+  "format": "claude",
+  "files": [ { "filename": ".claude/mcp.json", "content": "..." } ]
+}
+```
+
+`key.secret` is the **only** copy of the plaintext that will ever exist: the
+server keeps a SHA-256 hash and cannot return the secret again. The response is
+sent with `Cache-Control: no-store`.
+
+Properties worth knowing before calling it:
+
+- The credential is bound to this agent. On the MCP surface the binding is
+  authoritative - a connection URL carrying a *different* `agent_id` is rejected
+  with HTTP 403 rather than believed. See
+  [AUTHENTICATION.md](./AUTHENTICATION.md).
+- Scopes are fixed at `read` + `write`. The `admin` scope mints and revokes
+  credentials, and is never granted to an agent - otherwise an agent could mint a
+  key for any other agent and impersonate it, which is what the binding prevents.
+- The key's project is taken from the agent row, not from the request.
+- **Not idempotent.** One POST is one credential. A retry after a network timeout
+  produces a second key; revoke the unused one with `DELETE /api/keys/{id}`.
+- Requires the `write` scope.
 
 ---
 
@@ -144,6 +244,7 @@ List agents in a project.
     "role": "string",
     "team": "string",
     "status": "string",
+    "tool_type": "string",
     "last_seen": "timestamp",
     "created_at": "timestamp"
   }

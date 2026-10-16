@@ -24,6 +24,7 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
@@ -253,6 +254,77 @@ func (h *MCPHandler) extractContext(r *http.Request) MCPContext {
 	return ctx
 }
 
+// ErrAgentIdentityMismatch is returned when a credential bound to one agent is
+// used with a different agent_id in the connection URL.
+//
+// A distinct error rather than a formatted string, because the handler has to
+// branch on it and because its absence is the whole point: before migration 017
+// the requested id was simply believed, so any holder of a project key could
+// act as any agent in that project — claiming their tasks, heartbeating on
+// their behalf, completing work nobody assigned them.
+var ErrAgentIdentityMismatch = errors.New("agent identity does not match the credential")
+
+// resolveIdentity decides which agent a call acts as.
+//
+// `bound` is the agent the presented credential is bound to, or nil when the
+// credential names no agent. `requested` is the agent_id the caller put in the
+// connection URL or an X-Agent-ID header.
+//
+// The four cases, and why each is what it is:
+//
+//	bound set,  requested empty  → the bound agent. A URL that omits the id is
+//	                                  not a disagreement.
+//	bound set,  requested equal  → the bound agent.
+//	bound set,  requested other  → rejected. This is the impersonation attempt.
+//	bound nil,  requested any    → requested, unchanged. Every key issued before
+//	                                  migration 017, the legacy flat API_KEYS
+//	                                  secret and the auth-disabled development
+//	                                  mode all land here, and they keep working.
+//
+// The nil case is the compatibility guarantee, and it is why this takes a
+// pointer rather than a value: "bound to the zero uuid" is not a state any row
+// can be in.
+func resolveIdentity(bound *uuid.UUID, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if bound == nil {
+		return requested, nil
+	}
+
+	// A requested value that is not a UUID cannot name the same agent as the
+	// binding, so it is a mismatch rather than something to pass through and
+	// fail on later — and the comparison is textual for the same reason: the
+	// bound side is authoritative, so the caller has to spell it exactly.
+	if requested == "" {
+		return bound.String(), nil
+	}
+	if strings.EqualFold(requested, bound.String()) {
+		return bound.String(), nil
+	}
+	return "", fmt.Errorf("%w: this credential is bound to agent %s; drop the agent_id from the connection URL, or use the key issued for %s",
+		ErrAgentIdentityMismatch, bound, bound)
+}
+
+// applyPrincipalIdentity narrows ctx to the agent the credential is bound to.
+//
+// Called before any tool runs, so every identity-aware tool — get_my_identity,
+// get_my_tasks, claim_task, send_heartbeat, the blocker tools — inherits the
+// same answer without each of them having to know the binding exists. A request
+// that arrives with no principal (a route wired outside the auth chain) is left
+// alone: that is a wiring bug the scope middleware already reports, and
+// silently becoming "no agent" here would hide it behind a working tool call.
+func applyPrincipalIdentity(ctx *MCPContext, p middleware.Principal) error {
+	agentID, bound := p.AgentIdentity()
+	if !bound {
+		return nil
+	}
+	resolved, err := resolveIdentity(&agentID, ctx.AgentID)
+	if err != nil {
+		return err
+	}
+	ctx.AgentID = resolved
+	return nil
+}
+
 // HandleMCP handles the main MCP endpoint with SSE support
 func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 	// Set CORS headers
@@ -280,6 +352,24 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 
 	// Extract context from URL/headers
 	ctx := h.extractContext(r)
+
+	// Bind the agent identity before anything else looks at it. A credential
+	// that names an agent must not be able to act as a different one by putting
+	// a different id in the query string, and every identity-aware tool reads
+	// ctx.AgentID, so the check has to happen once here rather than in each of
+	// them.
+	if principal, ok := middleware.PrincipalFromContext(r.Context()); ok {
+		if err := applyPrincipalIdentity(&ctx, principal); err != nil {
+			slog.WarnContext(r.Context(), "rejecting mcp request",
+				"error", err,
+				"requested_agent_id", ctx.AgentID,
+				"principal_id", principal.ID.String(),
+			)
+			writeIdentityMismatch(w, r, err)
+			return
+		}
+	}
+
 	if ctx.ProjectID != "" || ctx.AgentID != "" {
 		slog.InfoContext(r.Context(), "mcp server info requested", "project_id", ctx.ProjectID, "agent_id", ctx.AgentID)
 	}
@@ -2928,14 +3018,20 @@ func (h *MCPHandler) executeGetMyIdentity(ctx MCPContext) (string, bool) {
 		if h.db != nil {
 			var name, role, status string
 			var projectID interface{}
-			err := h.db.QueryRow("SELECT name, role, status, project_id FROM agents WHERE id = $1", ctx.AgentID).
-				Scan(&name, &role, &status, &projectID)
+			var toolType string
+			err := h.db.QueryRow("SELECT name, role, status, project_id, tool_type FROM agents WHERE id = $1", ctx.AgentID).
+				Scan(&name, &role, &status, &projectID, &toolType)
 			if err == nil {
 				identity["agent"] = map[string]interface{}{
 					"name":       name,
 					"role":       role,
 					"status":     status,
 					"project_id": projectID,
+					// Which client this agent is. An agent asking who it is is
+					// often checking that it was connected with the right
+					// generated config, and the tool type is the part of that
+					// answer a human cannot read off a UUID.
+					"tool_type": toolType,
 				}
 			}
 		}

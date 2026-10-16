@@ -17,6 +17,10 @@ var (
 	ErrInvalidStatus    = errors.New("invalid status value")
 	ErrInvalidProjectID = errors.New("project_id is required")
 	ErrInvalidAgentID   = errors.New("agent_id is required")
+	// ErrInvalidToolType wraps models.ErrUnknownToolType, whose message already
+	// enumerates the accepted values. Declared here so the HTTP layer can tell
+	// this apart from a malformed field without inspecting prose.
+	ErrInvalidToolType = errors.New("invalid tool_type")
 )
 
 // ValidateCreateProjectRequest validates project creation request
@@ -40,6 +44,14 @@ func ValidateCreateAgentRequest(req *models.CreateAgentRequest) error {
 	}
 	if req.ProjectID.String() == "00000000-0000-0000-0000-000000000000" {
 		return ErrInvalidProjectID
+	}
+	// Parsed rather than merely range-checked, so an unrecognised value is
+	// refused at the boundary with a message listing what is accepted, instead
+	// of reaching the agents_tool_type_check constraint and surfacing as a 500
+	// naming a database constraint. Empty is legal and normalises to 'unknown' —
+	// see models.ParseToolType.
+	if _, err := models.ParseToolType(string(req.ToolType)); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidToolType, err)
 	}
 	return nil
 }

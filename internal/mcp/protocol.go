@@ -47,6 +47,17 @@ var supportedProtocolVersions = []string{
 // so there is no collision in practice.
 const errUnsupportedVersion = -32022
 
+// errIdentityMismatch is the JSON-RPC error code sent when a credential bound
+// to one agent is used with a different agent_id.
+//
+// Also in the implementation-defined range, and deliberately different from
+// errUnsupportedVersion: a client that receives this has a *credential*
+// problem, not a protocol one, and retrying with another revision will not help.
+// The message names the agent the key is bound to so an operator reading a log
+// can see which credential was used, and the correction — drop the id from the
+// URL — is in the message rather than left to be guessed.
+const errIdentityMismatch = -32001
+
 // protocolVersionHeader carries the client's chosen revision on Streamable
 // HTTP. Version selection is per request, not per connection, because the
 // stateless revisions dropped connection state.
@@ -112,6 +123,26 @@ func writeUnsupportedVersion(w http.ResponseWriter, requested string) {
 				"requested":         requested,
 				"supportedVersions": supportedProtocolVersions,
 			},
+		},
+	})
+}
+
+// writeIdentityMismatch answers a request whose credential does not name the
+// agent it claimed to be.
+//
+// HTTP 403 rather than 401: the credential presented was valid and was
+// accepted for authentication. What it is not allowed to do is act as that
+// agent, and a 401 would tell the client to go and fetch a different key — the
+// wrong advice, since re-authenticating with the same key produces the same
+// refusal.
+func writeIdentityMismatch(w http.ResponseWriter, r *http.Request, cause error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"error": map[string]any{
+			"code":    errIdentityMismatch,
+			"message": cause.Error(),
 		},
 	})
 }

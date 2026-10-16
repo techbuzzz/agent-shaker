@@ -28,6 +28,7 @@ type routeDeps struct {
 	hub                  hubLike
 	projectHandler       *handlers.ProjectHandler
 	agentHandler         *handlers.AgentHandler
+	agentConfigHandler   *handlers.AgentConfigHandler
 	taskHandler          *handlers.TaskHandler
 	contextHandler       *handlers.ContextHandler
 	standupHandler       *handlers.StandupHandler
@@ -322,6 +323,19 @@ func (d routeDeps) apiRouter() http.Handler {
 	mux.HandleFunc("GET /api/agents/{id}", d.agentHandler.GetAgent)
 	mux.HandleFunc("PUT /api/agents/{id}/status", d.agentHandler.UpdateAgentStatus)
 	mux.HandleFunc("DELETE /api/agents/{id}", d.agentHandler.DeleteAgent)
+	// Federation Phase 2: generated MCP configuration, and the per-agent
+	// credential it is generated around.
+	//
+	// The read route is deliberately NOT under the admin gate that covers
+	// /api/keys: rendering a config for an agent is something any operator with
+	// read access wants, and it contains no secret. The mint route is a POST,
+	// so RequireMethodScope demands write — and the connection handler grants
+	// the minted key read+write only, never admin, so an agent's own credential
+	// can never be used to mint another one.
+	if d.agentConfigHandler != nil {
+		mux.HandleFunc("GET /api/agents/{id}/config", d.agentConfigHandler.AgentConfig)
+		mux.HandleFunc("POST /api/agents/{id}/connection", d.agentConfigHandler.ConnectAgent)
+	}
 	// Tasks
 	mux.HandleFunc("GET /api/tasks", d.taskHandler.ListTasks)
 	mux.HandleFunc("POST /api/tasks", d.taskHandler.CreateTask)

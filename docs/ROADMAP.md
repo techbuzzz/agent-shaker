@@ -34,6 +34,35 @@ Four facts about the current build frame everything that follows.
 The rest of this document is the work that closes those gaps in an order where
 each step is cheaper after the one before it.
 
+## Federation work (tracked separately)
+
+The Universal Agent Federation epic has its own phase plan, delivered as a
+design document rather than maintained here. Its status against this codebase:
+
+- **Phase 0 — works today.** Claude Code, Codex, Cursor and other MCP hosts
+  connect with a hand-written `.mcp.json`. See [MCP_SETUP.md](./MCP_SETUP.md).
+- **Phase 1 — Coordination Plane. Done.** Worker heartbeat with lease and
+  reaper, task dependencies and handoff, blocker escalation. Migrations 015–016.
+- **Phase 2 — Developer Experience. Done (config generation).**
+  `agents.tool_type` and `api_keys.agent_id` (migration 017), per-agent
+  credentials, `GET /api/agents/{id}/config`, and the connection wizard.
+  The generator moved server-side to `internal/configgen`, so the browser and any
+  future CLI share one implementation.
+- **Phase 3 — OpenCode deep integration.** npm package, compaction hook,
+  heartbeat on session lifecycle.
+- **Phase 4 — Copilot Bridge.** GitHub App registration, `agsh bridge` service,
+  command parsing.
+- **Phase 5 — Refinement.** `announce_capability`, `get_team_status`, monitoring
+  for stale agents.
+
+Phase 2 also closed an identity hole that predates the epic: the MCP surface used
+to take `agent_id` from an unauthenticated query string, so any holder of a
+project key could act as any agent in that project. A key issued for an agent now
+names it authoritatively. See [AUTHENTICATION.md](./AUTHENTICATION.md).
+
+Note that M2 below ("Humans as a data subject") shipped in migration 009/010,
+ahead of this plan.
+
 ## Milestones at a glance
 
 | Milestone | Goal | Depends on | Size | Blocked by |

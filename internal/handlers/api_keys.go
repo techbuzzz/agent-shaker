@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,10 @@ type APIKeysHandler struct {
 	// people is consulted on the mint path so the key's principal_kind comes
 	// from the authoritative row instead of the request body.
 	people *queries.PeopleStore
+	// agents is consulted when a key is bound to one agent: the agent's own
+	// project is authoritative, and a key pointing at a row that does not exist
+	// would resolve to an identity no tool could act as. May be nil in tests.
+	agents *queries.AgentsStore
 	// resolver is used only to drop the revoked key from the in-process cache.
 	// Without this a revoke would keep working for up to DefaultKeyTTL, which
 	// is not what an operator who just clicked "revoke" expects. It may be nil
@@ -37,18 +42,21 @@ type APIKeysHandler struct {
 	resolver middleware.KeyResolver
 }
 
-func NewAPIKeysHandler(store *queries.APIKeysStore, people *queries.PeopleStore, resolver middleware.KeyResolver) *APIKeysHandler {
-	return &APIKeysHandler{store: store, people: people, resolver: resolver}
+func NewAPIKeysHandler(store *queries.APIKeysStore, people *queries.PeopleStore, agents *queries.AgentsStore, resolver middleware.KeyResolver) *APIKeysHandler {
+	return &APIKeysHandler{store: store, people: people, agents: agents, resolver: resolver}
 }
 
 // ListKeys returns the key inventory, newest first.
 //
-// GET /api/keys?principal_id=<uuid>&include_revoked=true
+// GET /api/keys?principal_id=<uuid>&agent_id=<uuid>&include_revoked=true
 //
 // Revoked keys are hidden by default: the default view is the one an operator
 // looks at to answer "what is still live", and burying a revoked row in it
 // makes that question harder. include_revoked exists for the audit-shaped
 // question instead.
+//
+// agent_id narrows to the credentials bound to one agent, which is how an
+// operator rotates a single agent's key without reading the whole inventory.
 func (h *APIKeysHandler) ListKeys(w http.ResponseWriter, r *http.Request) {
 	if !h.store.Available() {
 		httpx.WriteError(w, r, fmt.Errorf("key store: %w", httpx.ErrUnavailable))
@@ -65,6 +73,16 @@ func (h *APIKeysHandler) ListKeys(w http.ResponseWriter, r *http.Request) {
 		principalID = &id
 	}
 
+	var agentID *uuid.UUID
+	if raw := r.URL.Query().Get("agent_id"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.WriteError(w, r, fmt.Errorf("agent_id: %w: %w", httpx.ErrBadRequest, err))
+			return
+		}
+		agentID = &id
+	}
+
 	// Parsed strictly: a malformed flag silently reading as false would hide
 	// exactly the rows the caller asked to see.
 	includeRevoked := false
@@ -77,7 +95,7 @@ func (h *APIKeysHandler) ListKeys(w http.ResponseWriter, r *http.Request) {
 		includeRevoked = parsed
 	}
 
-	keys, err := h.store.ListAPIKeys(r.Context(), principalID, includeRevoked)
+	keys, err := h.store.ListAPIKeys(r.Context(), principalID, agentID, includeRevoked)
 	if err != nil {
 		httpx.WriteError(w, r, fmt.Errorf("list api keys: %w", err))
 		return
@@ -139,6 +157,31 @@ func (h *APIKeysHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		projectID = &id
 	}
 
+	// An agent-bound key carries its project implicitly: the agent row already
+	// knows which project it belongs to, and letting the two disagree would
+	// produce a credential scoped to project A that resolves to an agent in
+	// project B. project_id is therefore taken from the agent, not the body,
+	// whenever agent_id is present.
+	var agentID *uuid.UUID
+	if raw := strings.TrimSpace(req.AgentID); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.WriteError(w, r, fmt.Errorf("agent_id must be a uuid: %w: %w", httpx.ErrBadRequest, err))
+			return
+		}
+		agent, err := h.agents.GetAgent(r.Context(), id)
+		if err != nil {
+			if isNotFound(err) {
+				httpx.WriteError(w, r, fmt.Errorf("agent_id: no such agent: %w", httpx.ErrNotFound))
+				return
+			}
+			httpx.WriteError(w, r, fmt.Errorf("load agent: %w", err))
+			return
+		}
+		agentID = &id
+		projectID = &agent.ProjectID
+	}
+
 	scopes, err := models.NormalizeScopes(req.Scopes)
 	if err != nil {
 		httpx.WriteError(w, r, fmt.Errorf("scopes: %w: %w", httpx.ErrBadRequest, err))
@@ -171,6 +214,7 @@ func (h *APIKeysHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		PrincipalID:   principalID,
 		PrincipalType: principal.Kind,
 		ProjectID:     projectID,
+		AgentID:       agentID,
 		Scopes:        scopes,
 		CreatedAt:     time.Now().UTC(),
 	}
@@ -192,6 +236,7 @@ func (h *APIKeysHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 		"principal_id", principalID.String(),
 		"principal_kind", principal.Kind.String(),
 		"scopes", scopes,
+		"agent_id", agentID,
 	)
 
 	httpx.WriteJSON(w, http.StatusCreated, models.IssuedAPIKey{APIKey: key, Secret: secret})

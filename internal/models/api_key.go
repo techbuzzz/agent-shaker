@@ -6,9 +6,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 )
 
 // Scope is a permission a key may hold.
@@ -174,55 +171,8 @@ func ScopeForMethod(method string) Scope {
 // turns an outage into what looks like a wave of failed logins.
 var ErrAPIKeyNotFound = errors.New("api key not found")
 
-// APIKey is a row of the api_keys table.
-//
-// KeyHash is tagged `json:"-"` and that tag is load-bearing: it is the only
-// thing standing between a hash and every response that serialises a key. The
-// value is useless to an attacker on its own, but a hash in an access log or a
-// browser history is a credential waiting for a policy mistake.
-type APIKey struct {
-	ID          uuid.UUID  `json:"id" db:"id"`
-	KeyHash     string     `json:"-" db:"key_hash"`
-	KeyPrefix   string     `json:"key_prefix" db:"key_prefix"`
-	PrincipalID uuid.UUID  `json:"principal_id" db:"principal_id"`
-	ProjectID   *uuid.UUID `json:"project_id,omitempty" db:"project_id"`
-	Scopes      []Scope    `json:"scopes" db:"scopes"`
-	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty" db:"last_used_at"`
-	RevokedAt   *time.Time `json:"revoked_at,omitempty" db:"revoked_at"`
-
-	// PrincipalType and PrincipalName are denormalised onto the row for
-	// display. PrincipalType exists in the table because the request path must
-	// not join people to learn whether the caller is human; PrincipalName does
-	// not, and is filled in by the list query's join with people.
-	PrincipalType PersonKind `json:"principal_type" db:"principal_type"`
-	PrincipalName string     `json:"principal_name,omitempty" db:"principal_name"`
-}
-
-// Active reports whether the key may still be used.
-func (k APIKey) Active() bool { return k.RevokedAt == nil }
-
-// Allows is the APIKey-side view of the scope rule.
-func (k APIKey) Allows(want Scope) bool { return Allows(k.Scopes, want) }
-
-// CreateAPIKeyRequest is the POST /api/keys body.
-//
-// PrincipalType is not accepted from the client: it is copied from the people
-// row so a caller cannot mint a key that claims to belong to a human while
-// pointing at a service.
-type CreateAPIKeyRequest struct {
-	PrincipalID string   `json:"principal_id"`
-	ProjectID   string   `json:"project_id"`
-	Scopes      []string `json:"scopes"`
-}
-
-// IssuedAPIKey is the only response shape in this package that carries a
-// plaintext secret, and it does so exactly once: the key is never readable
-// again from the API, because the server does not keep it.
-type IssuedAPIKey struct {
-	APIKey
-
-	// Secret is the plaintext key. The handler that returns it must also set
-	// Cache-Control: no-store; see internal/handlers/api_keys.go.
-	Secret string `json:"secret"`
-}
+// The APIKey row, the mint request and the issued response live in
+// tooltype.go, next to ToolType and the agent binding: `agent_id` on a key is
+// the same concept as `tool_type` on an agent, and splitting them across files
+// put one half of a single decision in each. The scope vocabulary below is
+// orthogonal to identity and stays here.

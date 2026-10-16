@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { useMcpSetup, buildSetupFiles, API_KEY_ENV_VAR, type SetupFile } from '~/composables/useMcpSetup'
+import type { AgentConfigFile } from '~/types/api'
+import { useMcpSetup, type SetupFile } from '~/composables/useMcpSetup'
+import { API_KEY_ENV_VAR, copyToClipboard } from '~/composables/useAgentConfig'
 import { NO_SELECTION, optionalId } from '~/utils/select'
 
 const props = defineProps<{
@@ -18,6 +20,8 @@ const open = computed({
   set: (v) => emit('update:modelValue', v)
 })
 
+const api = useApi()
+const toast = useToastBus()
 const { downloadFile, downloadAll } = useMcpSetup()
 
 const selectedAgentId = ref<string>(NO_SELECTION)
@@ -25,65 +29,76 @@ watch(() => props.modelValue, (v) => {
   if (v) selectedAgentId.value = props.defaultAgentId ?? NO_SELECTION
 })
 
-/**
- * The origin is read from the running page, not from configuration.
- *
- * That is what makes a single generated config correct in every topology: with
- * the TLS edge the browser origin *is* the public origin, and without it the
- * browser origin is the Nuxt service. Either way the agent is pointed at
- * something reachable from outside the container.
- */
-const origin = import.meta.client ? window.location.origin : ''
-
 const agentId = computed(() => optionalId(selectedAgentId.value))
 
-const input = computed(() => ({
-  origin,
-  projectId: props.projectId,
-  projectName: props.projectName,
-  agentId: agentId.value,
-  agentName: props.agents?.find((a) => a.id === agentId.value)?.name
-}))
-
 /**
- * The actual file contents, rebuilt whenever the agent binding changes.
+ * The files, fetched from the server.
  *
- * Computed once and used for BOTH the preview and the per-file download. An
- * earlier draft derived them lazily per click, which meant a download could
- * fire with empty contents — the two paths have to read the same source.
+ * This used to be built in the browser from a local template. The generator now
+ * lives in `internal/configgen` and is the only implementation — two copies of
+ * "what should this config say" is how a config for the wrong client ships with
+ * nothing pointing at the bug.
+ *
+ * Requiring an agent is a consequence, not a restriction: the endpoint renders
+ * for one agent, because the endpoint renders for one agent's *credential*. A
+ * connection that names no agent has no credential to render around.
  */
-const files = computed<SetupFile[]>(() => buildSetupFiles(input.value))
+const files = ref<AgentConfigFile[]>([])
+const endpoint = ref('')
+const loading = ref(false)
+const loadError = ref('')
 
-const DESCRIPTIONS: Record<string, string> = {
-  '.mcp.json': 'Visual Studio 2026 and MCP hosts using this convention',
-  '.vscode/mcp.json': 'Visual Studio Code',
-  '.github/copilot-instructions.md': 'Tells Copilot what this server is for and how to work with it',
-  'AGENT_SHAKER_SETUP.md': 'Step-by-step setup, including how to verify the connection'
+async function load() {
+  if (!agentId.value) {
+    files.value = []
+    endpoint.value = ''
+    return
+  }
+  loading.value = true
+  loadError.value = ''
+  try {
+    const result = await api.getAgentConfig(agentId.value)
+    files.value = result.files
+    endpoint.value = result.endpoints.mcp
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : 'Could not load the configuration'
+    files.value = []
+  } finally {
+    loading.value = false
+  }
 }
 
-const listed = computed(() =>
-  files.value.map((f) => ({ file: f, description: DESCRIPTIONS[f.path] ?? '' }))
-)
+// Reload whenever the binding changes, including on open.
+watch([() => props.modelValue, agentId], ([isOpen]) => { if (isOpen) load() }, { immediate: true })
 
-/** Only one preview is expanded at a time; the markdown files are long. */
+/** Map the server's file shape onto the download helper's. */
+function asSetupFiles(list: AgentConfigFile[]): SetupFile[] {
+  return list.map((f) => ({ path: f.filename || f.target || 'agent-shaker', contents: f.content }))
+}
+
 const previewFor = ref<string | null>(null)
+function location(f: AgentConfigFile) { return f.filename || f.target || '' }
 function togglePreview(path: string) {
   previewFor.value = previewFor.value === path ? null : path
 }
 
 const downloading = ref(false)
 function onDownloadAll() {
+  if (!files.value.length) return
   downloading.value = true
   try {
-    downloadAll(input.value)
+    downloadAll(asSetupFiles(files.value))
   } finally {
     // The downloads are staggered internally; this only guards the button.
     setTimeout(() => (downloading.value = false), 800)
   }
 }
 
-function copyEndpoint() {
-  navigator.clipboard?.writeText(`${origin}/mcp?project_id=${props.projectId}`)
+async function copyEndpoint() {
+  if (!endpoint.value) return
+  const ok = await copyToClipboard(endpoint.value)
+  if (ok) toast.success('Endpoint copied')
+  else toast.error('Could not copy — your browser blocked the clipboard.')
 }
 </script>
 
@@ -98,12 +113,12 @@ function copyEndpoint() {
         </p>
 
         <UFormField
-          label="Bind an agent (optional)"
-          help="Scopes the connection so project-scoped tools work without restating identity. Leave unset if the agent should call register_self."
+          label="Bind an agent"
+          help="The configuration is generated for one agent, so its connection can be bound to that agent rather than to the project."
         >
           <USelect
             v-model="selectedAgentId"
-            :items="[{ label: '— not bound —', value: NO_SELECTION }, ...(agents ?? []).map((a) => ({ label: a.name, value: a.id }))]"
+            :items="[{ label: '— choose an agent —', value: NO_SELECTION }, ...(agents ?? []).map((a) => ({ label: a.name, value: a.id }))]"
             value-key="value"
           />
         </UFormField>
@@ -113,41 +128,49 @@ function copyEndpoint() {
           color="warning"
           variant="subtle"
           title="No key in these files"
-          :description="`They reference ${API_KEY_ENV_VAR} instead, so the files are safe to commit. The agent picks the key up from its own environment.`"
+          :description="`They reference ${API_KEY_ENV_VAR} instead, so the files are safe to commit. Issue the key from the agent's Connect action, then put it in the agent's environment.`"
         />
 
-        <div class="border border-default rounded-lg divide-y divide-default overflow-hidden">
-          <div v-for="entry in listed" :key="entry.file.path" class="p-3">
+        <UAlert v-if="loadError" icon="i-lucide-circle-alert" color="error" variant="subtle" :description="loadError" />
+
+        <div v-if="loading" class="text-sm text-muted">Generating…</div>
+
+        <div v-else-if="!agentId" class="text-sm text-muted">
+          Choose an agent to generate its configuration.
+        </div>
+
+        <div v-else-if="files.length" class="border border-default rounded-lg divide-y divide-default overflow-hidden">
+          <div v-for="f in files" :key="location(f)" class="p-3">
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
-                <p class="font-mono text-sm truncate">{{ entry.file.path }}</p>
-                <p class="text-xs text-muted mt-0.5">{{ entry.description }}</p>
+                <p class="font-mono text-sm truncate">{{ location(f) }}</p>
+                <p class="text-xs text-muted mt-0.5">{{ f.description }}</p>
               </div>
               <div class="flex gap-1 shrink-0">
                 <UButton
                   size="xs" variant="ghost" color="neutral"
-                  :icon="previewFor === entry.file.path ? 'i-lucide-eye-off' : 'i-lucide-eye'"
-                  :aria-label="`Preview ${entry.file.path}`"
-                  @click="togglePreview(entry.file.path)"
+                  :icon="previewFor === location(f) ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                  :aria-label="`Preview ${location(f)}`"
+                  @click="togglePreview(location(f))"
                 />
                 <UButton
                   size="xs" variant="outline" color="neutral" icon="i-lucide-download"
-                  :aria-label="`Download ${entry.file.path}`"
-                  @click="downloadFile(entry.file)"
+                  :aria-label="`Download ${location(f)}`"
+                  @click="downloadFile({ path: location(f), contents: f.content })"
                 />
               </div>
             </div>
             <pre
-              v-if="previewFor === entry.file.path"
+              v-if="previewFor === location(f)"
               class="mt-3 text-xs bg-default/50 rounded p-2 overflow-auto max-h-56 font-mono whitespace-pre"
-            >{{ entry.file.contents }}</pre>
+            >{{ f.content }}</pre>
           </div>
         </div>
 
-        <div class="text-xs text-muted space-y-1">
+        <div v-if="endpoint" class="text-xs text-muted space-y-1">
           <p>
             Endpoint:
-            <code class="font-mono">{{ origin }}/mcp?project_id={{ projectId }}</code>
+            <code class="font-mono">{{ endpoint }}</code>
             <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" @click="copyEndpoint" />
           </p>
         </div>
@@ -159,6 +182,7 @@ function copyEndpoint() {
         <UButton variant="ghost" color="neutral" @click="open = false">Close</UButton>
         <UButton
           color="primary" icon="i-lucide-download" :loading="downloading"
+          :disabled="!files.length"
           @click="onDownloadAll"
         >
           Download all

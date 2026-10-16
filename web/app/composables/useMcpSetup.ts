@@ -1,244 +1,33 @@
 /**
- * MCP client setup for Agent Shaker.
+ * Download helpers for a generated setup bundle.
  *
- * This is the bridge between the app and the AI agents it coordinates. An
- * agent connects over MCP to the same origin the browser is already using, so
- * the generated config works unchanged in every supported topology — with or
- * without the TLS edge — because `origin` is read from the running page rather
- * than configured separately.
+ * What used to live here — the URL builder, the `.mcp.json` templates and the
+ * instructions document — now lives on the server in `internal/configgen`, and
+ * is fetched from `GET /api/agents/{id}/config`.
  *
- * ## The API key is referenced, never embedded
+ * The move was not cosmetic. The generator existed in the browser bundle and in
+ * whatever a future CLI would have grown, and two implementations of "what
+ * should this config say" drift: one gets a tool type added, the other does not,
+ * and a developer is handed a config for the wrong client with nothing to say
+ * why. One generator, on the server, is the only version that can be right.
  *
- * The generated config points at `${env:AGENT_SHAKER_API_KEY}` rather than
- * inlining a key. That is deliberate: these files are meant to be committed to
- * the agent's own repository, and a literal key in a tracked file is a leaked
- * key. The operator sets the variable in their shell (or a local, git-ignored
- * `.env`) instead.
- *
- * This also means the browser never needs to hold a key. The SPA cannot obtain
- * one — it is server-only runtimeConfig — and it must not ask the user to paste
- * a live secret into a form, because that form would then be one XSS away from
- * exfiltrating it.
+ * What remains is the part that genuinely needs a browser: turning strings into
+ * files the operator can save.
  */
 
-/** Name used for the server entry in every generated file. */
-const SERVER_NAME = 'agent-shaker'
-
-// Relative, not '~/': vitest runs without a Nuxt config here, so the '~' alias
-// does not resolve and these pure builders would fail to load in unit tests.
-import { AGENT_STATUSES } from '../types/api'
-
-/** Environment variable the generated configs expect to find. */
-export const API_KEY_ENV_VAR = 'AGENT_SHAKER_API_KEY'
-
-export interface McpSetupInput {
-  /** The origin the browser is on, e.g. `https://shaker.example.com`. */
-  origin: string
-  /** Project to bind the connection to. */
-  projectId: string
-  /** Project name, used in comments and the generated README. */
-  projectName?: string
-  /** Agent to bind, when one is selected. Scoping is optional. */
-  agentId?: string
-  agentName?: string
-}
+/**
+ * No API_KEY_ENV_VAR here on purpose.
+ *
+ * It used to live in this file and now lives in `useAgentConfig`, which owns the
+ * placeholder and the substitution. Nuxt auto-imports every composable and
+ * silently drops a duplicate export with a warning, so a re-export would look
+ * like it worked while one of the two definitions was being ignored.
+ */
 
 export interface SetupFile {
-  /** Path relative to the agent's repository root. */
+  /** Path relative to the agent's repository root, or a user-level target. */
   path: string
   contents: string
-}
-
-/** Tools the server advertises, grouped for the generated instructions file. */
-const TOOL_GROUPS: Array<{ heading: string; tools: string[]; note: string }> = [
-  {
-    heading: 'Orientation',
-    note: 'Call these first. They resolve the agent and project from the connection URL.',
-    tools: ['get_my_identity', 'get_my_project']
-  },
-  {
-    heading: 'Working on tasks',
-    note: 'The core loop. Claim a task, do the work, report back.',
-    tools: ['get_my_tasks', 'claim_task', 'complete_task', 'reassign_task', 'update_my_status']
-  },
-  {
-    heading: 'Tasks and planning',
-    note: 'Broader project views, for a PM role or a wider look.',
-    tools: ['list_tasks', 'create_task', 'update_task_status', 'get_dashboard',
-            'list_milestones', 'create_milestone', 'assign_task_to_milestone']
-  },
-  {
-    heading: 'Shared knowledge',
-    note: 'Markdown contexts and docs shared between agents. Read before acting, write after deciding.',
-    tools: ['list_contexts', 'add_context', 'list_global_contexts', 'read_global_context',
-            'publish_global_context']
-  },
-  {
-    heading: 'Other agents',
-    note: 'Discover and delegate to external agents over A2A.',
-    tools: ['discover_a2a_agent', 'delegate_to_a2a_agent', 'get_a2a_task_status']
-  },
-  {
-    heading: 'Onboarding',
-    note: 'Only needed the very first time an agent connects to a new project.',
-    tools: ['register_self']
-  }
-]
-
-/** Strip a trailing slash so joins never produce a double slash. */
-function trimOrigin(origin: string): string {
-  return origin.replace(/\/+$/, '')
-}
-
-/**
- * The MCP endpoint URL, with the project bound in the query string.
- *
- * The Go handler reads `project_id` / `agent_id` from the query string (or the
- * `X-Project-ID` / `X-Agent-ID` headers), which is what makes the scoped tools
- * like `get_my_tasks` work without the agent restating its identity on every
- * call.
- */
-export function buildMcpUrl(input: McpSetupInput): string {
-  const base = `${trimOrigin(input.origin)}/mcp`
-  const params = new URLSearchParams()
-  params.set('project_id', input.projectId)
-  if (input.agentId) params.set('agent_id', input.agentId)
-  return `${base}?${params.toString()}`
-}
-
-/**
- * `.mcp.json` — the format read by Visual Studio 2026 and by MCP hosts that
- * follow the same convention.
- */
-export function buildMcpJson(input: McpSetupInput): string {
-  const config = {
-    mcpServers: {
-      [SERVER_NAME]: {
-        type: 'http',
-        url: buildMcpUrl(input),
-        headers: {
-          Authorization: `Bearer \${env:${API_KEY_ENV_VAR}}`
-        }
-      }
-    }
-  }
-  return JSON.stringify(config, null, 2) + '\n'
-}
-
-/**
- * `.vscode/mcp.json` — VS Code's variant. Same server entry under a different
- * top-level key.
- */
-export function buildVsCodeMcpJson(input: McpSetupInput): string {
-  const config = {
-    servers: {
-      [SERVER_NAME]: {
-        type: 'http',
-        url: buildMcpUrl(input),
-        headers: {
-          Authorization: `Bearer \${env:${API_KEY_ENV_VAR}}`
-        }
-      }
-    }
-  }
-  return JSON.stringify(config, null, 2) + '\n'
-}
-
-/** `.github/copilot-instructions.md` — tells Copilot what the server is for. */
-export function buildCopilotInstructions(input: McpSetupInput): string {
-  const scope = [
-    `- Project: **${input.projectName ?? input.projectId}** (\`${input.projectId}\`)`,
-    input.agentId ? `- Agent: **${input.agentName ?? 'selected agent'}** (\`${input.agentId}\`)` : '- Agent: not bound — call `register_self` or scope per call'
-  ].join('\n')
-
-  const toolLines = TOOL_GROUPS.map((group) => {
-    const bullets = group.tools.map((t) => `  - \`${t}\``).join('\n')
-    return `### ${group.heading}\n\n${group.note}\n\n${bullets}\n`
-  }).join('\n')
-
-  return `# Agent Shaker — MCP integration
-
-This repository is coordinated through the **Agent Shaker** MCP server. Use it
-rather than tracking work in local notes: the server is the shared source of
-truth, so other agents see what you do and you see what they do.
-
-${scope}
-
-Endpoint: \`${buildMcpUrl(input)}\`
-Authentication: \`Authorization: Bearer \${env:${API_KEY_ENV_VAR}}\`
-
-## How to work
-
-1. Call \`get_my_identity\` to confirm which agent and project this connection
-   is bound to. If it is not bound, call \`register_self\`.
-2. \`get_my_tasks\` for the work assigned to you.
-3. \`claim_task\` before starting, so other agents can see it is in progress.
-4. \`complete_task\` when the work is genuinely done.
-5. \`update_my_status\` when you are blocked or waiting on someone. The accepted
-   values are exactly ${AGENT_STATUSES.map((s) => `\`${s}\``).join(', ')}; anything
-   else is refused, including \`working\`, which was never part of the vocabulary.
-6. Read shared \`list_contexts\` before making a decision, and record the
-   decision with \`add_context\` so the next agent inherits it.
-
-## Available tools
-
-${toolLines}
-## Notes
-
-- Writes to tasks and milestones are PM-gated; a non-PM agent gets a clear
-  refusal rather than a silent no-op.
-- Live updates also arrive over the app's WebSocket; the MCP connection is for
-  acting, the UI is for watching.
-`
-}
-
-/** A short README so the generated files explain themselves. */
-export function buildSetupReadme(input: McpSetupInput): string {
-  return `# Agent Shaker setup
-
-Generated for project **${input.projectName ?? input.projectId}**.
-
-## 1. Set the API key
-
-The configs reference \`${API_KEY_ENV_VAR}\`; they never contain the key itself,
-so they are safe to commit.
-
-\`\`\`bash
-export ${API_KEY_ENV_VAR}=<your key>
-\`\`\`
-
-The key is one of the values in the server's \`API_KEYS\` list. Keep it out of
-tracked files.
-
-## 2. Add the config
-
-- \`.mcp.json\` — Visual Studio 2026 and MCP hosts using this convention
-- \`.vscode/mcp.json\` — Visual Studio Code
-- \`.github/copilot-instructions.md\` — tells Copilot what the server is for
-
-## 3. Verify
-
-\`\`\`bash
-curl -sS -X POST "${buildMcpUrl(input)}" \\
-  -H "Authorization: Bearer $${API_KEY_ENV_VAR}" \\
-  -H 'Content-Type: application/json' \\
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
-\`\`\`
-
-An \`initialize\` result means the connection is good. A \`401\` means the key is
-wrong; a \`404\` means the edge is not routing \`/mcp\` (that path is only
-published under the \`tls\` profile — see docs/DEPLOYMENT.md).
-`
-}
-
-/** Every file in the bundle, ready to download. */
-export function buildSetupFiles(input: McpSetupInput): SetupFile[] {
-  return [
-    { path: '.mcp.json', contents: buildMcpJson(input) },
-    { path: '.vscode/mcp.json', contents: buildVsCodeMcpJson(input) },
-    { path: '.github/copilot-instructions.md', contents: buildCopilotInstructions(input) },
-    { path: 'AGENT_SHAKER_SETUP.md', contents: buildSetupReadme(input) }
-  ]
 }
 
 export function useMcpSetup() {
@@ -267,12 +56,15 @@ export function useMcpSetup() {
    *
    * Staggered because browsers silently drop concurrent downloads from one
    * gesture — without the delay only the first file would arrive.
+   *
+   * Takes the files rather than building them: the bundle comes from the server
+   * now, and a caller that passed an input object would be asking this
+   * composable to regenerate what it no longer owns.
    */
-  function downloadAll(input: McpSetupInput): SetupFile[] {
-    const files = buildSetupFiles(input)
+  function downloadAll(files: SetupFile[]): SetupFile[] {
     files.forEach((file, i) => setTimeout(() => downloadFile(file), i * 120))
     return files
   }
 
-  return { downloadFile, downloadAll, API_KEY_ENV_VAR }
+  return { downloadFile, downloadAll }
 }

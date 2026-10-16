@@ -41,11 +41,39 @@ type Principal struct {
 	// not have to re-read the key row.
 	ProjectID *uuid.UUID
 
+	// AgentID is the agent this credential is bound to, or nil when it is not
+	// bound to one.
+	//
+	// When it is set, it is the answer: the MCP surface treats the agent_id in
+	// the connection URL as a claim to be checked against this value rather than
+	// as an identity to be believed. Before this column existed, any holder of a
+	// project key could put another agent's id in the query string and act as
+	// them — heartbeat, claim a task, complete somebody else's work.
+	//
+	// Nil is the common case, not an anomaly: every key issued before migration
+	// 017 is nil, as are the synthetic principals below. Those callers supply
+	// agent_id in the URL and keep being trusted, because it is the only
+	// identity they have and refusing them would break every deployment that
+	// works today.
+	AgentID *uuid.UUID
+
 	// Synthetic marks a principal that is not backed by a people row: either
 	// authentication is switched off, or the caller presented one of the flat
 	// API_KEYS secrets. Audit events (M3) record it, so "a human did this" and
 	// "somebody with a shared secret did this" stay distinguishable.
 	Synthetic bool
+}
+
+// AgentIdentity reports the agent this principal is bound to and whether that
+// binding exists at all.
+//
+// The bool is separate from the pointer so a caller does not have to compare
+// against uuid.Nil, which is a value a real row could theoretically carry.
+func (p Principal) AgentIdentity() (uuid.UUID, bool) {
+	if p.AgentID == nil {
+		return uuid.Nil, false
+	}
+	return *p.AgentID, true
 }
 
 // Synthetic principal identities.

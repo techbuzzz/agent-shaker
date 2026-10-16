@@ -201,7 +201,7 @@ func main() {
 	projectRepoHandler := handlers.NewProjectRepoHandler(projectReposStore, hub)
 	globalContextHandler := handlers.NewGlobalContextHandler(globalContextsStore, hub)
 	peopleHandler := handlers.NewPeopleHandler(peopleStore)
-	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeysStore, peopleStore, keyResolver)
+	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeysStore, peopleStore, agentStore, keyResolver)
 
 	mcpHandler := mcp.NewMCPHandlerWithCoordination(
 		db, hub, blockersStore, depsStore, agentStore, tasksQueryStore, heartbeatsStore,
@@ -221,6 +221,13 @@ func main() {
 	if baseURL == "" {
 		slog.Info("BASE_URL not set; A2A discovery URLs will be derived per request from the request origin")
 	}
+
+	// Federation Phase 2. Constructed here rather than with the other handlers
+	// because it needs baseURL, and it deliberately takes the same value the A2A
+	// card advertises: a generated MCP config has to point an agent at the
+	// origin the outside world can reach, not at this container's internal one.
+	// See internal/publicurl for why that cannot be guessed per handler.
+	agentConfigHandler := handlers.NewAgentConfigHandler(agentStore, apiKeysStore, peopleStore, projectStore, baseURL)
 
 	// Read once, here, because the A2A agent card is built below and it has to
 	// describe the credential a client must actually send. Declared early for
@@ -360,6 +367,7 @@ func main() {
 		hub:                  hub,
 		projectHandler:       projectHandler,
 		agentHandler:         agentHandler,
+		agentConfigHandler:   agentConfigHandler,
 		taskHandler:          taskHandler,
 		contextHandler:       contextHandler,
 		standupHandler:       standupHandler,

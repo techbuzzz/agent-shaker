@@ -83,6 +83,36 @@ func (s *PeopleStore) GetPerson(ctx context.Context, id uuid.UUID) (*models.Pers
 	return &p, nil
 }
 
+// GetServiceByDisplayName finds a service identity by name.
+//
+// It exists for one caller: the agent connection flow needs a principal to hang
+// a key on, and creating a fresh people row on every mint would fill the
+// directory with duplicates of the same agent. The lookup is therefore by name
+// and kind together — an agent whose display name collides with a human's is
+// not that human's principal.
+//
+// A miss is models.ErrPersonNotFound, exactly as GetPerson reports one, so the
+// caller has a single branch to write rather than two.
+func (s *PeopleStore) GetServiceByDisplayName(ctx context.Context, name string) (*models.Person, error) {
+	var (
+		p     models.Person
+		email sql.NullString
+	)
+	err := s.q.QueryRowContext(ctx, `
+		SELECT id, kind, display_name, email, created_at
+		FROM people WHERE kind = 'service' AND display_name = $1
+		ORDER BY created_at ASC LIMIT 1
+	`, name).Scan(&p.ID, &p.Kind, &p.DisplayName, &email, &p.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: service %q", models.ErrPersonNotFound, name)
+		}
+		return nil, fmt.Errorf("select service person: %w", err)
+	}
+	p.Email = email.String
+	return &p, nil
+}
+
 // ListPeople returns every person ordered by display name.
 //
 // Alphabetical rather than newest-first: this list is looked up by a human

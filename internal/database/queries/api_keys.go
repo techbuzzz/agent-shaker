@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -17,7 +18,8 @@ import (
 // a runtime scan error, not a compile error.
 const apiKeyColumns = `
 	k.id, k.key_hash, k.key_prefix, k.principal_type, k.principal_id,
-	k.project_id, k.scopes, k.created_at, k.last_used_at, k.revoked_at`
+	k.project_id, k.scopes, k.created_at, k.last_used_at, k.revoked_at,
+	k.agent_id`
 
 // apiKeyColumnsBare is the same projection without the `k.` qualifier, for use
 // in UPDATE ... RETURNING.
@@ -28,7 +30,8 @@ const apiKeyColumns = `
 // one operation an operator runs when something has already gone wrong.
 const apiKeyColumnsBare = `
 	id, key_hash, key_prefix, principal_type, principal_id,
-	project_id, scopes, created_at, last_used_at, revoked_at`
+	project_id, scopes, created_at, last_used_at, revoked_at,
+	agent_id`
 
 // rowScanner is satisfied by *sql.Row and *sql.Rows, which lets one scan
 // helper serve both the single-row lookups on the request path and the list
@@ -54,9 +57,9 @@ func (s *APIKeysStore) Available() bool { return s.q != nil }
 // this package has no code path that could store a secret.
 func (s *APIKeysStore) CreateAPIKey(ctx context.Context, k *models.APIKey) error {
 	if _, err := s.q.ExecContext(ctx, `
-		INSERT INTO api_keys (id, key_hash, key_prefix, principal_type, principal_id, project_id, scopes, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, k.ID, k.KeyHash, k.KeyPrefix, k.PrincipalType, k.PrincipalID, k.ProjectID, pq.Array(k.Scopes), k.CreatedAt); err != nil {
+		INSERT INTO api_keys (id, key_hash, key_prefix, principal_type, principal_id, project_id, scopes, created_at, agent_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, k.ID, k.KeyHash, k.KeyPrefix, k.PrincipalType, k.PrincipalID, k.ProjectID, pq.Array(k.Scopes), k.CreatedAt, k.AgentID); err != nil {
 		if isUniqueViolation(err, "api_keys_key_hash_key") {
 			// A duplicate digest means the same secret was generated twice, which
 			// is astronomically unlikely and worth surfacing rather than
@@ -111,30 +114,39 @@ func (s *APIKeysStore) GetAPIKeyByID(ctx context.Context, id uuid.UUID) (*models
 	return k, nil
 }
 
-// ListAPIKeys returns keys newest-first, optionally narrowed to one principal
-// and/or excluding revoked rows.
+// ListAPIKeys returns keys newest-first, optionally narrowed to one principal,
+// one agent, and/or excluding revoked rows.
 //
 // The join to people is what makes a key list readable — a bare uuid tells an
 // operator nothing — and it costs one pkey lookup per row, memoised across the
 // 100-row page (0.4 ms for the whole page, measured).
-func (s *APIKeysStore) ListAPIKeys(ctx context.Context, principalID *uuid.UUID, includeRevoked bool) ([]models.APIKey, error) {
+//
+// The filters compose rather than being exclusive: "keys of agent X held by
+// principal Y" is a question the key inventory genuinely needs to answer when
+// an agent's credentials are being rotated.
+func (s *APIKeysStore) ListAPIKeys(ctx context.Context, principalID *uuid.UUID, agentID *uuid.UUID, includeRevoked bool) ([]models.APIKey, error) {
 	q := `
 		SELECT k.id, k.key_hash, k.key_prefix, k.principal_type, k.principal_id,
 		       k.project_id, k.scopes, k.created_at, k.last_used_at, k.revoked_at,
+		       k.agent_id,
 		       p.display_name
 		FROM api_keys k
 		JOIN people p ON p.id = k.principal_id`
 	var args []any
+	var where []string
 	if principalID != nil {
-		q += " WHERE k.principal_id = $1"
 		args = append(args, *principalID)
+		where = append(where, fmt.Sprintf("k.principal_id = $%d", len(args)))
+	}
+	if agentID != nil {
+		args = append(args, *agentID)
+		where = append(where, fmt.Sprintf("k.agent_id = $%d", len(args)))
 	}
 	if !includeRevoked {
-		if len(args) == 0 {
-			q += " WHERE k.revoked_at IS NULL"
-		} else {
-			q += " AND k.revoked_at IS NULL"
-		}
+		where = append(where, "k.revoked_at IS NULL")
+	}
+	if len(where) > 0 {
+		q += " WHERE " + strings.Join(where, " AND ")
 	}
 	q += " ORDER BY k.created_at DESC"
 
@@ -215,13 +227,14 @@ func scanAPIKey(row rowScanner) (*models.APIKey, error) {
 	var (
 		k         models.APIKey
 		projectID uuid.NullUUID
+		agentID   uuid.NullUUID
 		lastUsed  sql.NullTime
 		revokedAt sql.NullTime
 		rawScopes pq.StringArray
 	)
 	if err := row.Scan(
 		&k.ID, &k.KeyHash, &k.KeyPrefix, &k.PrincipalType, &k.PrincipalID,
-		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt,
+		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt, &agentID,
 	); err != nil {
 		return nil, err
 	}
@@ -230,7 +243,7 @@ func scanAPIKey(row rowScanner) (*models.APIKey, error) {
 		return nil, fmt.Errorf("read scopes for key %s: %w", k.ID, err)
 	}
 	k.Scopes = scopes
-	applyNullColumns(&k, projectID, lastUsed, revokedAt)
+	applyNullColumns(&k, projectID, agentID, lastUsed, revokedAt)
 	return &k, nil
 }
 
@@ -239,13 +252,14 @@ func scanAPIKeyWithPrincipal(row rowScanner) (*models.APIKey, error) {
 	var (
 		k         models.APIKey
 		projectID uuid.NullUUID
+		agentID   uuid.NullUUID
 		lastUsed  sql.NullTime
 		revokedAt sql.NullTime
 		rawScopes pq.StringArray
 	)
 	if err := row.Scan(
 		&k.ID, &k.KeyHash, &k.KeyPrefix, &k.PrincipalType, &k.PrincipalID,
-		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt,
+		&projectID, &rawScopes, &k.CreatedAt, &lastUsed, &revokedAt, &agentID,
 		&k.PrincipalName,
 	); err != nil {
 		return nil, err
@@ -255,7 +269,7 @@ func scanAPIKeyWithPrincipal(row rowScanner) (*models.APIKey, error) {
 		return nil, fmt.Errorf("read scopes for key %s: %w", k.ID, err)
 	}
 	k.Scopes = scopes
-	applyNullColumns(&k, projectID, lastUsed, revokedAt)
+	applyNullColumns(&k, projectID, agentID, lastUsed, revokedAt)
 	return &k, nil
 }
 
@@ -265,10 +279,18 @@ func scanAPIKeyWithPrincipal(row rowScanner) (*models.APIKey, error) {
 // pointer-dereferencing rules to turn SQL NULL into a nil pointer, which works
 // for *uuid.UUID and *time.Time but fails differently for a future column type
 // nobody has tested yet. Explicit is cheaper than that class of bug.
-func applyNullColumns(k *models.APIKey, projectID uuid.NullUUID, lastUsed, revokedAt sql.NullTime) {
+//
+// agentID is in this list for a reason that is not tidiness: an unbound key is
+// the common case, and it has to stay nil rather than becoming a zero UUID.
+// uuid.Nil is a real id shape that a caller could mistake for a binding.
+func applyNullColumns(k *models.APIKey, projectID uuid.NullUUID, agentID uuid.NullUUID, lastUsed, revokedAt sql.NullTime) {
 	if projectID.Valid {
 		id := projectID.UUID
 		k.ProjectID = &id
+	}
+	if agentID.Valid {
+		id := agentID.UUID
+		k.AgentID = &id
 	}
 	if lastUsed.Valid {
 		t := lastUsed.Time

@@ -27,17 +27,24 @@ func (s *AgentsStore) Available() bool { return s.q != nil }
 
 // CreateAgent inserts a new agent row.
 func (s *AgentsStore) CreateAgent(ctx context.Context, a *models.Agent) error {
+	// tool_type is NOT NULL with a default, but it is still sent explicitly: a
+	// caller that forgot to set it would otherwise silently get 'unknown' and
+	// a config generated for the wrong client, which is exactly the class of
+	// bug the column exists to prevent.
+	toolType := a.ToolType
+	if toolType == "" {
+		toolType = models.ToolTypeUnknown
+	}
 	_, err := s.q.ExecContext(ctx, `
-		INSERT INTO agents (id, project_id, name, role, team, status, last_seen, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, a.ID, a.ProjectID, a.Name, a.Role, a.Team, a.Status, a.LastSeen, a.CreatedAt)
+		INSERT INTO agents (id, project_id, name, role, team, status, last_seen, created_at, tool_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, a.ID, a.ProjectID, a.Name, a.Role, a.Team, a.Status, a.LastSeen, a.CreatedAt, toolType)
 	if err != nil {
 		return fmt.Errorf("insert agent: %w", err)
 	}
 	return nil
 }
 
-// ListAgents returns all agents, or agents filtered by project when
 // agentSelectColumns is the column list every agent read shares.
 //
 // The coordination columns (lease, current task, last report) are part of it
@@ -46,15 +53,20 @@ func (s *AgentsStore) CreateAgent(ctx context.Context, a *models.Agent) error {
 // heartbeated". That is how the whole lease surface in the UI ended up dead
 // without a single error anywhere.
 //
+// tool_type belongs here for the same reason: a read that omitted it would
+// produce an agent the config generator cannot target, and the endpoint would
+// fall back to the generic layout rather than complain.
+//
 // The lateral join carries the newest heartbeat's progress and ETA so the
 // dashboard can answer "how far along, and by when" without an extra request
 // per agent.
 const agentSelectColumns = `
-		a.id, a.project_id, a.name, a.role, a.team, a.status, a.last_seen, a.created_at,
+		a.id, a.project_id, a.name, a.role, a.team, a.status, a.last_seen, a.created_at, a.tool_type,
 		a.lease_expires_at, a.current_task_id, a.heartbeat_payload,
 		hb.progress_pct, hb.eta`
 
-// projectID is non-nil.
+// ListAgents returns all agents, or agents filtered by project when projectID
+// is non-nil.
 func (s *AgentsStore) ListAgents(ctx context.Context, projectID *uuid.UUID) ([]models.Agent, error) {
 	const fromAgents = `
 		FROM agents a
@@ -110,7 +122,7 @@ func (s *AgentsStore) GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent
 		eta      sql.NullTime
 	)
 	if err := row.Scan(
-		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt,
+		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt, &a.ToolType,
 		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -132,7 +144,7 @@ func scanAgentRow(row rowScanner) (*models.Agent, error) {
 		eta      sql.NullTime
 	)
 	if err := row.Scan(
-		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt,
+		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt, &a.ToolType,
 		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
 	); err != nil {
 		return nil, fmt.Errorf("scan agent: %w", err)

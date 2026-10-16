@@ -48,6 +48,15 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalised rather than taken verbatim: an empty or differently-cased value
+	// becomes the canonical 'unknown', so the column holds one spelling of each
+	// tool type and the config endpoint's switch cannot miss on 'Claude-Code'.
+	toolType, err := models.ParseToolType(string(req.ToolType))
+	if err != nil {
+		httpx.WriteError(w, r, fmt.Errorf("tool_type: %w: %w", httpx.ErrBadRequest, err))
+		return
+	}
+
 	agent := models.Agent{
 		ID:        uuid.New(),
 		ProjectID: req.ProjectID,
@@ -55,6 +64,7 @@ func (h *AgentHandler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		Role:      req.Role,
 		Team:      req.Team,
 		Status:    "active",
+		ToolType:  toolType,
 		LastSeen:  time.Now(),
 		CreatedAt: time.Now(),
 	}

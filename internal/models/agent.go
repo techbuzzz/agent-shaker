@@ -42,6 +42,16 @@ type Agent struct {
 	LastSeen  time.Time `json:"last_seen" db:"last_seen"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 
+	// ToolType is which client this agent runs in — Claude Code, Codex, Cursor
+	// and so on. It is what makes the generated configuration correct rather
+	// than merely plausible: the file layout is chosen from it, so "the file we
+	// told you to write" and "what this agent is" cannot drift apart.
+	//
+	// See ToolType in tooltype.go. The zero value is not acceptable here: the
+	// column is NOT NULL with a default, so a scanned row always carries one,
+	// and an agent created by an upgraded runtime arrives as 'unknown'.
+	ToolType ToolType `json:"tool_type" db:"tool_type"`
+
 	// --- Coordination Plane (migration 015) ---
 
 	// LeaseExpiresAt is the deadline the server returned with the last
@@ -173,6 +183,38 @@ type CreateAgentRequest struct {
 	Name      string    `json:"name"`
 	Role      AgentRole `json:"role"`
 	Team      string    `json:"team"`
+
+	// ToolType is optional. Empty means "unknown" (see ParseToolType), which
+	// keeps an older client that has never heard of the field working: it
+	// creates an agent, and the config endpoint falls back to the generic
+	// layout for it.
+	ToolType ToolType `json:"tool_type"`
+}
+
+// AgentConnectionResponse is what POST /api/agents/{id}/connection returns.
+//
+// It carries a plaintext credential, so it is a one-shot value: the caller
+// shows the secret once and the browser holds it in memory. Nothing in this
+// shape is retrievable again, and no field of it is ever persisted except the
+// key row the server already wrote.
+type AgentConnectionResponse struct {
+	// Key is the issued credential, including Secret. Present exactly once,
+	// at the moment of minting.
+	Key IssuedAPIKey `json:"key"`
+
+	// Agent is the row the key is bound to, so the UI does not have to make a
+	// second request to learn which agent it just connected.
+	Agent Agent `json:"agent"`
+
+	// Format is the layout the files were rendered in.
+	Format ConfigFormat `json:"format"`
+
+	// Files are the generated configuration. Every credential in them is the
+	// ${env:AGENT_SHAKER_API_KEY} placeholder, never the plaintext — the
+	// browser substitutes what it is holding in Key.Secret at copy time. That
+	// split is deliberate: a rendered file is safe to commit, and the secret
+	// still exists in exactly one response and one browser ref.
+	Files []ConfigFile `json:"files"`
 }
 
 type UpdateAgentStatusRequest struct {

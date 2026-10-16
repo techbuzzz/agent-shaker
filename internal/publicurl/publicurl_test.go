@@ -1,4 +1,4 @@
-package server
+package publicurl
 
 import (
 	"crypto/tls"
@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestResolvePublicBaseURL(t *testing.T) {
+func TestResolve(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -115,8 +115,8 @@ func TestResolvePublicBaseURL(t *testing.T) {
 				}
 			}
 
-			if got := resolvePublicBaseURL(tc.configured, r); got != tc.want {
-				t.Errorf("resolvePublicBaseURL() = %q, want %q", got, tc.want)
+			if got := Resolve(tc.configured, r); got != tc.want {
+				t.Errorf("Resolve() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -132,8 +132,8 @@ func TestResolvePublicBaseURLRefusesEmptyHost(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.Host = ""
 
-	if got := resolvePublicBaseURL("", r); got != "" {
-		t.Errorf("resolvePublicBaseURL() = %q, want empty", got)
+	if got := Resolve("", r); got != "" {
+		t.Errorf("Resolve() = %q, want empty", got)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestIsValidAuthority(t *testing.T) {
 		"localhost",
 	}
 	for _, s := range valid {
-		if !isValidAuthority(s) {
-			t.Errorf("isValidAuthority(%q) = false, want true", s)
+		if !IsValidAuthority(s) {
+			t.Errorf("IsValidAuthority(%q) = false, want true", s)
 		}
 	}
 
@@ -171,8 +171,8 @@ func TestIsValidAuthority(t *testing.T) {
 		"host\r\nX-Injected: 1",
 	}
 	for _, s := range invalid {
-		if isValidAuthority(s) {
-			t.Errorf("isValidAuthority(%q) = true, want false", s)
+		if IsValidAuthority(s) {
+			t.Errorf("IsValidAuthority(%q) = true, want false", s)
 		}
 	}
 }

@@ -68,6 +68,15 @@ export interface APIKey {
   key_prefix: string
   principal_id: string
   project_id?: string
+  /**
+   * The agent this credential is bound to, or absent when it is bound to none.
+   *
+   * Absent is the common case rather than the exception: every key issued
+   * before migration 017 has no agent binding, as does the legacy shared-secret
+   * path. When it *is* present, the MCP surface treats it as authoritative and
+   * rejects an `agent_id` in the connection URL that names a different agent.
+   */
+  agent_id?: string
   scopes: KeyScope[] | null
   created_at: string
   last_used_at?: string
@@ -77,10 +86,16 @@ export interface APIKey {
   principal_name?: string
 }
 
-/** models.CreateAPIKeyRequest. `principal_type` is never accepted from a client. */
+/**
+ * models.CreateAPIKeyRequest. `principal_type` is never accepted from a client.
+ *
+ * `agent_id` binds the key to one agent; the server then takes the key's project
+ * from that agent rather than from the body, so the two cannot disagree.
+ */
 export interface CreateKeyInput {
   principal_id: string
   project_id?: string
+  agent_id?: string
   scopes: KeyScope[]
 }
 

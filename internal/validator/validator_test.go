@@ -1,6 +1,8 @@
 package validator
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -69,6 +71,27 @@ func TestValidateCreateAgentRequest(t *testing.T) {
 			req:     models.CreateAgentRequest{Name: "Test Agent", ProjectID: zeroUUID},
 			wantErr: true,
 		},
+		{
+			// tool_type arrived with migration 017. A client that predates it
+			// sends nothing, and that must keep working — otherwise adding a
+			// field would have been a breaking change.
+			name:    "no tool type",
+			req:     models.CreateAgentRequest{Name: "Test Agent", ProjectID: validProjectID},
+			wantErr: false,
+		},
+		{
+			name:    "known tool type",
+			req:     models.CreateAgentRequest{Name: "Test Agent", ProjectID: validProjectID, ToolType: models.ToolClaudeCode},
+			wantErr: false,
+		},
+		{
+			// Refused here with a message listing the vocabulary, rather than at
+			// the CHECK constraint — which would surface as a 500 naming a
+			// database object the caller has no way to interpret.
+			name:    "unknown tool type",
+			req:     models.CreateAgentRequest{Name: "Test Agent", ProjectID: validProjectID, ToolType: "emacs"},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -76,6 +99,18 @@ func TestValidateCreateAgentRequest(t *testing.T) {
 			err := ValidateCreateAgentRequest(&tt.req)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateCreateAgentRequest() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			// The tool-type rejection has to be traceable to the vocabulary
+			// error rather than being a generic validation failure: that is what
+			// lets the HTTP layer answer 400 with the accepted list instead of
+			// an opaque message.
+			if tt.wantErr && tt.req.ToolType != "" {
+				if !errors.Is(err, models.ErrUnknownToolType) {
+					t.Errorf("error %v does not wrap models.ErrUnknownToolType", err)
+				}
+				if !strings.Contains(err.Error(), "claude-code") {
+					t.Errorf("error %q does not list the accepted values", err)
+				}
 			}
 		})
 	}

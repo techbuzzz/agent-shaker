@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Agent, AgentStatus } from '~/types/api'
-import { AGENT_STATUSES, AGENT_STATUS_LABELS, statusItems } from '~/types/api'
+import { AGENT_STATUSES, AGENT_STATUS_LABELS, AGENT_TOOL_TYPE_LABELS, statusItems } from '~/types/api'
 
 useHead({ title: 'Agents · Agent Shaker' })
 
@@ -53,6 +53,19 @@ async function confirmDelete() {
   deleting.value = null
   toast.success('Agent removed')
 }
+
+/**
+ * The connection wizard target.
+ *
+ * Held separately from `deleting` rather than sharing a "current agent" ref,
+ * because the two modals can never be open at once and conflating them would
+ * mean one `ref<Agent | null>` whose meaning depends on which dialog is mounted.
+ */
+const connecting = ref<Agent | null>(null)
+const connectingOpen = computed({
+  get: () => connecting.value !== null,
+  set: (v: boolean) => { if (!v) connecting.value = null }
+})
 </script>
 
 <template>
@@ -87,6 +100,13 @@ async function confirmDelete() {
             <div class="flex items-center gap-2">
               <h3 class="font-semibold truncate">{{ a.name }}</h3>
               <UBadge variant="subtle" size="xs">{{ a.role }}</UBadge>
+              <UBadge
+                v-if="a.tool_type && a.tool_type !== 'unknown'"
+                variant="subtle"
+                size="xs"
+              >
+                {{ AGENT_TOOL_TYPE_LABELS[a.tool_type] }}
+              </UBadge>
             </div>
             <p class="text-xs text-muted mt-1">{{ a.team || '—' }}</p>
             <NuxtLink :to="`/projects/${a.project_id}`" class="text-xs text-primary hover:underline">View project</NuxtLink>
@@ -104,11 +124,23 @@ async function confirmDelete() {
             size="xs"
             @update:model-value="(v) => updateStatus(a, v as Agent['status'])"
           />
-          <UButton icon="i-lucide-trash" variant="ghost" color="error" size="xs" aria-label="Delete" @click="deleting = a" />
+          <div class="flex items-center gap-1">
+            <UButton
+              icon="i-lucide-plug"
+              variant="ghost"
+              color="neutral"
+              size="xs"
+              aria-label="Connect agent"
+              @click="connecting = a"
+            />
+            <UButton icon="i-lucide-trash" variant="ghost" color="error" size="xs" aria-label="Delete" @click="deleting = a" />
+          </div>
         </div>
       </UCard>
     </div>
 
     <ConfirmDialog v-model="deletingOpen" :title="`Delete agent ${deleting?.name}?`" confirm-label="Delete" @confirm="confirmDelete" />
+
+    <AgentConnectionModal v-model="connectingOpen" :agent="connecting" />
   </div>
 </template>

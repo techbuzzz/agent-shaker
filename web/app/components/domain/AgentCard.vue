@@ -1,8 +1,14 @@
 <script setup lang="ts">
 import type { Agent, AgentStatus } from '~/types/api'
+import { AGENT_TOOL_TYPE_LABELS } from '~/types/api'
 
 defineProps<{ agent: Agent }>()
-defineEmits<{ (e: 'edit', a: Agent): void; (e: 'delete', a: Agent): void }>()
+defineEmits<{
+  (e: 'edit', a: Agent): void
+  (e: 'delete', a: Agent): void
+  /** Open the connection wizard — mints a credential bound to this agent. */
+  (e: 'connect', a: Agent): void
+}>()
 
 const { relativeTime } = useFormatters()
 
@@ -83,6 +89,20 @@ const reportedEta = (agent: Agent): string | null => {
           >
             {{ agent.role }}
           </UBadge>
+          <!--
+            The tool badge, shown only when it is actually known. 'unknown' is
+            the honest value for an agent registered before the field existed or
+            created by an MCP runtime, and printing "Unknown" next to every such
+            agent would be noise rather than information.
+          -->
+          <UBadge
+            v-if="agent.tool_type && agent.tool_type !== 'unknown'"
+            variant="subtle"
+            size="xs"
+            color="neutral"
+          >
+            {{ AGENT_TOOL_TYPE_LABELS[agent.tool_type] }}
+          </UBadge>
         </div>
         <p class="text-xs text-muted mt-1">{{ agent.team || '—' }}</p>
 
@@ -119,6 +139,14 @@ const reportedEta = (agent: Agent): string | null => {
     <div class="mt-3 pt-3 border-t border-default flex items-center justify-between text-xs text-muted">
       <span>Last seen {{ relativeTime(agent.last_seen) }}</span>
       <div class="flex gap-1">
+        <UButton
+          icon="i-lucide-plug"
+          variant="ghost"
+          color="neutral"
+          size="xs"
+          aria-label="Connect agent"
+          @click="$emit('connect', agent)"
+        />
         <UButton
           icon="i-lucide-pencil"
           variant="ghost"

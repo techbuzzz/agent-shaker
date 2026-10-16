@@ -8,6 +8,11 @@
  * side; these must match it exactly.
  */
 
+// A type-only import, deliberately: the admin vocabulary is needed by the
+// connection response shape, and a runtime import would pull it into every
+// consumer of this file.
+import type { IssuedAPIKey } from './admin'
+
 export type ProjectStatus = 'active' | 'archived'
 
 export const AGENT_STATUSES = ['active', 'idle', 'blocked', 'offline'] as const
@@ -57,6 +62,76 @@ export type MilestoneStatus = 'planned' | 'active' | 'done' | 'dropped'
 export type GlobalContextScope = 'global' | 'project'
 export type ProjectRepoRole = 'code' | 'infra' | 'docs' | 'design'
 
+/**
+ * Agent tool vocabulary — which client an agent runs in.
+ *
+ * Mirrors `models.AllToolTypes` and the `tool_type` CHECK in
+ * migrations/017_federation_identity.up.sql. Declared as a tuple before the type
+ * is derived from it, the same way the status vocabularies above are, so a value
+ * cannot reach the type without also having a label and a dropdown entry.
+ *
+ * The last four are recognised but not yet renderable: OpenCode, Windsurf and
+ * both Copilot surfaces are Phase 3 and Phase 4 work, and 'a2a' is not an MCP
+ * host at all. An agent on any of them still gets a working generic `.mcp.json`.
+ */
+export const AGENT_TOOL_TYPES = [
+  'claude-code',
+  'codex',
+  'opencode',
+  'copilot-cli',
+  'copilot-vs',
+  'cursor',
+  'windsurf',
+  'a2a',
+  'generic-mcp',
+  'unknown'
+] as const
+export type AgentToolType = (typeof AGENT_TOOL_TYPES)[number]
+
+/**
+ * Labels for the tool select.
+ *
+ * Declared as a `Record<AgentToolType, string>` on purpose: a new constant
+ * without an entry here is a typecheck failure, not a blank dropdown row.
+ */
+export const AGENT_TOOL_TYPE_LABELS: Record<AgentToolType, string> = {
+  'claude-code': 'Claude Code',
+  codex: 'Codex CLI',
+  opencode: 'OpenCode',
+  'copilot-cli': 'Copilot CLI',
+  'copilot-vs': 'Copilot in Visual Studio',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  a2a: 'Custom A2A agent',
+  'generic-mcp': 'Generic MCP host',
+  unknown: 'Unknown'
+}
+
+/**
+ * Tools that get a dedicated generated file layout today.
+ *
+ * Mirrors `models.ToolType.SupportsConfigGeneration`. An agent on anything else
+ * falls back to `generic-mcp`, which is what most MCP hosts read — so this is
+ * about which file is written, not about whether an agent can be connected.
+ */
+export const RENDERABLE_TOOL_TYPES: readonly AgentToolType[] = [
+  'claude-code',
+  'codex',
+  'cursor',
+  'generic-mcp'
+]
+
+/** Config formats the server can render. Mirrors `models.AllConfigFormats`. */
+export const CONFIG_FORMATS = ['claude', 'codex', 'cursor', 'generic'] as const
+export type ConfigFormat = (typeof CONFIG_FORMATS)[number]
+
+export const CONFIG_FORMAT_LABELS: Record<ConfigFormat, string> = {
+  claude: 'Claude Code (.claude/mcp.json)',
+  codex: 'Codex CLI (~/.codex/mcp.json)',
+  cursor: 'Cursor (.cursor/mcp.json)',
+  generic: 'Generic MCP host (.mcp.json)'
+}
+
 export interface Project {
   id: string
   name: string
@@ -75,6 +150,15 @@ export interface Agent {
   status: AgentStatus
   last_seen: string
   created_at: string
+
+  /**
+   * Which client this agent runs in — Claude Code, Codex, Cursor and so on.
+   *
+   * What makes the generated configuration correct rather than merely
+   * plausible: the file layout is chosen from this, so "the file we told you to
+   * write" and "what this agent is" cannot drift apart.
+   */
+  tool_type: AgentToolType
 
   // --- Coordination Plane (migrations/015) ---
 
@@ -315,6 +399,57 @@ export interface CreateAgentInput {
   role: AgentRole
   team: string
   status?: AgentStatus
+  /**
+   * Optional. Omitted means 'unknown', which the server normalises for us —
+   * an older client that has never heard of the field keeps working.
+   */
+  tool_type?: AgentToolType
+}
+
+/**
+ * One generated configuration file — mirrors `models.ConfigFile`.
+ *
+ * `content` never contains a credential. It references
+ * `${env:AGENT_SHAKER_API_KEY}`, which is what makes a downloaded file safe to
+ * commit; the plaintext is substituted by the browser at copy time from what
+ * `IssuedAPIKey.secret` held a moment earlier.
+ */
+export interface AgentConfigFile {
+  format: ConfigFormat
+  /** Repository-relative path. Empty for user-level files. */
+  filename: string
+  /** Where a user-level file goes, e.g. `~/.codex/mcp.json`. */
+  target?: string
+  description: string
+  content: string
+  install?: string
+}
+
+/** GET /api/agents/{id}/config */
+export interface AgentConfigResponse {
+  agent: Agent
+  format: ConfigFormat
+  files: AgentConfigFile[]
+  env_var: string
+  endpoints: { mcp: string }
+}
+
+/**
+ * POST /api/agents/{id}/connection — mirrors `models.AgentConnectionResponse`.
+ *
+ * `key.secret` is the only copy of the plaintext that will ever exist. The
+ * server keeps the hash, so this value is gone the moment the modal closes.
+ */
+export interface AgentConnectionResponse {
+  key: IssuedAPIKey
+  agent: Agent
+  format: ConfigFormat
+  files: AgentConfigFile[]
+}
+
+/** POST /api/agents/{id}/connection request. Carries no scopes, deliberately. */
+export interface AgentConnectionInput {
+  format?: ConfigFormat
 }
 export interface UpdateAgentStatusInput {
   status: AgentStatus

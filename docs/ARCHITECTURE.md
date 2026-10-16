@@ -78,6 +78,7 @@ cmd/server/          API + MCP + A2A + WebSocket HTTP server (:8080)
 cmd/migrate/         standalone migration runner (the `migrate` compose job)
 internal/a2a/        A2A protocol: server, outbound client, models, mapper
 internal/authkey/    key minting, hashing and well-formedness helpers
+internal/configgen/  generated MCP configuration (the single source of truth)
 internal/database/   connection, queries, task store implementations
 internal/handlers/   REST handlers, one file per resource
 internal/httpx/      shared HTTP response and error envelopes
@@ -85,6 +86,7 @@ internal/mcp/        MCP tool definitions, schemas and runtime validation
 internal/middleware/ auth, scopes, CORS, rate limit, logging, headers
 internal/models/     domain types and the status vocabularies (status.go)
 internal/observability/ Prometheus metrics and OpenTelemetry wiring
+internal/publicurl/  origin resolution for anything a client outside reads
 internal/task/       A2A task lifecycle (Manager, Store, TaskExecutor)
 internal/validator/  request payload validation
 internal/websocket/  hub and connection lifecycle
@@ -192,6 +194,53 @@ The same `Principal` governs the MCP, A2A and WebSocket surfaces; `/ws`
 additionally accepts `?api_key=`, which is the only way a browser can
 authenticate a handshake, and it is the only route on which a credential is
 accepted from a query string.
+
+### Agent identity on the MCP surface
+
+A key may name an agent (`api_keys.agent_id`). When it does, that binding is the
+identity: the `agent_id` in an MCP connection URL is checked against it rather
+than believed, and a disagreement is refused with a 403.
+
+Without this, the MCP handler took `agent_id` from the query string and used it
+as-is, while the key behind the request was scoped only to a project — so any
+holder of a project key could act as any agent in it. Every identity-aware tool
+(`get_my_identity`, `get_my_tasks`, `claim_task`, `send_heartbeat`, the blocker
+tools) reads the value once resolved in `HandleMCP`, which is what keeps the rule
+in one place instead of one per tool.
+
+Keys with no binding — every key issued before migration 017, and the
+`API_KEYS` shared secrets — keep supplying `agent_id` in the URL and keep being
+trusted, because that is the only identity they have. See
+[AUTHENTICATION.md](AUTHENTICATION.md) for the full precedence table.
+
+## Configuration Generation
+
+`internal/configgen` is the single source of truth for what a generated MCP
+configuration contains. It is a pure package: an origin in, strings out, with no
+database, no HTTP and no environment lookups.
+
+It lives on the server rather than in the browser because the generator would
+otherwise exist twice — once in the Nuxt bundle and once in any CLI or plugin —
+and two implementations of "what should this config say" drift apart. One gets a
+tool type added, the other does not, and a developer receives a config for the
+wrong client with nothing pointing at the cause.
+
+Three invariants, each pinned by a test:
+
+- **No credential in a rendered file.** Every header references
+  `${env:AGENT_SHAKER_API_KEY}`. The plaintext is substituted by the browser at
+  copy time, in memory, from the one response that carried it — which is what
+  makes a generated file safe to commit.
+- **The URL shape is unchanged** from the client-side generator this replaced, so
+  a config generated here works against a server that has not been upgraded.
+- **Formats are chosen from `agents.tool_type`** (migration 017), which is why
+  that column exists: the operator picks the tool once, at registration, and
+  every later request renders the right layout.
+
+`internal/publicurl` resolves the origin those files point at, shared with the
+A2A agent card. An agent runs outside the compose network, so a config
+advertising `localhost:8080` sends it to a dead address; `BASE_URL` overrides,
+otherwise the request's own hop (honouring `X-Forwarded-*`) decides.
 
 ## A2A Boundary: Coordination, Not Execution
 

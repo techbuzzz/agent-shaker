@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { Agent, CreateAgentInput, AgentStatus } from '~/types/api'
-import { AGENT_STATUSES, AGENT_STATUS_LABELS, statusItems } from '~/types/api'
+import type { Agent, CreateAgentInput, AgentStatus, AgentToolType } from '~/types/api'
+import { AGENT_STATUSES, AGENT_STATUS_LABELS, AGENT_TOOL_TYPES, AGENT_TOOL_TYPE_LABELS, statusItems } from '~/types/api'
 import { compose, maxLength, required } from '~/utils/formValidation'
 
 const props = defineProps<{
@@ -28,7 +28,8 @@ const form = reactive<CreateAgentInput>({
   name: '',
   role: 'backend',
   team: '',
-  status: 'active' as AgentStatus
+  status: 'active' as AgentStatus,
+  tool_type: 'unknown' as AgentToolType
 })
 
 const validate = compose<CreateAgentInput>(
@@ -55,6 +56,10 @@ watch(() => props.modelValue, (v) => {
     form.role = props.initial?.role ?? 'backend'
     form.team = props.initial?.team ?? ''
     form.status = props.initial?.status ?? 'active'
+    // An agent registered before this field existed reads back as 'unknown',
+    // which is the honest value rather than a default that would claim a tool
+    // the agent may not be running.
+    form.tool_type = props.initial?.tool_type ?? 'unknown'
   }
 })
 </script>
@@ -110,6 +115,21 @@ watch(() => props.modelValue, (v) => {
           { label: 'Design',          value: 'design' },
           { label: 'QA',              value: 'qa' }
         ]"
+        value-key="value"
+      />
+    </FormField>
+
+    <FormField
+      label="Tool"
+      name="tool_type"
+      hint="Which client this agent runs in. Decides the configuration file we generate for it."
+      :error="errors.tool_type"
+    >
+      <USelect
+        v-model="form.tool_type"
+        name="tool_type"
+        class="w-full"
+        :items="statusItems(AGENT_TOOL_TYPES, AGENT_TOOL_TYPE_LABELS)"
         value-key="value"
       />
     </FormField>
