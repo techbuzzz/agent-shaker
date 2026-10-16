@@ -46,6 +46,14 @@ const APIKeyEnvVar = "AGENT_SHAKER_API_KEY"
 // so replace() corrupts any secret that happens to contain those characters.
 const APIKeyPlaceholder = "${env:" + APIKeyEnvVar + "}"
 
+// OpenCodeAPIKeyPlaceholder is OpenCode's spelling of the same idea.
+//
+// One dollar-less brace pair, per https://opencode.ai/docs/mcp-servers/. A
+// config written with the ${env:VAR} form is accepted by OpenCode and expands
+// to nothing, so the agent sends `Bearer ` and gets a 401 that looks like a
+// revoked key rather than a formatting mistake.
+const OpenCodeAPIKeyPlaceholder = "{env:" + APIKeyEnvVar + "}"
+
 // ServerName is the key the server entry gets inside mcpServers.
 const ServerName = "agent-shaker"
 
@@ -112,7 +120,8 @@ func (in Input) MCPURL() string {
 // generated document is where that is said.
 func Render(in Input, format models.ConfigFormat) ([]models.ConfigFile, error) {
 	switch format {
-	case models.ConfigFormatClaude, models.ConfigFormatCodex, models.ConfigFormatCursor, models.ConfigFormatGeneric:
+	case models.ConfigFormatClaude, models.ConfigFormatCodex, models.ConfigFormatCursor,
+		models.ConfigFormatOpenCode, models.ConfigFormatGeneric:
 		return renderFor(format, in)
 	default:
 		// Unreachable through ParseConfigFormat; kept so a future format added
@@ -122,19 +131,33 @@ func Render(in Input, format models.ConfigFormat) ([]models.ConfigFile, error) {
 	}
 }
 
-// layout is the per-format difference: where the file goes and what it is
-// called. Everything else about the file is identical across formats, which is
-// why the four renderers below are one function with a lookup rather than four
-// near-copies.
+// layout is the per-format difference: where the file goes, what it is called,
+// and how the client spells an environment variable.
+//
+// Everything else about the file is identical across formats, which is why the
+// renderers below are one function with a lookup rather than four near-copies.
 type layout struct {
 	filename    string
 	target      string
 	description string
 	install     string
-	// serverKey is the top-level object the server entry lives under.
-	// Visual Studio 2026 and MCP hosts following the same convention read
-	// `mcpServers`; VS Code reads `servers`.
+
+	// serverKey is the top-level object the server entry lives under. Most
+	// hosts read `mcpServers`; OpenCode reads `mcp`.
 	serverKey string
+
+	// credential is how this client refers to an environment variable inside a
+	// config file. It is NOT a style preference — it is the difference between
+	// the client expanding the value and handing the agent the literal string.
+	//
+	// Claude Code, Cursor and the mcpServers convention expand ${env:VAR}.
+	// OpenCode expands {env:VAR}, per https://opencode.ai/docs/mcp-servers/.
+	// Emitting the other spelling produces a file that is valid JSON, shows a
+	// real-looking header, and sends a 401 that reads like a wrong key.
+	credential string
+
+	// entryType is the discriminator OpenCode requires on every remote server.
+	entryType string
 }
 
 func layoutFor(format models.ConfigFormat) layout {
@@ -144,6 +167,18 @@ func layoutFor(format models.ConfigFormat) layout {
 			filename:    ".claude/mcp.json",
 			description: "Claude Code reads this from the project directory or ~/.claude",
 			serverKey:   "mcpServers",
+			credential:  APIKeyPlaceholder,
+		}
+	case models.ConfigFormatOpenCode:
+		// opencode.json, not a dedicated mcp file: OpenCode keeps MCP servers
+		// alongside its other settings in one document. Writing .opencode/mcp.json
+		// would produce a file the tool never reads.
+		return layout{
+			filename:    "opencode.json",
+			description: "OpenCode reads this from the project directory or ~/.config/opencode",
+			serverKey:   "mcp",
+			credential:  OpenCodeAPIKeyPlaceholder,
+			entryType:   "remote",
 		}
 	case models.ConfigFormatCodex:
 		return layout{
@@ -154,18 +189,21 @@ func layoutFor(format models.ConfigFormat) layout {
 			description: "Codex CLI reads this from your home directory",
 			install:     "mkdir -p ~/.codex && cat > ~/.codex/mcp.json",
 			serverKey:   "mcpServers",
+			credential:  APIKeyPlaceholder,
 		}
 	case models.ConfigFormatCursor:
 		return layout{
 			filename:    ".cursor/mcp.json",
 			description: "Cursor reads this from the project directory",
 			serverKey:   "mcpServers",
+			credential:  APIKeyPlaceholder,
 		}
 	default:
 		return layout{
 			filename:    ".mcp.json",
 			description: "The convention read by Visual Studio 2026 and most MCP hosts",
 			serverKey:   "mcpServers",
+			credential:  APIKeyPlaceholder,
 		}
 	}
 }
@@ -173,7 +211,27 @@ func layoutFor(format models.ConfigFormat) layout {
 func renderFor(format models.ConfigFormat, in Input) ([]models.ConfigFile, error) {
 	lay := layoutFor(format)
 
-	config := fmt.Sprintf(`{
+	// Every host in mcpServers form uses the same shape; OpenCode differs in
+	// three ways at once (the `mcp` key, an explicit `type: remote`, and its own
+	// {env:VAR} syntax), so it gets its own branch rather than three booleans
+	// threaded through one template.
+	var config string
+	if lay.entryType != "" {
+		config = fmt.Sprintf(`{
+  %q: {
+    %q: {
+      "type": %q,
+      "url": %q,
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer %s"
+      }
+    }
+  }
+}
+`, lay.serverKey, ServerName, lay.entryType, in.MCPURL(), lay.credential)
+	} else {
+		config = fmt.Sprintf(`{
   %q: {
     %q: {
       "type": "http",
@@ -184,9 +242,10 @@ func renderFor(format models.ConfigFormat, in Input) ([]models.ConfigFile, error
     }
   }
 }
-`, lay.serverKey, ServerName, in.MCPURL(), APIKeyPlaceholder)
+`, lay.serverKey, ServerName, in.MCPURL(), lay.credential)
+	}
 
-	instructions := in.instructions()
+	instructions := in.instructions(lay.credential)
 
 	return []models.ConfigFile{
 		{
@@ -217,12 +276,11 @@ type instructionsFile struct {
 
 // instructions builds the markdown document that accompanies the config.
 //
-// Its placement differs by tool for one reason: Claude Code reads markdown
-// instructions from the project, so they can live in the repository next to the
-// code they describe; Codex and Cursor have no equivalent per-project file, so
-// the document is emitted alongside the config with an install hint rather than
-// pretending it will be picked up.
-func (in Input) instructions() instructionsFile {
+// The credential spelling in the prose has to match the spelling in the config
+// file beside it, or the agent copies a working config and then writes its own
+// header wrong: OpenCode expands {env:VAR}, everything else ${env:VAR}. One
+// document, one spelling, taken from the layout rather than re-derived here.
+func (in Input) instructions(credential string) instructionsFile {
 	scope := fmt.Sprintf("- Project: **%s** (`%s`)", in.ProjectName, in.ProjectID)
 	if in.AgentName != "" {
 		scope += fmt.Sprintf("\n- Agent: **%s** (`%s`)", in.AgentName, in.AgentID)
@@ -246,7 +304,12 @@ func (in Input) instructions() instructionsFile {
 		"%s\n"+
 		"\n"+
 		"Endpoint: `%s`\n"+
-		"Authentication: `Authorization: Bearer $${%s}`\n"+
+		// %s carries the client's own variable spelling (${env:VAR} or
+		// {env:VAR}) straight through, unescaped. An earlier version doubled the
+		// dollar sign to survive fmt.Sprintf, which taught every agent to write
+		// `$${...}` — a literal dollar in front of the key, and therefore a 401
+		// on the first authenticated call.
+		"Authentication: `Authorization: Bearer %s`\n"+
 		"\n"+
 		"## The loop\n"+
 		"\n"+
@@ -275,7 +338,7 @@ func (in Input) instructions() instructionsFile {
 		"  refusal rather than a silent no-op.\n"+
 		"- Live updates also arrive over the app's WebSocket. The MCP connection is\n"+
 		"  for acting; the UI is for watching.\n",
-		scope, in.MCPURL(), APIKeyEnvVar, toolSection)
+		scope, in.MCPURL(), credential, toolSection)
 
 	return instructionsFile{
 		filename: "AGENT_SHAKER.md",

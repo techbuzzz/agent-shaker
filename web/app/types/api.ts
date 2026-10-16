@@ -108,8 +108,6 @@ export const AGENT_TOOL_TYPE_LABELS: Record<AgentToolType, string> = {
 }
 
 /**
- * Tools that get a dedicated generated file layout today.
- *
  * Mirrors `models.ToolType.SupportsConfigGeneration`. An agent on anything else
  * falls back to `generic-mcp`, which is what most MCP hosts read — so this is
  * about which file is written, not about whether an agent can be connected.
@@ -117,18 +115,22 @@ export const AGENT_TOOL_TYPE_LABELS: Record<AgentToolType, string> = {
 export const RENDERABLE_TOOL_TYPES: readonly AgentToolType[] = [
   'claude-code',
   'codex',
+  'opencode',
   'cursor',
   'generic-mcp'
 ]
 
 /** Config formats the server can render. Mirrors `models.AllConfigFormats`. */
-export const CONFIG_FORMATS = ['claude', 'codex', 'cursor', 'generic'] as const
+export const CONFIG_FORMATS = ['claude', 'codex', 'cursor', 'opencode', 'generic'] as const
 export type ConfigFormat = (typeof CONFIG_FORMATS)[number]
 
 export const CONFIG_FORMAT_LABELS: Record<ConfigFormat, string> = {
   claude: 'Claude Code (.claude/mcp.json)',
   codex: 'Codex CLI (~/.codex/mcp.json)',
   cursor: 'Cursor (.cursor/mcp.json)',
+  // OpenCode keeps MCP servers inside its one settings document, so there is no
+  // dedicated mcp file to point at.
+  opencode: 'OpenCode (opencode.json)',
   generic: 'Generic MCP host (.mcp.json)'
 }
 

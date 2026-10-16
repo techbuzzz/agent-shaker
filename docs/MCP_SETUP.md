@@ -30,11 +30,28 @@ That field is what picks the file layout, so "the file we told you to write" and
 | `claude-code` | `.claude/mcp.json` |
 | `codex` | `~/.codex/mcp.json` (user-level — Codex has no per-project config) |
 | `cursor` | `.cursor/mcp.json` |
+| `opencode` | `opencode.json` (OpenCode keeps MCP servers in its one settings document) |
 | anything else | `.mcp.json`, the convention most MCP hosts read |
 
-OpenCode, Windsurf and both Copilot surfaces are recognised values without a
-dedicated layout yet; those agents get the generic file, which connects. They
-are Phase 3 and Phase 4 work.
+Windsurf, both Copilot surfaces and `a2a` are recognised values without a
+dedicated layout yet; those agents get the generic file, which connects.
+
+### The credential spelling is per client
+
+Not a style preference — it is the difference between the client expanding the
+value and handing the agent the literal string:
+
+| Client | Spelling |
+| --- | --- |
+| Claude Code, Cursor, Codex, `mcpServers` convention | `${env:AGENT_SHAKER_API_KEY}` |
+| [OpenCode](https://opencode.ai/docs/mcp-servers/) | `{env:AGENT_SHAKER_API_KEY}` |
+
+OpenCode also differs in two structural ways: its servers live under an `mcp`
+key rather than `mcpServers`, and every entry must declare `"type": "remote"` —
+without it OpenCode treats the server as a local stdio process and silently runs
+nothing. The generator emits all three per format, and the prose in
+`AGENT_SHAKER.md` carries the same spelling as the config beside it, so an agent
+copying the instruction writes the form its own client expands.
 
 Alongside the config, the generator emits `AGENT_SHAKER.md`: how the agent is
 expected to work with the server. It is not decoration — the most common real

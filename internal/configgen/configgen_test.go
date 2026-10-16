@@ -61,7 +61,7 @@ func TestRenderedFilesNeverCarryACredential(t *testing.T) {
 				// it is read from, and never inline the value. The instructions
 				// document mentions the variable in prose rather than holding a
 				// header, so it is checked separately below.
-				if strings.Contains(f.Content, "Bearer "+APIKeyPlaceholder) {
+				if strings.Contains(f.Content, "Bearer "+placeholderFor(format)) {
 					sawCredentialPlaceholder = true
 					if strings.Count(f.Content, "Authorization") > 1 {
 						t.Errorf("%s: %q has more than one Authorization header", format, fileLabel(f))
@@ -70,7 +70,7 @@ func TestRenderedFilesNeverCarryACredential(t *testing.T) {
 			}
 
 			if !sawCredentialPlaceholder {
-				t.Errorf("%s: no file carries the %s placeholder in a header", format, APIKeyPlaceholder)
+				t.Errorf("%s: no file carries the %s placeholder in a header", format, placeholderFor(format))
 			}
 			if !strings.Contains(files[1].Content, APIKeyEnvVar) {
 				t.Errorf("%s: the instructions never name %s", format, APIKeyEnvVar)
@@ -86,6 +86,18 @@ func fileLabel(f models.ConfigFile) string {
 		return f.Filename
 	}
 	return f.Target
+}
+
+// placeholderFor is the credential spelling a given client expands.
+//
+// Derived from the format rather than assumed: the two spellings are one dollar
+// apart, and a file carrying the wrong one is valid JSON, shows a real-looking
+// header, and authenticates as nobody.
+func placeholderFor(format models.ConfigFormat) string {
+	if format == models.ConfigFormatOpenCode {
+		return OpenCodeAPIKeyPlaceholder
+	}
+	return APIKeyPlaceholder
 }
 
 func TestMCPURLShape(t *testing.T) {
@@ -148,6 +160,170 @@ func TestMCPURLShape(t *testing.T) {
 // TestRenderedConfigIsValidJSON guards the most common way this generator could
 // regress: emitting a template that a human reads correctly and every MCP host
 // rejects.
+// TestInstructionsSpellTheCredentialTheClientExpands is the regression test for
+// the `$${VAR}` bug.
+//
+// The instructions used to double the dollar sign to survive fmt.Sprintf. That
+// produced a document teaching every agent to write `$${AGENT_SHAKER_API_KEY}`,
+// which expands to a literal dollar in front of the key — a 401 on the first
+// authenticated call, with a message that reads like a revoked credential
+// rather than a formatting mistake. Nothing else caught it: the config file
+// beside it was always correct, so the pair looked plausible.
+func TestInstructionsSpellTheCredentialTheClientExpands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		format      models.ConfigFormat
+		wantInDoc   string
+		unwantedDoc string
+	}{
+		{
+			format:      models.ConfigFormatClaude,
+			wantInDoc:   APIKeyPlaceholder,
+			unwantedDoc: OpenCodeAPIKeyPlaceholder,
+		},
+		{
+			// The mirror image, and the reason the spelling is a property of the
+			// layout rather than a constant: OpenCode does not expand ${env:VAR},
+			// so an OpenCode agent told to write it gets a 401.
+			format:      models.ConfigFormatOpenCode,
+			wantInDoc:   OpenCodeAPIKeyPlaceholder,
+			unwantedDoc: APIKeyPlaceholder,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(string(tc.format), func(t *testing.T) {
+			t.Parallel()
+
+			files, err := Render(testInput(), tc.format)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if len(files) < 2 {
+				t.Fatalf("expected a config and an instructions file, got %d", len(files))
+			}
+			body := files[1].Content
+
+			if !strings.Contains(body, "Bearer "+tc.wantInDoc) {
+				t.Errorf("instructions do not show `Bearer %s`", tc.wantInDoc)
+			}
+			// Anchored on "Bearer " on purpose: bare {env:VAR} is a substring of
+			// ${env:VAR}, so an unanchored check reports the correct spelling as
+			// also containing the wrong one.
+			if strings.Contains(body, "Bearer "+tc.unwantedDoc) {
+				t.Errorf("instructions show `Bearer %s`, which this client does not expand", tc.unwantedDoc)
+			}
+			// The literal bug: a doubled dollar anywhere in the document.
+			if strings.Contains(body, "$$") {
+				t.Error("instructions contain a doubled dollar; an agent copying it sends a literal $ before the key")
+			}
+		})
+	}
+}
+
+// TestOpenCodeConfigMatchesItsDocument pins the three things that make an
+// OpenCode config work, all of which are documented at
+// https://opencode.ai/docs/mcp-servers/ and none of which match the mcpServers
+// convention:
+//
+//   - the servers live under `mcp`, not `mcpServers`
+//   - each entry declares `"type": "remote"`
+//   - variables expand as {env:VAR}
+func TestOpenCodeConfigMatchesItsDocument(t *testing.T) {
+	t.Parallel()
+
+	files, err := Render(testInput(), models.ConfigFormatOpenCode)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	config := files[0]
+	if config.Filename != "opencode.json" {
+		t.Errorf("Filename = %q, want opencode.json — a dedicated mcp.json would be ignored", config.Filename)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(config.Content), &parsed); err != nil {
+		t.Fatalf("rendered config is not valid JSON: %v\n%s", err, config.Content)
+	}
+	if _, wrong := parsed["mcpServers"]; wrong {
+		t.Error("config uses mcpServers; OpenCode reads `mcp`")
+	}
+	servers, ok := parsed["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("no `mcp` object in %s", config.Content)
+	}
+	entry, ok := servers[ServerName].(map[string]any)
+	if !ok {
+		t.Fatalf("no %q entry in %s", ServerName, config.Content)
+	}
+	if entry["type"] != "remote" {
+		t.Errorf(`type = %v, want "remote" — OpenCode distinguishes local from remote servers`, entry["type"])
+	}
+	headers, ok := entry["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("no headers in %s", config.Content)
+	}
+	auth, _ := headers["Authorization"].(string)
+	if !strings.Contains(auth, OpenCodeAPIKeyPlaceholder) {
+		t.Errorf("Authorization = %q, want the OpenCode spelling %s", auth, OpenCodeAPIKeyPlaceholder)
+	}
+	if strings.Contains(auth, APIKeyPlaceholder) {
+		t.Errorf("Authorization = %q uses the ${env:VAR} form OpenCode does not expand", auth)
+	}
+}
+
+// TestEveryFormatRendersAUsablePlaceholder keeps the two spellings from
+// drifting: whichever format is rendered, its config must carry the placeholder
+// that its own client expands.
+func TestEveryFormatRendersAUsablePlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range models.AllConfigFormats {
+		t.Run(string(format), func(t *testing.T) {
+			t.Parallel()
+
+			files, err := Render(testInput(), format)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			config := files[0]
+
+			want := APIKeyPlaceholder
+			if format == models.ConfigFormatOpenCode {
+				want = OpenCodeAPIKeyPlaceholder
+			}
+			if !strings.Contains(config.Content, "Bearer "+want) {
+				t.Errorf("%s: config does not carry `Bearer %s`", format, want)
+			}
+			// Exactly one spelling, never both: a file carrying both would
+			// expand the right one on one client and the wrong one on another.
+			// Anchored on "Bearer " because the two spellings nest — {env:VAR} is
+			// a substring of ${env:VAR} — and an unanchored check flags the
+			// correct one.
+			other := OpenCodeAPIKeyPlaceholder
+			if want == OpenCodeAPIKeyPlaceholder {
+				other = APIKeyPlaceholder
+			}
+			if strings.Contains(config.Content, "Bearer "+other) {
+				t.Errorf("%s: config also carries `Bearer %s`, the spelling this client will not expand", format, other)
+			}
+		})
+	}
+}
+
+func TestOpenCodeIsTheDefaultForItsToolType(t *testing.T) {
+	t.Parallel()
+
+	if got := models.ToolOpenCode.DefaultFormat(); got != models.ConfigFormatOpenCode {
+		t.Errorf("open-code default = %s, want opencode", got)
+	}
+	if !models.ToolOpenCode.SupportsConfigGeneration() {
+		t.Error("open-code SupportsConfigGeneration() = false, want true now that the layout exists")
+	}
+}
+
 func TestRenderedConfigIsValidJSON(t *testing.T) {
 	t.Parallel()
 
@@ -165,16 +341,28 @@ func TestRenderedConfigIsValidJSON(t *testing.T) {
 				t.Fatalf("rendered config is not valid JSON: %v\n%s", err, files[0].Content)
 			}
 
-			server, ok := config["mcpServers"].(map[string]any)
+			// Read back through the layout rather than a hardcoded key, so a
+			// format that stores its servers somewhere else is checked on its
+			// own terms instead of failing this assertion.
+			lay := layoutFor(format)
+			server, ok := config[lay.serverKey].(map[string]any)
 			if !ok {
-				t.Fatalf("no mcpServers entry in %s", files[0].Content)
+				t.Fatalf("no %q entry in %s", lay.serverKey, files[0].Content)
 			}
 			entry, ok := server[ServerName].(map[string]any)
 			if !ok {
 				t.Fatalf("no %q entry in %s", ServerName, files[0].Content)
 			}
-			if entry["type"] != "http" {
-				t.Errorf("type = %v, want http", entry["type"])
+			// The transport discriminator differs by host: mcpServers hosts say
+			// "http", OpenCode says "remote". Both must be present, because
+			// OpenCode treats a missing type as a local stdio server and then
+			// silently runs nothing.
+			wantType := "http"
+			if lay.entryType != "" {
+				wantType = lay.entryType
+			}
+			if entry["type"] != wantType {
+				t.Errorf("type = %v, want %s", entry["type"], wantType)
 			}
 			url, _ := entry["url"].(string)
 			if !strings.Contains(url, "/mcp?") {
@@ -196,11 +384,11 @@ func TestFormatDefaultsToToolType(t *testing.T) {
 	}{
 		{models.ToolClaudeCode, models.ConfigFormatClaude},
 		{models.ToolCodex, models.ConfigFormatCodex},
+		{models.ToolOpenCode, models.ConfigFormatOpenCode},
 		{models.ToolCursor, models.ConfigFormatCursor},
 		{models.ToolGenericMCP, models.ConfigFormatGeneric},
-		// Phase 3 and 4 tools have no dedicated layout yet, and fall back to
-		// the convention most hosts read rather than refusing.
-		{models.ToolOpenCode, models.ConfigFormatGeneric},
+		// Tool types with no dedicated layout yet fall back to the convention
+		// most hosts read rather than refusing.
 		{models.ToolWindsurf, models.ConfigFormatGeneric},
 		{models.ToolCopilotCLI, models.ConfigFormatGeneric},
 		{models.ToolA2A, models.ConfigFormatGeneric},

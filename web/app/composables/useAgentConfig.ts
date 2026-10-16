@@ -27,6 +27,26 @@ export const API_KEY_ENV_VAR = 'AGENT_SHAKER_API_KEY'
 export const API_KEY_PLACEHOLDER = `\${env:${API_KEY_ENV_VAR}}`
 
 /**
+ * OpenCode's spelling of the same idea — one brace pair, no dollar.
+ *
+ * Per https://opencode.ai/docs/mcp-servers/ OpenCode expands `{env:VAR}` and
+ * leaves `${env:VAR}` alone. It is included here rather than treated as an
+ * OpenCode quirk because a file carrying the wrong one is valid JSON with a
+ * real-looking header: it fails at the server as a 401 that reads like a revoked
+ * key, and the operator has no way to guess it is a formatting difference.
+ *
+ * Note this is a substring of API_KEY_PLACEHOLDER, so a replacement ordered
+ * from longest to shortest must not match `${…}` with the short pattern first.
+ */
+export const OPENCODE_API_KEY_PLACEHOLDER = `{env:${API_KEY_ENV_VAR}}`
+
+/** Every spelling the server can render, longest first so none is a prefix of another. */
+const PLACEHOLDERS: readonly string[] = [
+  API_KEY_PLACEHOLDER,
+  OPENCODE_API_KEY_PLACEHOLDER
+].sort((a, b) => b.length - a.length)
+
+/**
  * Substitute the plaintext into a generated file.
  *
  * Implemented as split/join rather than `String.replace`, and that is the whole
@@ -46,7 +66,11 @@ export const API_KEY_PLACEHOLDER = `\${env:${API_KEY_ENV_VAR}}`
  */
 export function injectSecret(content: string, secret: string): string {
   if (!content || !secret) return content
-  return content.split(API_KEY_PLACEHOLDER).join(secret)
+  // Every known spelling, not just the default one: the browser does not know
+  // which client a file is for, and leaving the OpenCode form untouched would
+  // hand the operator a file that still says `{env:AGENT_SHAKER_API_KEY}` after
+  // they pasted their key.
+  return PLACEHOLDERS.reduce((acc, ph) => acc.split(ph).join(secret), content)
 }
 
 /**

@@ -170,6 +170,13 @@ const deletingRepoOpen = computed({
 
 const showMcpSetup = ref(false)
 
+/** The agent whose connection wizard is open, driven by the plug on its card. */
+const connectingAgent = ref<Agent | null>(null)
+const connectingAgentOpen = computed({
+  get: () => connectingAgent.value !== null,
+  set: (v: boolean) => { if (!v) connectingAgent.value = null }
+})
+
 const showProjectGctx = ref(false)
 const deletingGctx = ref<GlobalContext | null>(null)
 const viewingGctx = ref<GlobalContext | null>(null)
@@ -369,6 +376,7 @@ const currentAgentIsPM = computed(() => {
               v-for="a in agents" :key="a.id" :agent="a"
               @edit="(ag) => { editingAgent = ag; showAgent = true }"
               @delete="(ag) => deletingAgent = ag"
+              @connect="(ag) => connectingAgent = ag"
             />
           </div>
         </div>
@@ -568,6 +576,17 @@ const currentAgentIsPM = computed(() => {
       :project-name="project?.name"
       :agents="agentsForSelect"
       :default-agent-id="settings.recentAgentId ?? ''"
+    />
+
+    <!--
+      The plug on each agent card opens this. AgentCard has always emitted
+      `connect`; nothing on this page listened, so the button was inert here
+      while working on /agents — a dead affordance that looks like a bug in the
+      card rather than a missing listener.
+    -->
+    <AgentConnectionModal
+      v-model="connectingAgentOpen"
+      :agent="connectingAgent"
     />
     <ContextViewer v-model="viewingGctxOpen" :context="viewingGctx" :agent-name="viewingGctx ? agentsById[viewingGctx.agent_id] : undefined" />
 

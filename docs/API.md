@@ -144,7 +144,7 @@ Render the MCP configuration for one agent.
 - `id` (uuid) - Agent ID
 
 **Query Parameters:**
-- `format` (string, optional) - `claude`, `codex`, `cursor` or `generic`.
+- `format` (string, optional) - `claude`, `codex`, `cursor`, `opencode` or
   Omitted, the layout matching the agent's `tool_type` is rendered.
 
 **Response:**
@@ -167,9 +167,11 @@ Render the MCP configuration for one agent.
 }
 ```
 
-**No credential appears in the response.** Every rendered file references
-`${env:AGENT_SHAKER_API_KEY}` instead, which is what makes a downloaded file safe
-to commit. The plaintext lives only in the `POST .../connection` response below.
+**No credential appears in the response.** Every rendered file references the
+environment variable its own client expands - `${env:AGENT_SHAKER_API_KEY}`, or
+`{env:AGENT_SHAKER_API_KEY}` for OpenCode - which is what makes a downloaded
+file safe to commit. The plaintext lives only in the `POST .../connection`
+response below.
 
 Requires the `read` scope. An unsupported `format` is a 400 whose message
 enumerates the formats this server supports.

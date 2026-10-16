@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   API_KEY_ENV_VAR,
   API_KEY_PLACEHOLDER,
+  OPENCODE_API_KEY_PLACEHOLDER,
   fileLocation,
   injectSecret
 } from '../useAgentConfig'
@@ -64,6 +65,42 @@ describe('injectSecret', () => {
 
   it('returns the original for empty content', () => {
     expect(injectSecret('', 'ask_abc')).toBe('')
+  })
+
+  // The browser does not know which client a file is for, so it has to handle
+  // every spelling the server can render. OpenCode's is a substring of the
+  // default one, which is exactly the kind of detail that makes a
+  // replace-the-first-match implementation silently produce a file with
+  // `$ask_…` still in it.
+  describe('OpenCode spelling', () => {
+    const opencodeConfig = `{
+  "mcp": {
+    "agent-shaker": {
+      "type": "remote",
+      "url": "https://shaker.example.com/mcp?project_id=p",
+      "headers": { "Authorization": "Bearer ${OPENCODE_API_KEY_PLACEHOLDER}" }
+    }
+  }
+}`
+
+    it('substitutes the one-dollar form', () => {
+      const out = injectSecret(opencodeConfig, 'ask_abc123')
+      expect(out).toContain('Bearer ask_abc123')
+      expect(out).not.toContain(OPENCODE_API_KEY_PLACEHOLDER)
+    })
+
+    it('never leaves a leftover dollar in front of the key', () => {
+      // The failure this guards: matching the short form first leaves the `$`
+      // of `${env:…}` behind, so the file becomes `$ask_…` — which looks
+      // pasted correctly and authenticates as nobody.
+      const out = injectSecret(opencodeConfig, 'ask_abc123')
+      expect(out).not.toMatch(/\$ask_/)
+    })
+
+    it('substitutes both spellings when one document mentions both', () => {
+      const both = `${API_KEY_PLACEHOLDER}\n${OPENCODE_API_KEY_PLACEHOLDER}`
+      expect(injectSecret(both, 'ask_x')).toBe('ask_x\nask_x')
+    })
   })
 })
 

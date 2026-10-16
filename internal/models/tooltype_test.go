@@ -98,17 +98,17 @@ func TestIsValidToolType(t *testing.T) {
 func TestSupportsConfigGeneration(t *testing.T) {
 	t.Parallel()
 
-	// The four the config endpoint renders today.
-	for _, tt := range []ToolType{ToolClaudeCode, ToolCodex, ToolCursor, ToolGenericMCP} {
+	// The layouts the config endpoint renders today.
+	for _, tt := range []ToolType{ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolGenericMCP} {
 		if !tt.SupportsConfigGeneration() {
 			t.Errorf("%q.SupportsConfigGeneration() = false, want true", tt)
 		}
 	}
 
-	// Phase 3 and 4 surfaces, plus an A2A agent, which is not an MCP host at
-	// all. Returning true for any of them would mean rendering a
-	// plausible-looking file that the client ignores.
-	for _, tt := range []ToolType{ToolOpenCode, ToolWindsurf, ToolCopilotCLI, ToolCopilotVS, ToolA2A} {
+	// Phase 3 and Phase 4 surfaces, plus an A2A agent, which is not an MCP host
+	// at all. An agent on any of them still gets a working generic `.mcp.json`,
+	// but there is no layout here that would be better than the generic one.
+	for _, tt := range []ToolType{ToolWindsurf, ToolCopilotCLI, ToolCopilotVS, ToolA2A} {
 		if tt.SupportsConfigGeneration() {
 			t.Errorf("%q.SupportsConfigGeneration() = true, want false", tt)
 		}
@@ -118,10 +118,10 @@ func TestSupportsConfigGeneration(t *testing.T) {
 func TestDefaultFormatFallsBackToGeneric(t *testing.T) {
 	t.Parallel()
 
-	// Phase 3/4 tool types have no dedicated layout yet, and the generic
-	// `.mcp.json` is what most hosts read — so an agent connected today gets a
-	// working file rather than a refusal.
-	for _, tt := range []ToolType{ToolOpenCode, ToolWindsurf, ToolA2A, ToolTypeUnknown} {
+	// Tool types with no dedicated layout get the convention most hosts read,
+	// rather than a refusal: a working file for the wrong client beats a 400
+	// that explains nothing about what to do instead.
+	for _, tt := range []ToolType{ToolWindsurf, ToolCopilotCLI, ToolCopilotVS, ToolA2A, ToolTypeUnknown} {
 		if got := tt.DefaultFormat(); got != ConfigFormatGeneric {
 			t.Errorf("%q.DefaultFormat() = %s, want generic", tt, got)
 		}

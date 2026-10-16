@@ -93,13 +93,14 @@ func IsValidToolType(s string) bool {
 // SupportsConfigGeneration reports whether the config endpoint can render a
 // file layout for this tool type.
 //
-// Several values above deliberately return false: OpenCode, Windsurf and both
-// Copilot surfaces are Phase 3 and Phase 4 work, and a2a agents are not MCP
-// hosts at all. Rendering a plausible-looking file for them would be worse
-// than a 400 that names the formats this server does support.
+// A false result is deliberate: windsurf, both Copilot surfaces and a2a are
+// Phase 3 and Phase 4 work, and an a2a agent is not an MCP host at all. Every
+// false entry still gets a usable generic `.mcp.json`, which is what most hosts
+// read — rendering a plausible-looking file for a client that has no layout
+// here would be worse than being honest about it.
 func (t ToolType) SupportsConfigGeneration() bool {
 	switch t {
-	case ToolClaudeCode, ToolCodex, ToolCursor, ToolGenericMCP:
+	case ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolGenericMCP:
 		return true
 	default:
 		return false
@@ -116,6 +117,8 @@ func (t ToolType) DefaultFormat() ConfigFormat {
 		return ConfigFormatClaude
 	case ToolCodex:
 		return ConfigFormatCodex
+	case ToolOpenCode:
+		return ConfigFormatOpenCode
 	case ToolCursor:
 		return ConfigFormatCursor
 	default:
@@ -127,10 +130,11 @@ func (t ToolType) DefaultFormat() ConfigFormat {
 type ConfigFormat string
 
 const (
-	ConfigFormatClaude  ConfigFormat = "claude"
-	ConfigFormatCodex   ConfigFormat = "codex"
-	ConfigFormatCursor  ConfigFormat = "cursor"
-	ConfigFormatGeneric ConfigFormat = "generic"
+	ConfigFormatClaude   ConfigFormat = "claude"
+	ConfigFormatCodex    ConfigFormat = "codex"
+	ConfigFormatCursor   ConfigFormat = "cursor"
+	ConfigFormatGeneric  ConfigFormat = "generic"
+	ConfigFormatOpenCode ConfigFormat = "opencode"
 )
 
 // AllConfigFormats is every format the server can render today, in the order
@@ -140,6 +144,7 @@ var AllConfigFormats = []ConfigFormat{
 	ConfigFormatClaude,
 	ConfigFormatCodex,
 	ConfigFormatCursor,
+	ConfigFormatOpenCode,
 	ConfigFormatGeneric,
 }
 
