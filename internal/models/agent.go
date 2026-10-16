@@ -63,7 +63,14 @@ type Agent struct {
 	// whatever else it chose to send. Stored as JSONB because its shape is the
 	// agent's business, not ours; the server reads two known keys and ignores
 	// the rest.
-	HeartbeatPayload []byte `json:"heartbeat_payload" db:"heartbeat_payload"`
+	HeartbeatPayload map[string]interface{} `json:"heartbeat_payload" db:"heartbeat_payload"`
+
+	// LastProgressPct and LastHeartbeatETA come from the newest heartbeat row,
+	// joined in the read query. They live on the heartbeat rather than here:
+	// denormalising them onto the agents table would mean a column per field the
+	// heartbeat ever carries, written on every ping.
+	LastProgressPct  *int       `json:"last_progress_pct"`
+	LastHeartbeatETA *time.Time `json:"last_heartbeat_eta"`
 }
 
 // StaleAgent is one agent whose lease has expired, as the reaper sees it.

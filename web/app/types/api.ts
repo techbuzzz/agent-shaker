@@ -90,8 +90,18 @@ export interface Agent {
   /** What the agent last reported working on, or null. */
   current_task_id: string | null
 
-  /** The agent's own last report — progress, ETA, whatever it chose to send. */
+  /** The agent's own last report — progress, ETA, and whatever it chose to send. */
   heartbeat_payload: Record<string, unknown> | null
+
+  /**
+   * Progress and ETA from the newest heartbeat, joined in by the server.
+   *
+   * They come from the heartbeat rather than the agent row on purpose: a ping
+   * every 30s would otherwise write the agent table forever for data that is
+   * only ever read as "what did it last say".
+   */
+  last_progress_pct: number | null
+  last_heartbeat_eta: string | null
 }
 
 export interface Task {

@@ -116,6 +116,8 @@ export interface AgentHeartbeatEvent extends BaseEvent<
     status: string
     task_id: string | null
     progress_pct: number | null
+    /** When the agent expects to finish what it reported. */
+    eta: string | null
     next_heartbeat_before: string | null
   }
 > {}

@@ -44,9 +44,29 @@ const leaseBarColor = (agent: Agent) => {
 }
 
 /** The reported activity, which is not the same field as the stored status. */
-const reportedProgress = (agent: Agent): number | null => {
-  const raw = agent.heartbeat_payload?.progress_pct
-  return typeof raw === 'number' ? raw : null
+const reportedProgress = (agent: Agent): number | null =>
+  typeof agent.last_progress_pct === 'number' ? agent.last_progress_pct : null
+
+/**
+ * The ETA the agent last reported, rendered as a short phrase.
+ *
+ * It is only shown while the agent still holds a lease: an ETA from an agent
+ * the reaper has already taken offline is a stale promise, and a card that
+ * keeps displaying "done by 20 Oct" three hours after the agent died is worse
+ * than no card at all.
+ */
+const reportedEta = (agent: Agent): string | null => {
+  if (!agent.lease_expires_at || !agent.last_heartbeat_eta) return null
+  // A lease that has already run out means the reaper may have taken this agent's
+  // work back; the ETA it promised belongs to a claim nobody holds any more.
+  if (new Date(agent.lease_expires_at).getTime() <= Date.now()) return null
+  const eta = new Date(agent.last_heartbeat_eta)
+  if (Number.isNaN(eta.getTime())) return null
+  const days = Math.ceil((eta.getTime() - Date.now()) / 86_400_000)
+  if (days < 0) return 'ETA passed'
+  if (days === 0) return 'ETA today'
+  if (days === 1) return 'ETA tomorrow'
+  return `ETA in ${days}d`
 }
 </script>
 
@@ -75,7 +95,8 @@ const reportedProgress = (agent: Agent): number | null => {
         <div v-if="agent.lease_expires_at" class="mt-3">
           <div class="flex items-center justify-between text-xs text-muted">
             <span>{{ reportedProgress(agent) !== null ? `${reportedProgress(agent)}% reported` : 'Lease' }}</span>
-            <span>{{ leaseRemaining(agent) === 0 ? 'expired' : `renews ${relativeTime(agent.lease_expires_at)}` }}</span>
+            <span v-if="reportedEta(agent)" class="text-warning">{{ reportedEta(agent) }}</span>
+            <span v-else>{{ leaseRemaining(agent) === 0 ? 'expired' : `renews ${relativeTime(agent.lease_expires_at)}` }}</span>
           </div>
           <div
             class="mt-1 h-1 w-full rounded-full bg-elevated"

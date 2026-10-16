@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -37,20 +38,39 @@ func (s *AgentsStore) CreateAgent(ctx context.Context, a *models.Agent) error {
 }
 
 // ListAgents returns all agents, or agents filtered by project when
+// agentSelectColumns is the column list every agent read shares.
+//
+// The coordination columns (lease, current task, last report) are part of it
+// because a SELECT that omits them does not fail — the JSON still carries the
+// keys with null values, which reads exactly like "this agent has never
+// heartbeated". That is how the whole lease surface in the UI ended up dead
+// without a single error anywhere.
+//
+// The lateral join carries the newest heartbeat's progress and ETA so the
+// dashboard can answer "how far along, and by when" without an extra request
+// per agent.
+const agentSelectColumns = `
+		a.id, a.project_id, a.name, a.role, a.team, a.status, a.last_seen, a.created_at,
+		a.lease_expires_at, a.current_task_id, a.heartbeat_payload,
+		hb.progress_pct, hb.eta`
+
 // projectID is non-nil.
 func (s *AgentsStore) ListAgents(ctx context.Context, projectID *uuid.UUID) ([]models.Agent, error) {
+	const fromAgents = `
+		FROM agents a
+		LEFT JOIN LATERAL (
+			SELECT progress_pct, eta FROM agent_heartbeats
+			WHERE agent_id = a.id ORDER BY heartbeat_time DESC LIMIT 1
+		) hb ON TRUE`
+
 	var rows *sql.Rows
 	var err error
 	if projectID != nil {
-		rows, err = s.q.QueryContext(ctx, `
-			SELECT id, project_id, name, role, team, status, last_seen, created_at
-			FROM agents WHERE project_id = $1 ORDER BY created_at DESC
-		`, *projectID)
+		rows, err = s.q.QueryContext(ctx, `SELECT `+agentSelectColumns+fromAgents+
+			` WHERE a.project_id = $1 ORDER BY a.created_at DESC`, *projectID)
 	} else {
-		rows, err = s.q.QueryContext(ctx, `
-			SELECT id, project_id, name, role, team, status, last_seen, created_at
-			FROM agents ORDER BY created_at DESC
-		`)
+		rows, err = s.q.QueryContext(ctx, `SELECT `+agentSelectColumns+fromAgents+
+			` ORDER BY a.created_at DESC`)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list agents: %w", err)
@@ -59,11 +79,11 @@ func (s *AgentsStore) ListAgents(ctx context.Context, projectID *uuid.UUID) ([]m
 
 	var out []models.Agent
 	for rows.Next() {
-		var a models.Agent
-		if err := rows.Scan(&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan agent: %w", err)
+		a, err := scanAgentRow(rows)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, a)
+		out = append(out, *a)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating agents: %w", err)
@@ -73,18 +93,77 @@ func (s *AgentsStore) ListAgents(ctx context.Context, projectID *uuid.UUID) ([]m
 
 // GetAgent returns one agent by id.
 func (s *AgentsStore) GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent, error) {
-	var a models.Agent
-	err := s.q.QueryRowContext(ctx, `
-		SELECT id, project_id, name, role, team, status, last_seen, created_at
-		FROM agents WHERE id = $1
-	`, id).Scan(&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt)
-	if err != nil {
+	row := s.q.QueryRowContext(ctx, `SELECT `+agentSelectColumns+`
+		FROM agents a
+		LEFT JOIN LATERAL (
+			SELECT progress_pct, eta FROM agent_heartbeats
+			WHERE agent_id = a.id ORDER BY heartbeat_time DESC LIMIT 1
+		) hb ON TRUE
+		WHERE a.id = $1
+	`, id)
+
+	a := &models.Agent{}
+	var (
+		lease    sql.NullTime
+		payload  []byte
+		progress sql.NullInt64
+		eta      sql.NullTime
+	)
+	if err := row.Scan(
+		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt,
+		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("agent %s not found", id)
 		}
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
-	return &a, nil
+	applyAgentCoordination(a, lease, payload, progress, eta)
+	return a, nil
+}
+
+// scanAgentRow reads one agent row into the model.
+func scanAgentRow(row rowScanner) (*models.Agent, error) {
+	a := &models.Agent{}
+	var (
+		lease    sql.NullTime
+		payload  []byte
+		progress sql.NullInt64
+		eta      sql.NullTime
+	)
+	if err := row.Scan(
+		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt,
+		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
+	); err != nil {
+		return nil, fmt.Errorf("scan agent: %w", err)
+	}
+	applyAgentCoordination(a, lease, payload, progress, eta)
+	return a, nil
+}
+
+// applyAgentCoordination fills the coordination fields, which are all nullable:
+// an agent that has never heartbeated has no lease, no payload and no ETA.
+func applyAgentCoordination(a *models.Agent, lease sql.NullTime, payload []byte, progress sql.NullInt64, eta sql.NullTime) {
+	if lease.Valid {
+		v := lease.Time
+		a.LeaseExpiresAt = &v
+	}
+	if len(payload) > 0 {
+		var decoded map[string]interface{}
+		// A heartbeat payload is arbitrary JSONB written by an agent; a row whose
+		// object cannot be decoded must still read back rather than fail the list.
+		if err := json.Unmarshal(payload, &decoded); err == nil {
+			a.HeartbeatPayload = decoded
+		}
+	}
+	if progress.Valid {
+		v := int(progress.Int64)
+		a.LastProgressPct = &v
+	}
+	if eta.Valid {
+		v := eta.Time
+		a.LastHeartbeatETA = &v
+	}
 }
 
 // UpdateAgentStatus sets status and bumps last_seen.
