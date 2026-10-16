@@ -416,15 +416,22 @@ func main() {
 		"github", "https://github.com/techbuzzz/agent-shaker",
 	)
 
-	// The stale agent reaper is the only background worker that writes to the
-	// database. It is built here, where the stores exist, and started inside
-	// runServer on that function's shutdown context.
-	var reaper *coordination.StaleAgentReaper
+	// The scheduler owns every recurring job — the stale agent reaper and the
+	// heartbeat retention sweep. Built here, where the stores exist; started
+	// inside runServer on that function's shutdown context.
+	schedCfg := schedulerConfig()
+	var background *coordination.Scheduler
 	if db != nil {
-		reaper = coordination.NewStaleAgentReaper(coordination.AgentStore{Store: agentStore}, hub, coordinationConfig())
+		reaper := coordination.NewStaleAgentReaper(coordination.AgentStore{Store: agentStore}, hub, schedCfg.Reaper)
+		sched, err := coordination.NewScheduler(context.Background(), reaper, heartbeatsStore, schedCfg)
+		if err != nil {
+			slog.Error("building the background scheduler failed", "error", err)
+			os.Exit(1)
+		}
+		background = sched
 	}
 
-	if err := runServer(":"+port, handler, hub, reaper); err != nil {
+	if err := runServer(":"+port, handler, hub, background); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
@@ -437,10 +444,12 @@ func main() {
 //
 // reaper may be nil: the server runs without a database, and the reaper's only
 // job is to expire leases, which cannot exist without one. It is passed in
-// rather than constructed here because the stores it needs are built in main,
-// and it starts on this function's rootCtx so a SIGTERM stops the sweep and lets
-// the current transaction finish before the connections drain.
-func runServer(addr string, h http.Handler, hub *websocket.Hub, reaper *coordination.StaleAgentReaper) error {
+// background is every recurring job in the server. It is built here, where the
+// stores exist, and started on this function's rootCtx so a SIGTERM stops the
+// jobs and lets a sweep in progress finish before the connections drain — a
+// reaper interrupted mid-transaction leaves an agent marked offline whose tasks
+// were never released.
+func runServer(addr string, h http.Handler, hub *websocket.Hub, background *coordination.Scheduler) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
@@ -450,14 +459,15 @@ func runServer(addr string, h http.Handler, hub *websocket.Hub, reaper *coordina
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Cancel root context on SIGINT/SIGTERM so background goroutines can drain.
+	// Cancel root context on SIGINT/SIGTERM so background jobs can drain.
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	errCh := make(chan error, 1)
 
-	if reaper != nil {
-		go reaper.Run(rootCtx)
+	if background != nil {
+		background.Start()
+		defer background.Shutdown()
 	}
 
 	go func() {
@@ -490,15 +500,16 @@ func runServer(addr string, h http.Handler, hub *websocket.Hub, reaper *coordina
 	return nil
 }
 
-// coordinationConfig reads the Coordination Plane timings from the
-// environment, falling back to the documented defaults.
+// schedulerConfig reads the background job timings from the environment,
+// falling back to the documented defaults.
 //
-// Both values are validated rather than trusted: a lease shorter than the reaper
-// interval is not a faster feedback loop, it is an agent that is declared dead
-// between two heartbeats. Clamping to "lease > interval" keeps a typo in a
-// deployment manifest from silently evicting a healthy fleet.
-func coordinationConfig() coordination.Config {
-	cfg := coordination.DefaultConfig()
+// Values are validated rather than trusted. A lease shorter than the sweep
+// interval is not a faster feedback loop, it is an agent declared dead between
+// two heartbeats — clamping to "lease > sweep" keeps a typo in a deployment
+// manifest from silently evicting a healthy fleet.
+func schedulerConfig() coordination.SchedulerConfig {
+	cfg := coordination.DefaultSchedulerConfig()
+	reaper := coordination.DefaultConfig()
 
 	if raw := strings.TrimSpace(os.Getenv("AGENT_LEASE_TTL")); raw != "" {
 		if d, err := time.ParseDuration(raw); err != nil {
@@ -506,7 +517,7 @@ func coordinationConfig() coordination.Config {
 		} else if d <= 0 {
 			slog.Warn("ignoring non-positive AGENT_LEASE_TTL", "value", raw)
 		} else {
-			cfg.LeaseTTL = d
+			reaper.LeaseTTL = d
 		}
 	}
 
@@ -516,16 +527,33 @@ func coordinationConfig() coordination.Config {
 		} else if d <= 0 {
 			slog.Warn("ignoring non-positive REAPER_INTERVAL", "value", raw)
 		} else {
-			cfg.ReaperInterval = d
+			reaper.ReaperInterval = d
 		}
 	}
 
-	if cfg.LeaseTTL <= cfg.ReaperInterval {
-		adjusted := cfg.ReaperInterval * 2
+	if reaper.LeaseTTL <= reaper.ReaperInterval {
+		adjusted := reaper.ReaperInterval * 2
 		slog.Warn("lease TTL must exceed the reaper interval; clamping",
-			"lease_ttl", cfg.LeaseTTL, "reaper_interval", cfg.ReaperInterval, "using", adjusted)
-		cfg.LeaseTTL = adjusted
+			"lease_ttl", reaper.LeaseTTL, "reaper_interval", reaper.ReaperInterval, "using", adjusted)
+		reaper.LeaseTTL = adjusted
 	}
+
+	// Heartbeat history retention. The table grows by roughly 2 880 rows per
+	// agent per day at a 30s ping, and nothing reads beyond "recent".
+	if raw := strings.TrimSpace(os.Getenv("HEARTBEAT_RETENTION")); raw != "" {
+		if d, err := time.ParseDuration(raw); err != nil {
+			slog.Warn("ignoring unparseable HEARTBEAT_RETENTION", "value", raw, "error", err)
+		} else if d <= 0 {
+			slog.Warn("ignoring non-positive HEARTBEAT_RETENTION", "value", raw)
+		} else {
+			cfg.HeartbeatRetention = d
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("HEARTBEAT_RETENTION_CRON")); raw != "" {
+		cfg.RetentionCron = raw
+	}
+
+	cfg.Reaper = reaper
 	return cfg
 }
 

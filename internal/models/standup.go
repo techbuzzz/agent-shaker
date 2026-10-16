@@ -77,6 +77,11 @@ type AgentHeartbeat struct {
 	// are different answers: the first means the agent has not started, the
 	// second means it just started.
 	ProgressPct *int `json:"progress_pct" db:"progress_pct"`
+
+	// ETA is when the agent expects to be done with the task it reported.
+	// Added with migration 016: send_heartbeat had accepted an ETA and
+	// answered 200 while storing nothing, so the answer was not a fact.
+	ETA *time.Time `json:"eta,omitempty" db:"eta"`
 }
 
 // CreateHeartbeatRequest represents a request to record a heartbeat

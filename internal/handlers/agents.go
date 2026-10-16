@@ -297,6 +297,7 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		ProjectID:   &projectID,
 		TaskID:      req.TaskID,
 		ProgressPct: req.ProgressPct,
+		ETA:         req.ETA,
 		Status:      req.Status,
 		Metadata:    metadata,
 	}); err != nil {
@@ -330,6 +331,7 @@ func (h *AgentHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		"status":                req.Status,
 		"task_id":               req.TaskID,
 		"progress_pct":          req.ProgressPct,
+		"eta":                   req.ETA,
 		"next_heartbeat_before": nextHeartbeatBefore,
 	})
 	httpx.WriteJSON(w, http.StatusOK, models.HeartbeatResponse{

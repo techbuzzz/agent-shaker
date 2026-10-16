@@ -80,36 +80,13 @@ func NewStaleAgentReaper(store StaleAgentHandler, hub *websocket.Hub, config Con
 	return &StaleAgentReaper{store: store, hub: hub, config: config, logger: logger}
 }
 
-// Run drives the sweep until ctx is cancelled.
+// Timing lives in the scheduler now (see scheduler.go): the reaper is a task,
+// not a goroutine with its own ticker. Keeping Run around would mean two
+// places that can schedule a sweep, and the one nobody remembers is the one
+// that runs twice.
 //
-// Cancellation is the shutdown signal, and one sweep in progress is allowed to
-// finish: a server that stops mid-transaction leaves an agent marked offline
-// whose tasks were never released, which is the one outcome worse than a slow
-// shutdown.
-func (r *StaleAgentReaper) Run(ctx context.Context) {
-	if r.config.ReaperInterval <= 0 {
-		r.config.ReaperInterval = DefaultConfig().ReaperInterval
-	}
-	ticker := time.NewTicker(r.config.ReaperInterval)
-	defer ticker.Stop()
-
-	r.logger.Info("stale agent reaper started",
-		"interval", r.config.ReaperInterval, "lease_ttl", r.config.LeaseTTL)
-
-	for {
-		select {
-		case <-ctx.Done():
-			r.logger.Info("stale agent reaper stopped")
-			return
-		case <-ticker.C:
-			swept := r.SweepOnce(ctx)
-			if swept > 0 {
-				r.logger.Info("reaped stale agents", "count", swept)
-			}
-		}
-	}
-}
-
+// SweepOnce takes the context so a cancelled job aborts instead of finishing a
+// sweep nobody will read.
 // SweepOnce runs one pass and returns how many agents it took offline.
 //
 // Exported so it can be called directly from a test or an admin endpoint rather

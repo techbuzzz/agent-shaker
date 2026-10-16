@@ -36,9 +36,9 @@ func (s *HeartbeatsStore) RecordHeartbeat(ctx context.Context, q Querier, hb *mo
 		q = s.q
 	}
 	_, err := q.ExecContext(ctx, `
-		INSERT INTO agent_heartbeats (agent_id, heartbeat_time, status, metadata, project_id, task_id, progress_pct)
-		VALUES ($1, NOW(), $2, $3, $4, $5, $6)
-	`, hb.AgentID, hb.Status, hb.Metadata, hb.ProjectID, hb.TaskID, hb.ProgressPct)
+		INSERT INTO agent_heartbeats (agent_id, heartbeat_time, status, metadata, project_id, task_id, progress_pct, eta)
+		VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7)
+	`, hb.AgentID, hb.Status, hb.Metadata, hb.ProjectID, hb.TaskID, hb.ProgressPct, hb.ETA)
 	if err != nil {
 		return fmt.Errorf("insert heartbeat: %w", err)
 	}
@@ -51,7 +51,7 @@ func (s *HeartbeatsStore) ListHeartbeats(ctx context.Context, agentID uuid.UUID,
 		limit = 50
 	}
 	rows, err := s.q.QueryContext(ctx, `
-		SELECT id, agent_id, heartbeat_time, status, metadata, project_id, task_id, progress_pct
+		SELECT id, agent_id, heartbeat_time, status, metadata, project_id, task_id, progress_pct, eta
 		FROM agent_heartbeats
 		WHERE agent_id = $1
 		ORDER BY heartbeat_time DESC
@@ -71,9 +71,10 @@ func (s *HeartbeatsStore) ListHeartbeats(ctx context.Context, agentID uuid.UUID,
 			projectID   uuid.NullUUID
 			taskID      uuid.NullUUID
 			progress    sql.NullInt64
+			eta         sql.NullTime
 		)
 		if err := rows.Scan(
-			&hb.ID, &hb.AgentID, &heartbeatAt, &hb.Status, &meta, &projectID, &taskID, &progress,
+			&hb.ID, &hb.AgentID, &heartbeatAt, &hb.Status, &meta, &projectID, &taskID, &progress, &eta,
 		); err != nil {
 			return nil, fmt.Errorf("scan heartbeat: %w", err)
 		}
@@ -102,6 +103,10 @@ func (s *HeartbeatsStore) ListHeartbeats(ctx context.Context, agentID uuid.UUID,
 			v := int(progress.Int64)
 			hb.ProgressPct = &v
 		}
+		if eta.Valid {
+			v := eta.Time
+			hb.ETA = &v
+		}
 		out = append(out, hb)
 	}
 	if err := rows.Err(); err != nil {
@@ -120,6 +125,24 @@ func (s *HeartbeatsStore) ListHeartbeats(ctx context.Context, agentID uuid.UUID,
 //
 // `status` is the fleet-level state (active/idle/blocked) — see
 // models.HeartbeatStatus for why the reported activity is not stored here.
+// DeleteOlderThan removes heartbeat rows older than the cutoff and reports how
+// many went.
+//
+// agent_heartbeats is the fastest-growing table in the schema: one row per agent
+// every 30 seconds is roughly 2 880 rows per agent per day, and nothing reads
+// beyond "recent". This is the retention the design calls for.
+func (s *HeartbeatsStore) DeleteOlderThan(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := s.q.ExecContext(ctx, `DELETE FROM agent_heartbeats WHERE heartbeat_time < $1`, before)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale heartbeats: %w", err)
+	}
+	removed, err := tag.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+	return removed, nil
+}
+
 func (s *AgentsStore) RecordHeartbeat(ctx context.Context, agentID uuid.UUID, status string, taskID *uuid.UUID, progressPct *int, payload []byte, ttl time.Duration) (*models.Agent, error) {
 	var (
 		projectID uuid.UUID
