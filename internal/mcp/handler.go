@@ -1001,9 +1001,15 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 						"description": "Agent name (unique within the project)",
 					},
 					"role": map[string]interface{}{
-						"type":        "string",
-						"description": "Agent role: pm | backend | frontend (other strings accepted as free-text)",
-						"enum":        []string{"pm", "backend", "frontend"},
+						"type": "string",
+						// "pm" is deliberately absent from this enum. It used to be
+						// listed, which told a client the server would accept it and
+						// then refused at runtime — the advertisement and the
+						// behaviour disagreed, and the error arrived after the agent
+						// had already committed to the call. PM is granted by a
+						// human; see the guard in executeRegisterSelf.
+						"description": "Agent role: backend | frontend (free-text accepted). NOT 'pm' — the PM role carries approval authority and is granted by a human, so a self-service request for it is refused.",
+						"enum":        []string{"backend", "frontend"},
 					},
 					"team": map[string]interface{}{
 						"type":        "string",
@@ -2472,6 +2478,46 @@ func pmForbidden(tool string) string {
 	return fmt.Sprintf(`{"error": "Forbidden: tool %q is PM-only. Connect with an agent whose role='pm' or ask the project owner to grant your agent the PM role."}`, tool)
 }
 
+// argString reads a string argument, treating a wrong type as absent.
+//
+// Used where the caller has a sensible default, so the failure is "not
+// supplied" rather than a type error the agent cannot act on.
+func argString(args map[string]interface{}, name string) string {
+	s, _ := args[name].(string)
+	return s
+}
+
+// resolveSelfRole decides the role an agent may claim for itself at
+// registration.
+//
+// The PM role is refused, and the refusal is a hard one rather than a coercion,
+// for a reason that is about authority rather than tidiness: isPMAgent reads the
+// role of the agent on the connection, and register_self mints an agent row the
+// caller is then free to connect as. An agent that could do that would grant
+// itself milestone and global-context approval for the price of a single call.
+//
+// It cannot lean on the key binding to stop this. register_self exists
+// precisely for a connection with no agent_id, and nothing ties the row it
+// creates to the caller's authority. A credential bound to an agent (migration
+// 017) cannot reach the new row — the MCP surface answers 403 on a mismatched
+// agent_id — but the legacy API_KEYS secrets and every key issued before that
+// column can, so the guard has to sit here.
+//
+// Every other role stays open. None of them carries approval authority, and
+// self-declaring "frontend" is useful reporting rather than a privilege.
+func resolveSelfRole(raw string) (string, error) {
+	role := strings.TrimSpace(raw)
+	if role == "" {
+		return string(models.RoleBackend), nil
+	}
+	if strings.EqualFold(role, string(models.RolePM)) {
+		return "", errors.New("role 'pm' cannot be self-assigned: the PM role carries approval authority " +
+			"and is granted by a human. Register as backend and ask the project owner to change the role, " +
+			"or create the PM agent in the UI")
+	}
+	return role, nil
+}
+
 func (h *MCPHandler) executeRegisterSelf(args map[string]interface{}, ctx MCPContext) (string, bool) {
 	if h.db == nil {
 		return `{"error": "Database not connected"}`, true
@@ -2490,9 +2536,9 @@ func (h *MCPHandler) executeRegisterSelf(args map[string]interface{}, ctx MCPCon
 		return `{"error": "name is required"}`, true
 	}
 
-	role, _ := args["role"].(string)
-	if role == "" {
-		role = "backend"
+	role, err := resolveSelfRole(argString(args, "role"))
+	if err != nil {
+		return fmt.Sprintf(`{"error": %q}`, err.Error()), true
 	}
 	team, _ := args["team"].(string)
 	repoURL, _ := args["repo_url"].(string)
@@ -2520,21 +2566,27 @@ func (h *MCPHandler) executeRegisterSelf(args map[string]interface{}, ctx MCPCon
 		}
 	}()
 
-	_, err = tx.Exec(`
+	// Upsert, not insert-or-fail: an agent that restarts and registers again
+	// under the same name gets the same row, which is what the note in the
+	// response tells it to do.
+	//
+	// This needed migrations/018_agents_unique_name: Postgres rejects an
+	// ON CONFLICT whose target matches no index, so with the constraint
+	// missing the statement failed for every caller and the tool was unusable
+	// in practice, including as the onboarding path for a connection that
+	// carries no agent_id.
+	//
+	// QueryRow rather than Exec: the id has to come back, and Exec silently
+	// discards a RETURNING clause rather than erroring, which reads exactly
+	// like "the upsert rewrote my uuid" and motivates the second lookup.
+	var finalAgentID string
+	err = tx.QueryRow(`
 		INSERT INTO agents (id, project_id, name, role, team, status)
 		VALUES ($1, $2, $3, $4, $5, 'idle')
-		ON CONFLICT (project_id, name) DO UPDATE SET role = EXCLUDED.role, team = EXCLUDED.team
+		ON CONFLICT (project_id, name)
+		DO UPDATE SET role = EXCLUDED.role, team = EXCLUDED.team
 		RETURNING id
-	`, id, projectID, name, role, teamPtr)
-	if err != nil {
-		rolledBack = true
-		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true
-	}
-
-	// Re-read the agent id — ON CONFLICT may have rewritten our freshly
-	// generated uuid.
-	var finalAgentID string
-	err = tx.QueryRow(`SELECT id FROM agents WHERE project_id = $1 AND name = $2`, projectID, name).Scan(&finalAgentID)
+	`, id, projectID, name, role, teamPtr).Scan(&finalAgentID)
 	if err != nil {
 		rolledBack = true
 		return fmt.Sprintf(`{"error": "%s"}`, err.Error()), true

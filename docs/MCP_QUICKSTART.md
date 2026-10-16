@@ -327,15 +327,25 @@ without leaving the MCP transport.
 
 ### PM-side flow (mesh plan)
 
-`jsonc
-// 1. PM registers itself against project X (URL embeds ?project_id=X&agent_id=pm-id)
+A PM agent cannot be created by an agent. `register_self` refuses
+`role: "pm"`, because the PM gate reads the role of the agent on the connection
+and `register_self` mints the row that connection would then use - self-service
+would be self-promotion. Create the PM agent as a human, in the UI, and give it
+a key of its own; then connect that key and the rest of this flow works as
+written.
+
+```jsonc
+// 1. (a human) create the PM agent in the UI and issue a key for it.
+//
+//    (an agent, first run against a project) register yourself. Any role except
+//    pm is accepted, and re-registering the same name returns the same row.
 {
   "method": "tools/call",
   "params": { "name": "register_self",
-               "arguments": { "name": "pm-agent", "role": "pm" } }
+               "arguments": { "name": "backend-agent", "role": "backend" } }
 }
 
-// 2. PM creates a milestone
+// 2. PM (connected with the PM key) creates a milestone
 {
   "method": "tools/call",
   "params": { "name": "create_milestone",

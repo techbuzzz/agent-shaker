@@ -227,6 +227,20 @@ Properties worth knowing before calling it:
   produces a second key; revoke the unused one with `DELETE /api/keys/{id}`.
 - Requires the `write` scope.
 
+### register_self
+
+Mints an agent row for a connection that has none, plus optionally a
+`project_repos` row. It is an upsert on `(project_id, name)` - registering the
+same name twice returns the same id rather than a second agent - which is why
+migration 018 exists to add that uniqueness.
+
+`role: "pm"` is refused. The PM gate reads the role of the agent on the
+connection, and this tool creates the row that connection would then use, so
+self-service would be self-promotion. It cannot lean on the key binding to stop
+it: `register_self` is the onboarding path for a credential that has no
+`agent_id`, and nothing ties the new row to the caller's authority. Every other
+role is accepted.
+
 ---
 
 #### GET /api/agents

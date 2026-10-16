@@ -180,6 +180,13 @@ own host.
 Milestone and global-context writes are PM-gated; a non-PM agent gets a clear
 refusal rather than a silent no-op.
 
+The PM agent itself cannot be created by an agent: `register_self` refuses
+`role: "pm"`. The PM gate reads the role of the agent on the connection, and
+`register_self` creates the row that connection would then use, so allowing it
+would let an agent promote itself. A human creates the PM agent in the UI and
+issues it a key. Every other role is open to an agent — none of them carries
+approval authority.
+
 ## The working loop
 
 The generated instructions spell this out for the agent, but it is worth stating
