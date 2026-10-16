@@ -1313,7 +1313,41 @@ func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError
 		},
 	}
 
+	requireRequiredStrings(tools)
+
 	return ToolsListResult{Tools: tools}, nil
+}
+
+// requireRequiredStrings adds minLength to every required string property.
+//
+// Done here rather than written into each schema because the required list is
+// the thing most likely to change, and a hand-maintained minLength drifts from
+// it immediately: someone adds a field to Required, the schema keeps claiming
+// an empty string is valid, and the client learns about it from a round trip.
+// Deriving one from the other makes that impossible.
+//
+// `required` alone only means the key is present, so {"title": ""} satisfies it
+// — and the server refused such a task while the published schema advertised it
+// as valid. Optional string properties are deliberately left alone: they are
+// empty-is-absent throughout this handler, and minLength would turn a harmless
+// default into a client-side validation error.
+func requireRequiredStrings(tools []Tool) {
+	for i := range tools {
+		schema := &tools[i].InputSchema
+		if len(schema.Required) == 0 || schema.Properties == nil {
+			continue
+		}
+		for _, field := range schema.Required {
+			prop, ok := schema.Properties[field].(map[string]interface{})
+			if !ok || prop["type"] != "string" {
+				continue
+			}
+			if _, declared := prop["minLength"]; declared {
+				continue
+			}
+			prop["minLength"] = 1
+		}
+	}
 }
 
 func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (interface{}, *JSONRPCError) {
@@ -1586,7 +1620,7 @@ func (h *MCPHandler) executeListProjects() (string, bool) {
 	}
 	defer rows.Close()
 
-	var projects []map[string]interface{}
+	projects := []map[string]interface{}{}
 	for rows.Next() {
 		var id, name, description, status string
 		var createdAt, updatedAt interface{}
@@ -1612,7 +1646,7 @@ func (h *MCPHandler) executeGetProject(args map[string]interface{}) (string, boo
 		return `{"error": "Database not connected"}`, true
 	}
 
-	projectID, ok := args["project_id"].(string)
+	projectID, ok := requireArg(args, "project_id")
 	if !ok {
 		return `{"error": "project_id is required"}`, true
 	}
@@ -1660,7 +1694,7 @@ func (h *MCPHandler) executeListAgents(args map[string]interface{}) (string, boo
 	}
 	defer rows.Close()
 
-	var agents []map[string]interface{}
+	agents := []map[string]interface{}{}
 	for rows.Next() {
 		var id, projectID, name, role, status string
 		var team *string
@@ -1691,7 +1725,7 @@ func (h *MCPHandler) executeGetAgent(args map[string]interface{}) (string, bool)
 		return `{"error": "Database not connected"}`, true
 	}
 
-	agentID, ok := args["agent_id"].(string)
+	agentID, ok := requireArg(args, "agent_id")
 	if !ok {
 		return `{"error": "agent_id is required"}`, true
 	}
@@ -1759,7 +1793,7 @@ func (h *MCPHandler) executeListTasks(args map[string]interface{}) (string, bool
 	}
 	defer rows.Close()
 
-	var tasks []map[string]interface{}
+	tasks := []map[string]interface{}{}
 	for rows.Next() {
 		var id, projectID, title, status, priority string
 		var description, assignedTo, milestoneID *string
@@ -1796,8 +1830,8 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		return `{"error": "Database not connected"}`, true
 	}
 
-	projectID, ok := args["project_id"].(string)
-	if !ok || projectID == "" {
+	projectID, ok := requireArg(args, "project_id")
+	if !ok {
 		// Use project_id from context if not provided in args
 		if ctx.ProjectID != "" {
 			projectID = ctx.ProjectID
@@ -1806,7 +1840,7 @@ func (h *MCPHandler) executeCreateTask(args map[string]interface{}, ctx MCPConte
 		}
 	}
 
-	title, ok := args["title"].(string)
+	title, ok := requireArg(args, "title")
 	if !ok {
 		return `{"error": "title is required"}`, true
 	}
@@ -1885,11 +1919,11 @@ func (h *MCPHandler) executeUpdateTaskStatus(args map[string]interface{}) (strin
 		return `{"error": "Database not connected"}`, true
 	}
 
-	taskID, ok := args["task_id"].(string)
+	taskID, ok := requireArg(args, "task_id")
 	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
-	status, ok := args["status"].(string)
+	status, ok := requireArg(args, "status")
 	if !ok {
 		return `{"error": "status is required"}`, true
 	}
@@ -2038,7 +2072,7 @@ func (h *MCPHandler) executeListContexts(args map[string]interface{}) (string, b
 	}
 	defer rows.Close()
 
-	var contexts []map[string]interface{}
+	contexts := []map[string]interface{}{}
 	for rows.Next() {
 		var id, projectID, agentID, title, content string
 		var agentName *string
@@ -2086,8 +2120,8 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 		return `{"error": "Database not connected"}`, true
 	}
 
-	projectID, ok := args["project_id"].(string)
-	if !ok || projectID == "" {
+	projectID, ok := requireArg(args, "project_id")
+	if !ok {
 		// Use project_id from context if not provided in args
 		if ctx.ProjectID != "" {
 			projectID = ctx.ProjectID
@@ -2096,11 +2130,11 @@ func (h *MCPHandler) executeAddContext(args map[string]interface{}, ctx MCPConte
 		}
 	}
 
-	title, ok := args["title"].(string)
+	title, ok := requireArg(args, "title")
 	if !ok {
 		return `{"error": "title is required"}`, true
 	}
-	content, ok := args["content"].(string)
+	content, ok := requireArg(args, "content")
 	if !ok {
 		return `{"error": "content is required"}`, true
 	}
@@ -2226,8 +2260,8 @@ func (h *MCPHandler) executeGetDashboard() (string, bool) {
 // A2A Integration tool implementations
 
 func (h *MCPHandler) executeDiscoverA2AAgent(args map[string]interface{}) (string, bool) {
-	agentURL, ok := args["agent_url"].(string)
-	if !ok || agentURL == "" {
+	agentURL, ok := requireArg(args, "agent_url")
+	if !ok {
 		return `{"error": "agent_url is required"}`, true
 	}
 
@@ -2252,13 +2286,13 @@ func (h *MCPHandler) executeDiscoverA2AAgent(args map[string]interface{}) (strin
 }
 
 func (h *MCPHandler) executeDelegateToA2AAgent(args map[string]interface{}) (string, bool) {
-	agentURL, ok := args["agent_url"].(string)
-	if !ok || agentURL == "" {
+	agentURL, ok := requireArg(args, "agent_url")
+	if !ok {
 		return `{"error": "agent_url is required"}`, true
 	}
 
-	message, ok := args["message"].(string)
-	if !ok || message == "" {
+	message, ok := requireArg(args, "message")
+	if !ok {
 		return `{"error": "message is required"}`, true
 	}
 
@@ -2401,13 +2435,13 @@ func shortPrefix(s string, n int) string {
 }
 
 func (h *MCPHandler) executeGetA2ATaskStatus(args map[string]interface{}) (string, bool) {
-	agentURL, ok := args["agent_url"].(string)
-	if !ok || agentURL == "" {
+	agentURL, ok := requireArg(args, "agent_url")
+	if !ok {
 		return `{"error": "agent_url is required"}`, true
 	}
 
-	taskID, ok := args["task_id"].(string)
-	if !ok || taskID == "" {
+	taskID, ok := requireArg(args, "task_id")
+	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
 
@@ -2487,6 +2521,28 @@ func argString(args map[string]interface{}, name string) string {
 	return s
 }
 
+// requireArg reads a string argument that must be present and non-blank.
+//
+// The blank check is the point of this helper. `args["title"].(string)` succeeds
+// for "" — an empty string is a perfectly good string — so a type assertion
+// alone accepted a task titled with nothing, which then rendered as a nameless
+// row in every list and cost real time to trace back to the call that made it.
+//
+// It exists as a helper rather than as `|| x == ""` sprinkled at each site
+// because that omission was the whole bug: the check was present in some tools
+// and missing in others, and nothing about the two forms looks different to a
+// reader. Eleven sites had it wrong for exactly that reason.
+//
+// The value is returned unchanged — only the blankness *test* trims — so a
+// markdown body keeps its indentation.
+func requireArg(args map[string]interface{}, name string) (string, bool) {
+	v, ok := args[name].(string)
+	if !ok || strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	return v, true
+}
+
 // resolveSelfRole decides the role an agent may claim for itself at
 // registration.
 //
@@ -2531,8 +2587,8 @@ func (h *MCPHandler) executeRegisterSelf(args map[string]interface{}, ctx MCPCon
 		return `{"error": "project_id is required (pass as argument or set it in the MCP connection URL)"}`, true
 	}
 
-	name, ok := args["name"].(string)
-	if !ok || name == "" {
+	name, ok := requireArg(args, "name")
+	if !ok {
 		return `{"error": "name is required"}`, true
 	}
 
@@ -2648,8 +2704,8 @@ func (h *MCPHandler) executeCreateMilestone(args map[string]interface{}, ctx MCP
 	if projectID == "" {
 		return `{"error": "project_id is required"}`, true
 	}
-	title, ok := args["title"].(string)
-	if !ok || title == "" {
+	title, ok := requireArg(args, "title")
+	if !ok {
 		return `{"error": "title is required"}`, true
 	}
 	description, _ := args["description"].(string)
@@ -2725,7 +2781,7 @@ func (h *MCPHandler) executeListMilestones(args map[string]interface{}, ctx MCPC
 	}
 	defer rows.Close()
 
-	var items []map[string]interface{}
+	items := []map[string]interface{}{}
 	for rows.Next() {
 		var id, title, status, createdBy string
 		var description *string
@@ -2763,12 +2819,12 @@ func (h *MCPHandler) executeAssignTaskToMilestone(args map[string]interface{}, c
 	if !h.isPMAgent(ctx) {
 		return pmForbidden("assign_task_to_milestone"), true
 	}
-	taskID, ok := args["task_id"].(string)
-	if !ok || taskID == "" {
+	taskID, ok := requireArg(args, "task_id")
+	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
-	milestoneID, ok := args["milestone_id"].(string)
-	if !ok || milestoneID == "" {
+	milestoneID, ok := requireArg(args, "milestone_id")
+	if !ok {
 		return `{"error": "milestone_id is required"}`, true
 	}
 	tag, err := h.db.Exec(`UPDATE tasks SET milestone_id = $1, updated_at = NOW() WHERE id = $2`, milestoneID, taskID)
@@ -2802,8 +2858,8 @@ func (h *MCPHandler) executePublishGlobalContext(args map[string]interface{}, ct
 	if scope != "global" && scope != "project" {
 		return `{"error": "scope must be 'global' or 'project'"}`, true
 	}
-	title, ok := args["title"].(string)
-	if !ok || title == "" {
+	title, ok := requireArg(args, "title")
+	if !ok {
 		return `{"error": "title is required"}`, true
 	}
 	content, _ := args["content"].(string)
@@ -2924,7 +2980,7 @@ func (h *MCPHandler) executeListGlobalContexts(args map[string]interface{}, ctx 
 	}
 	defer rows.Close()
 
-	var items []map[string]interface{}
+	items := []map[string]interface{}{}
 	for rows.Next() {
 		var id, scopeStr, agentID, title string
 		var projectID *string
@@ -3175,7 +3231,7 @@ func (h *MCPHandler) executeGetMyTasks(args map[string]interface{}, ctx MCPConte
 	}
 	defer rows.Close()
 
-	var tasks []map[string]interface{}
+	tasks := []map[string]interface{}{}
 	for rows.Next() {
 		var id, projectID, title, status, priority string
 		var description, assignedTo interface{}
@@ -3199,7 +3255,7 @@ func (h *MCPHandler) executeGetMyTasks(args map[string]interface{}, ctx MCPConte
 	result, _ := json.MarshalIndent(map[string]interface{}{
 		"agent_id": ctx.AgentID,
 		"count":    len(tasks),
-		"tasks":    tasks,
+		"tasks":    listOrEmpty(tasks),
 	}, "", "  ")
 	return string(result), false
 }
@@ -3213,7 +3269,7 @@ func (h *MCPHandler) executeUpdateMyStatus(args map[string]interface{}, ctx MCPC
 		return `{"error": "Database not connected"}`, true
 	}
 
-	status, ok := args["status"].(string)
+	status, ok := requireArg(args, "status")
 	if !ok {
 		return fmt.Sprintf(`{"error": "status is required (%s)"}`,
 			models.JoinValues(models.AllAgentStatuses)), true
@@ -3326,7 +3382,7 @@ func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContex
 		return `{"error": "Database not connected"}`, true
 	}
 
-	taskID, ok := args["task_id"].(string)
+	taskID, ok := requireArg(args, "task_id")
 	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
@@ -3421,7 +3477,7 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 		return `{"error": "Database not connected"}`, true
 	}
 
-	taskID, ok := args["task_id"].(string)
+	taskID, ok := requireArg(args, "task_id")
 	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
@@ -3486,13 +3542,13 @@ func (h *MCPHandler) executeReassignTask(args map[string]interface{}) (string, b
 		return `{"error": "Database not connected"}`, true
 	}
 
-	taskID, ok := args["task_id"].(string)
-	if !ok || taskID == "" {
+	taskID, ok := requireArg(args, "task_id")
+	if !ok {
 		return `{"error": "task_id is required"}`, true
 	}
 
-	agentID, ok := args["agent_id"].(string)
-	if !ok || agentID == "" {
+	agentID, ok := requireArg(args, "agent_id")
+	if !ok {
 		return `{"error": "agent_id is required"}`, true
 	}
 

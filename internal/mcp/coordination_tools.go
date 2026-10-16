@@ -512,6 +512,21 @@ func (h *MCPHandler) executeGetTaskDependencies(args map[string]interface{}, ctx
 //
 // A task that has since been deleted still appears, carrying its id alone —
 // dropping it would hide the fact that an edge points at something that is gone.
+// listOrEmpty normalises a nil slice into an empty one before it is marshalled.
+//
+// encoding/json renders a nil slice as `null` and an empty one as `[]`, so a
+// list tool answers `null` exactly when the answer is "none" — the one case a
+// caller most needs to read unambiguously. Every list response here goes through
+// this so the shape does not depend on whether the query happened to return a
+// row, which is the same reasoning dependencySummaries documents for its two
+// arrays.
+func listOrEmpty[T any](in []T) []T {
+	if in == nil {
+		return []T{}
+	}
+	return in
+}
+
 func (h *MCPHandler) dependencySummaries(ctx context.Context, deps []models.TaskDependency, related func(models.TaskDependency) uuid.UUID) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(deps))
 	for _, d := range deps {
@@ -696,7 +711,7 @@ func (h *MCPHandler) executeGetMyBlockers(args map[string]interface{}, ctx MCPCo
 		"agent_id": agentID,
 		"status":   status,
 		"count":    len(blockers),
-		"blockers": blockers,
+		"blockers": listOrEmpty(blockers),
 	}, "", "  ")
 	return string(resultJSON), false
 }
