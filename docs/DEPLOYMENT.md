@@ -27,14 +27,17 @@ Two public entrypoints exist depending on profile:
 
 | Profile | Public entrypoint | TLS | Machine clients (MCP/A2A) |
 |---|---|---|---|
-| default (`docker compose up -d`) | `web` on `${WEB_BIND}:${WEB_PORT}` | none — put your own proxy in front | **unreachable** |
-| `tls` (`docker compose --profile tls up -d`) | Caddy on `:443` / `:80` | automatic Let's Encrypt | reachable at `/mcp`, `/a2a/v1/*` |
+| default (`docker compose up -d`) | `web` on `${WEB_BIND}:${WEB_PORT}`, Go on `${MCP_BIND}:${MCP_PORT}` | none | reachable on loopback at `/mcp`, `/a2a/v1/*` |
+| `tls` (`docker compose --profile tls up -d`) | Caddy on `:443` / `:80` | automatic Let's Encrypt | reachable from the LAN at `/mcp`, `/a2a/v1/*` |
 
-**The machine surfaces are only published under the `tls` profile.** Without an
-edge there is no proxy that can route them, and the Go service publishes no host
-port. If you need MCP/A2A reachable and you are not using the `tls` profile,
-either enable that profile or put your own reverse proxy in front and give
-`mcp-server` a port to bind.
+**The machine surfaces are reachable without an edge, on loopback.** The Go
+service publishes `MCP_BIND:MCP_PORT` (default `127.0.0.1:8080`), so an agent on
+the same machine connects directly and there is nothing to configure. What the
+edge adds is reachability from *other* machines, with TLS in front.
+
+Set `MCP_BIND=0.0.0.0` to expose it on the LAN without the edge — on a trusted
+network only, because the endpoint has no TLS of its own. Under the `tls` profile
+keep it on loopback and let Caddy be the sole entrypoint.
 
 ## Quick start (TLS)
 
@@ -275,9 +278,16 @@ own IP**. The "per-IP" buckets collapse into one, so `RATE_LIMIT_RPS=100`
 becomes a cap for the entire deployment rather than for each caller — a single
 noisy client throttles everyone, including the UI.
 
-The flag is safe here and only here: `mcp-server` publishes no host port, so
-every request provably arrives over the internal network. For a bare binary on
-a public host, leave it unset.
+The flag is safe on loopback: the published port binds `127.0.0.1`, so the only
+processes that can reach it are the ones already on the machine, and they are
+trusted to the same degree as the container network was.
+
+Two things it is no longer safe for. The port used to be internal-only, so a
+request provably arrived through a proxy; now a local caller can send
+`X-Forwarded-For` directly and be believed, which is fine at loopback and is not
+fine once `MCP_BIND=0.0.0.0`. And for a bare binary on a public host, leave it
+unset — an arbitrary remote caller would be able to forge its own client IP and
+dodge the per-IP limit.
 
 ### Why the rightmost `X-Forwarded-For` entry, not the leftmost
 

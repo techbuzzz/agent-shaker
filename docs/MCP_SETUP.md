@@ -140,8 +140,28 @@ Expected: a JSON-RPC result naming `agent-shaker` as the server.
 | --- | --- |
 | `401` | Wrong or unset key |
 | `403` + "agent identity does not match" | The key is bound to a different agent than the URL names. Drop `agent_id` from the URL, or use the key issued for that agent |
-| `404` | The edge is not routing `/mcp` — that path is only published under the `tls` profile. See [DEPLOYMENT.md](./DEPLOYMENT.md) |
-| Connection refused | `mcp-server` publishes no host port; go through the edge |
+| `404` | The edge is not routing `/mcp`. That path is served by the `tls` profile's Caddy; see [DEPLOYMENT.md](./DEPLOYMENT.md) |
+| Connection refused | The Go service publishes to loopback only. Check `docker compose ps` for `127.0.0.1:8080->8080`, or set `MCP_BIND=0.0.0.0` |
+| `no such host: mcp-server` | The config is using the compose-internal name. Agents run on your machine and cannot resolve it — use the published host port, or set `BASE_URL` and re-generate |
+
+## Reaching the server
+
+MCP clients do not run inside the compose network, so the Go service publishes
+its port to the host rather than merely exposing it to its neighbours:
+
+```yaml
+ports:
+  - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8080}:8080"
+```
+
+Loopback by default, like `web`. `MCP_BIND=0.0.0.0` lets agents on other
+machines connect, and carries no TLS of its own — behind the `tls` profile, keep
+it on loopback and let Caddy be the entrypoint.
+
+An internal address like `http://mcp-server:8080` is not a hostname an agent can
+resolve; that name exists only inside the compose network. The generator never
+emits one, because it derives the origin from `BASE_URL` or from the request's
+own host.
 
 ## The tools an agent gets
 

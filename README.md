@@ -135,14 +135,18 @@ git-ignored — a dump is the entire dataset.
 
 ```
 browser ──┐
-          ├──► web (Nuxt SSR :3000) ──/api, /ws──► mcp-server (:8080, internal) ──► postgres
-MCP / A2A ┘       (Nitro proxy)                   ▲
-                                                   └── via Caddy under the `tls` profile
+          ├──► web (Nuxt SSR :3000) ──/api, /ws──► mcp-server (:8080) ──► postgres
+MCP / A2A ┘       (Nitro proxy)                 ▲  ▲
+                                                 │  └── via Caddy under the `tls` profile
+                                                 └───── loopback :8080, for MCP clients
 ```
 
 The browser only ever talks to one origin, so there is no CORS negotiation, no
-cross-origin cookies, and no internal hostname leak. The Go service publishes
-no host port. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+cross-origin cookies, and no internal hostname leak. The Go service also
+publishes a port on loopback (`MCP_BIND:MCP_PORT`, default `127.0.0.1:8080`) so
+an agent running on your machine can reach `/mcp` without the edge — the internal
+`mcp-server` hostname is not resolvable outside the compose network. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Project layout
 

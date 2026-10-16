@@ -122,8 +122,19 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    expose:
-      - "8080"
+    # Published to the host, not merely exposed to the compose network.
+    #
+    # MCP clients do not run inside this network: a coding agent runs on a
+    # developer's machine, and a URL of http://mcp-server:8080 is an internal
+    # DNS name it cannot resolve. Without a published port the only ways in were
+    # the TLS edge, or a hand-rolled socat sidecar — which is exactly the kind of
+    # setup a reader has to reverse-engineer before anything connects.
+    #
+    # Loopback by default, matching `web`. Set MCP_BIND=0.0.0.0 to let agents on
+    # other machines reach it, and only on a trusted network: this endpoint has
+    # no TLS of its own.
+    ports:
+      - "${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8080}:8080"
     networks: [internal]
 
   web:

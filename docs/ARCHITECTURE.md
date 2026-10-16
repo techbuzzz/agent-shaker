@@ -42,7 +42,7 @@ serves is reached over the internal compose network.
 │  ├────────────────────────────────────────────────────────────┤ │
 │  │  WS    /ws            live task and agent events            │ │
 │  └────────────────────────────────────────────────────────────┘ │
-│  `expose: 8080` only — no host port is published                │
+│  published on loopback at MCP_BIND:MCP_PORT (127.0.0.1:8080)     │
 └───────────────────────┬─────────────────────────────────────────┘
                         ▼
 ┌─────────────────────────────────────────────────────────────────┐
