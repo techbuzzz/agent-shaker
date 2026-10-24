@@ -31,10 +31,29 @@ That field is what picks the file layout, so "the file we told you to write" and
 | `codex` | `~/.codex/mcp.json` (user-level — Codex has no per-project config) |
 | `cursor` | `.cursor/mcp.json` |
 | `opencode` | `opencode.json` (OpenCode keeps MCP servers in its one settings document) |
+| `copilot-vs` | `.vscode/mcp.json` + `.github/copilot-instructions.md` |
+| `copilot-cli` | `.vscode/mcp.json` + `.github/copilot-instructions.md` |
 | anything else | `.mcp.json`, the convention most MCP hosts read |
 
-Windsurf, both Copilot surfaces and `a2a` are recognised values without a
-dedicated layout yet; those agents get the generic file, which connects.
+Windsurf and `a2a` are recognised values without a dedicated layout yet; those
+agents get the generic file, which connects.
+
+Every bundle also carries two documents: `AGENT_SHAKER.md` — or
+`.github/copilot-instructions.md` for Copilot — which tells the agent how the
+server is meant to be used, and `AGENT_SHAKER_SETUP.md`, which says which file
+goes where, how to set the key, and how to check that the connection is alive.
+
+### VS Code and Copilot read different keys
+
+VS Code reads `servers`; everything else reads `mcpServers`. The two are not
+interchangeable and the failure is silent — a file with the wrong top-level key
+is valid JSON that VS Code ignores without a word, so the agent connects to
+nothing.
+
+Copilot in VS Code reads its MCP servers from `.vscode/mcp.json` as well, and
+reads repository instructions from `.github/copilot-instructions.md`
+automatically. The `copilot` format ships that pair together: a Copilot user
+given only the instructions would have a bundle that connects to nothing.
 
 ### The credential spelling is per client
 

@@ -99,7 +99,7 @@ func TestSupportsConfigGeneration(t *testing.T) {
 	t.Parallel()
 
 	// The layouts the config endpoint renders today.
-	for _, tt := range []ToolType{ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolGenericMCP} {
+	for _, tt := range []ToolType{ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolCopilotVS, ToolCopilotCLI, ToolGenericMCP} {
 		if !tt.SupportsConfigGeneration() {
 			t.Errorf("%q.SupportsConfigGeneration() = false, want true", tt)
 		}
@@ -108,7 +108,7 @@ func TestSupportsConfigGeneration(t *testing.T) {
 	// Phase 3 and Phase 4 surfaces, plus an A2A agent, which is not an MCP host
 	// at all. An agent on any of them still gets a working generic `.mcp.json`,
 	// but there is no layout here that would be better than the generic one.
-	for _, tt := range []ToolType{ToolWindsurf, ToolCopilotCLI, ToolCopilotVS, ToolA2A} {
+	for _, tt := range []ToolType{ToolWindsurf, ToolA2A} {
 		if tt.SupportsConfigGeneration() {
 			t.Errorf("%q.SupportsConfigGeneration() = true, want false", tt)
 		}
@@ -121,7 +121,7 @@ func TestDefaultFormatFallsBackToGeneric(t *testing.T) {
 	// Tool types with no dedicated layout get the convention most hosts read,
 	// rather than a refusal: a working file for the wrong client beats a 400
 	// that explains nothing about what to do instead.
-	for _, tt := range []ToolType{ToolWindsurf, ToolCopilotCLI, ToolCopilotVS, ToolA2A, ToolTypeUnknown} {
+	for _, tt := range []ToolType{ToolWindsurf, ToolA2A, ToolTypeUnknown} {
 		if got := tt.DefaultFormat(); got != ConfigFormatGeneric {
 			t.Errorf("%q.DefaultFormat() = %s, want generic", tt, got)
 		}

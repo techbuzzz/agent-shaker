@@ -117,11 +117,28 @@ export const RENDERABLE_TOOL_TYPES: readonly AgentToolType[] = [
   'codex',
   'opencode',
   'cursor',
+  'copilot-vs',
+  'copilot-cli',
   'generic-mcp'
 ]
 
-/** Config formats the server can render. Mirrors `models.AllConfigFormats`. */
-export const CONFIG_FORMATS = ['claude', 'codex', 'cursor', 'opencode', 'generic'] as const
+/**
+ * Config formats the server can render. Mirrors `models.AllConfigFormats`.
+ *
+ * `vscode` and `copilot` are here because the client-side generator produced
+ * `.vscode/mcp.json` and `.github/copilot-instructions.md`, and moving the
+ * generator to the server dropped both — a regression for anyone whose agent
+ * runs in VS Code or GitHub Copilot.
+ */
+export const CONFIG_FORMATS = [
+  'claude',
+  'codex',
+  'cursor',
+  'opencode',
+  'vscode',
+  'copilot',
+  'generic'
+] as const
 export type ConfigFormat = (typeof CONFIG_FORMATS)[number]
 
 export const CONFIG_FORMAT_LABELS: Record<ConfigFormat, string> = {
@@ -131,6 +148,10 @@ export const CONFIG_FORMAT_LABELS: Record<ConfigFormat, string> = {
   // OpenCode keeps MCP servers inside its one settings document, so there is no
   // dedicated mcp file to point at.
   opencode: 'OpenCode (opencode.json)',
+  // VS Code reads `servers` rather than `mcpServers`.
+  vscode: 'VS Code (.vscode/mcp.json)',
+  // Copilot reads repository instructions; it has no MCP config of its own here.
+  copilot: 'GitHub Copilot (.github/copilot-instructions.md)',
   generic: 'Generic MCP host (.mcp.json)'
 }
 

@@ -121,7 +121,8 @@ func (in Input) MCPURL() string {
 func Render(in Input, format models.ConfigFormat) ([]models.ConfigFile, error) {
 	switch format {
 	case models.ConfigFormatClaude, models.ConfigFormatCodex, models.ConfigFormatCursor,
-		models.ConfigFormatOpenCode, models.ConfigFormatGeneric:
+		models.ConfigFormatOpenCode, models.ConfigFormatVSCode, models.ConfigFormatCopilot,
+		models.ConfigFormatGeneric:
 		return renderFor(format, in)
 	default:
 		// Unreachable through ParseConfigFormat; kept so a future format added
@@ -158,52 +159,90 @@ type layout struct {
 
 	// entryType is the discriminator OpenCode requires on every remote server.
 	entryType string
+
+	// instructionsFile is where the working document goes for this client.
+	//
+	// Copilot is the odd one: it reads `.github/copilot-instructions.md`
+	// automatically, so its working document has to live there rather than
+	// beside the config under a name nothing would pick up.
+	instructionsFile string
 }
 
 func layoutFor(format models.ConfigFormat) layout {
 	switch format {
 	case models.ConfigFormatClaude:
 		return layout{
-			filename:    ".claude/mcp.json",
-			description: "Claude Code reads this from the project directory or ~/.claude",
-			serverKey:   "mcpServers",
-			credential:  APIKeyPlaceholder,
+			filename:         ".claude/mcp.json",
+			description:      "Claude Code reads this from the project directory or ~/.claude",
+			serverKey:        "mcpServers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: "AGENT_SHAKER.md",
 		}
 	case models.ConfigFormatOpenCode:
 		// opencode.json, not a dedicated mcp file: OpenCode keeps MCP servers
 		// alongside its other settings in one document. Writing .opencode/mcp.json
 		// would produce a file the tool never reads.
 		return layout{
-			filename:    "opencode.json",
-			description: "OpenCode reads this from the project directory or ~/.config/opencode",
-			serverKey:   "mcp",
-			credential:  OpenCodeAPIKeyPlaceholder,
-			entryType:   "remote",
+			filename:         "opencode.json",
+			description:      "OpenCode reads this from the project directory or ~/.config/opencode",
+			serverKey:        "mcp",
+			credential:       OpenCodeAPIKeyPlaceholder,
+			entryType:        "remote",
+			instructionsFile: "AGENT_SHAKER.md",
 		}
 	case models.ConfigFormatCodex:
 		return layout{
 			// Codex reads a user-level config, not a repository one: there is
 			// no per-project Codex config, so pointing at the repo would hand
 			// back a file the tool silently ignores.
-			target:      "~/.codex/mcp.json",
-			description: "Codex CLI reads this from your home directory",
-			install:     "mkdir -p ~/.codex && cat > ~/.codex/mcp.json",
-			serverKey:   "mcpServers",
-			credential:  APIKeyPlaceholder,
+			target:           "~/.codex/mcp.json",
+			description:      "Codex CLI reads this from your home directory",
+			install:          "mkdir -p ~/.codex && cat > ~/.codex/mcp.json",
+			serverKey:        "mcpServers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: "AGENT_SHAKER.md",
 		}
 	case models.ConfigFormatCursor:
 		return layout{
-			filename:    ".cursor/mcp.json",
-			description: "Cursor reads this from the project directory",
-			serverKey:   "mcpServers",
-			credential:  APIKeyPlaceholder,
+			filename:         ".cursor/mcp.json",
+			description:      "Cursor reads this from the project directory",
+			serverKey:        "mcpServers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: "AGENT_SHAKER.md",
+		}
+	case models.ConfigFormatVSCode:
+		// VS Code reads `servers`, not `mcpServers`. The two look interchangeable
+		// and are not: a file written with the wrong top-level key is valid JSON
+		// that VS Code ignores in silence, and the agent connects to nothing.
+		return layout{
+			filename:         ".vscode/mcp.json",
+			description:      "VS Code reads this from the project directory",
+			serverKey:        "servers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: "AGENT_SHAKER.md",
+		}
+	case models.ConfigFormatCopilot:
+		// The pair Copilot needs: VS Code's config, because that is where Copilot
+		// in VS Code reads its MCP servers from, and the instructions file at the
+		// path Copilot reads without being asked.
+		//
+		// The old client-side bundle shipped exactly these two together, and
+		// splitting them would be worse: a Copilot user who only received the
+		// instructions would have a bundle that connects to nothing.
+		return layout{
+			filename:         ".vscode/mcp.json",
+			description:      "VS Code reads this from the project directory; Copilot in VS Code reads its MCP servers here",
+			serverKey:        "servers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: ".github/copilot-instructions.md",
 		}
 	default:
 		return layout{
-			filename:    ".mcp.json",
-			description: "The convention read by Visual Studio 2026 and most MCP hosts",
-			serverKey:   "mcpServers",
-			credential:  APIKeyPlaceholder,
+			filename:         ".mcp.json",
+			description:      "The convention read by Visual Studio 2026 and most MCP hosts",
+			serverKey:        "mcpServers",
+			credential:       APIKeyPlaceholder,
+			instructionsFile: "AGENT_SHAKER.md",
 		}
 	}
 }
@@ -258,11 +297,15 @@ func renderFor(format models.ConfigFormat, in Input) ([]models.ConfigFile, error
 		},
 		{
 			Format:      format,
-			Filename:    instructions.filename,
-			Target:      instructions.target,
+			Filename:    lay.instructionsFile,
 			Description: "How the agent is expected to work with this server",
-			Install:     instructions.install,
 			Content:     instructions.body,
+		},
+		{
+			Format:      format,
+			Filename:    SetupDocFilename,
+			Description: "How to set the key up and check the connection",
+			Content:     in.setupDoc(lay, format),
 		},
 	}, nil
 }
@@ -272,6 +315,77 @@ type instructionsFile struct {
 	target   string
 	install  string
 	body     string
+}
+
+// SetupDocFilename is the setup document emitted alongside every bundle.
+//
+// It was in the original client-side bundle and was lost when the generator
+// moved to the server, along with the VS Code and Copilot files. It is the
+// document that answers the two questions a developer actually has when a
+// generated bundle does not work: which file goes where, and how do I check
+// that the connection is alive. Everything else in the bundle assumes both are
+// obvious.
+const SetupDocFilename = "AGENT_SHAKER_SETUP.md"
+
+// setupDoc explains the bundle: what to set, where the files go, and how to
+// verify the connection.
+func (in Input) setupDoc(lay layout, format models.ConfigFormat) string {
+	projectLabel := in.ProjectName
+	if projectLabel == "" {
+		projectLabel = in.ProjectID
+	}
+
+	files := []string{}
+	if lay.filename != "" {
+		files = append(files, "- `"+lay.filename+"` — "+lay.description)
+	}
+	if lay.target != "" {
+		files = append(files, "- `"+lay.target+"` — "+lay.description)
+	}
+	// The working document is listed too: it is what tells the agent how the
+	// server is meant to be used, and a reader who does not know it exists
+	// will never open it.
+	if lay.instructionsFile != "" {
+		files = append(files, "- `"+lay.instructionsFile+"` — how the agent is expected to work with this server")
+	}
+	files = append(files, "- `"+SetupDocFilename+"` — this file")
+
+	// The shell export is the same for every client. What differs is the
+	// spelling inside the config file — ${env:VAR} for most, {env:VAR} for
+	// OpenCode — and the reader never types that, they copy the file. So this
+	// document does not branch on the client: there is nothing for it to say
+	// that the file itself does not already say.
+	return "# Agent Shaker setup\n" +
+		"\n" +
+		"Generated for project **" + projectLabel + "**" +
+		", format `" + string(format) + "`.\n" +
+		"\n" +
+		"## 1. Set the API key\n" +
+		"\n" +
+		"The files reference `" + APIKeyEnvVar + "`; they never contain the key itself,\n" +
+		"so they are safe to commit.\n" +
+		"\n" +
+		"```bash\n" + "export " + APIKeyEnvVar + "=<your key>\n" + "```\n" +
+		"\n" +
+		"Keep it in your shell or a git-ignored `.env` — never in a tracked file.\n" +
+		"\n" +
+		"## 2. The files\n" +
+		"\n" +
+		strings.Join(files, "\n") + "\n" +
+		"\n" +
+		"## 3. Verify\n" +
+		"\n" +
+		"```bash\n" +
+		"curl -sS -X POST \"" + in.MCPURL() + "\" \\\n" +
+		"  -H \"Authorization: Bearer $" + APIKeyEnvVar + "\" \\\n" +
+		"  -H 'Content-Type: application/json' \\\n" +
+		"  -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}'\n" +
+		"```\n" +
+		"\n" +
+		"An `initialize` result means the connection is good. A `401` means the key\n" +
+		"is wrong. A `403` naming an agent id means the key is bound to a different\n" +
+		"agent — use the key issued for this one. A `404` means the edge is not\n" +
+		"routing `/mcp`; see docs/DEPLOYMENT.md.\n"
 }
 
 // instructions builds the markdown document that accompanies the config.

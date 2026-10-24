@@ -73,8 +73,14 @@ function defaultFormatFor(agent: Agent): ConfigFormat {
       return 'claude'
     case 'codex':
       return 'codex'
+    case 'opencode':
+      return 'opencode'
     case 'cursor':
       return 'cursor'
+    case 'copilot-vs':
+      return 'vscode'
+    case 'copilot-cli':
+      return 'copilot'
     default:
       return 'generic'
   }
@@ -184,7 +190,7 @@ function toggle(path: string) {
           color="neutral"
           variant="subtle"
           title="No dedicated layout for this tool yet"
-          :description="`The generic .mcp.json is what most MCP hosts read, so this still connects. Dedicated layouts for OpenCode, Windsurf and Copilot arrive in a later phase.`"
+          :description="`The generic .mcp.json is what most MCP hosts read, so this still connects. A dedicated Windsurf layout arrives in a later phase.`"
         />
 
         <UAlert

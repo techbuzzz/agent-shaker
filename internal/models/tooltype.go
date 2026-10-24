@@ -100,7 +100,7 @@ func IsValidToolType(s string) bool {
 // here would be worse than being honest about it.
 func (t ToolType) SupportsConfigGeneration() bool {
 	switch t {
-	case ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolGenericMCP:
+	case ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolCopilotVS, ToolCopilotCLI, ToolGenericMCP:
 		return true
 	default:
 		return false
@@ -121,6 +121,10 @@ func (t ToolType) DefaultFormat() ConfigFormat {
 		return ConfigFormatOpenCode
 	case ToolCursor:
 		return ConfigFormatCursor
+	case ToolCopilotVS:
+		return ConfigFormatVSCode
+	case ToolCopilotCLI:
+		return ConfigFormatCopilot
 	default:
 		return ConfigFormatGeneric
 	}
@@ -135,6 +139,8 @@ const (
 	ConfigFormatCursor   ConfigFormat = "cursor"
 	ConfigFormatGeneric  ConfigFormat = "generic"
 	ConfigFormatOpenCode ConfigFormat = "opencode"
+	ConfigFormatVSCode   ConfigFormat = "vscode"
+	ConfigFormatCopilot  ConfigFormat = "copilot"
 )
 
 // AllConfigFormats is every format the server can render today, in the order
@@ -145,6 +151,8 @@ var AllConfigFormats = []ConfigFormat{
 	ConfigFormatCodex,
 	ConfigFormatCursor,
 	ConfigFormatOpenCode,
+	ConfigFormatVSCode,
+	ConfigFormatCopilot,
 	ConfigFormatGeneric,
 }
 

@@ -144,8 +144,9 @@ Render the MCP configuration for one agent.
 - `id` (uuid) - Agent ID
 
 **Query Parameters:**
-- `format` (string, optional) - `claude`, `codex`, `cursor`, `opencode` or
-  Omitted, the layout matching the agent's `tool_type` is rendered.
+- `format` (string, optional) - `claude`, `codex`, `cursor`, `opencode`, `vscode`,
+  `copilot` or `generic`. Omitted, the layout matching the agent's `tool_type` is
+  rendered.
 
 **Response:**
 ```json
@@ -175,6 +176,14 @@ response below.
 
 Requires the `read` scope. An unsupported `format` is a 400 whose message
 enumerates the formats this server supports.
+
+Every bundle carries three files: the client's MCP config, the working document
+that tells the agent how the server is meant to be used (`AGENT_SHAKER.md`, or
+`.github/copilot-instructions.md` for Copilot), and `AGENT_SHAKER_SETUP.md`,
+which says which file goes where, how to set the key, and how to check that the
+connection is alive. The `vscode` and `copilot` formats use `servers` as the
+top-level key rather than `mcpServers`; the difference is not cosmetic, because
+a file with the wrong key is valid JSON that VS Code ignores in silence.
 
 ---
 

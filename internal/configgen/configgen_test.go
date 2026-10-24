@@ -386,11 +386,12 @@ func TestFormatDefaultsToToolType(t *testing.T) {
 		{models.ToolCodex, models.ConfigFormatCodex},
 		{models.ToolOpenCode, models.ConfigFormatOpenCode},
 		{models.ToolCursor, models.ConfigFormatCursor},
+		{models.ToolCopilotVS, models.ConfigFormatVSCode},
+		{models.ToolCopilotCLI, models.ConfigFormatCopilot},
 		{models.ToolGenericMCP, models.ConfigFormatGeneric},
 		// Tool types with no dedicated layout yet fall back to the convention
 		// most hosts read rather than refusing.
 		{models.ToolWindsurf, models.ConfigFormatGeneric},
-		{models.ToolCopilotCLI, models.ConfigFormatGeneric},
 		{models.ToolA2A, models.ConfigFormatGeneric},
 		{models.ToolTypeUnknown, models.ConfigFormatGeneric},
 	}
