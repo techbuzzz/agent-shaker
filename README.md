@@ -130,6 +130,9 @@ git-ignored — a dump is the entire dataset.
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, request flow, data model |
 | [MIGRATIONS.md](docs/MIGRATIONS.md) | Schema, and the forward-only policy |
 | [QUICKSTART.md](docs/QUICKSTART.md) | Step-by-step first run |
+| [ROADMAP.md](docs/ROADMAP.md) | Milestones, open decisions, and where the work stands |
+| [PHASE3_OPENCODE.md](docs/PHASE3_OPENCODE.md) | Phase 3 design: the OpenCode plugin and the server hook layer |
+| [MARKET_SCAN_2026-10.md](docs/MARKET_SCAN_2026-10.md) | The 2026 agent-tooling landscape, with sources |
 
 ## Architecture
 

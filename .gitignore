@@ -92,6 +92,12 @@ desktop.ini
 # Scratch files (commit messages, ad-hoc probes)
 /.commit-msg.tmp
 
+# Agent scratch workspace (.mavis-scratch/). Tooling snapshots — downloaded
+# vendor docs, probe output, intermediate reports — live here. It is a working
+# area, not project source, and `git add -A` must never sweep it in: a research
+# run once committed ~9.5k lines of scraped third-party documentation.
+.mavis-scratch/
+
 # Scratch env files. These get written when testing a compose profile by hand and
 # routinely contain real material — a bcrypt hash, an API key. Never commit one
 # by accident; `git add -A` should not be able to pick them up.
