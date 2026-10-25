@@ -74,16 +74,22 @@ function selectProject(value: unknown): void {
   settings.rememberProject(next)
 }
 
-watch(
-  projectId,
-  (id) => {
-    // Client-only: the endpoints are relative to the app's own origin, and a
-    // server-side render cannot resolve them.
-    if (!import.meta.client || !id) return
-    void hooks.load(id)
-  },
-  { immediate: true }
-)
+// The first load runs after hydration, not during setup.
+//
+// The endpoints are relative to the app's own origin, so a server-side render
+// cannot resolve them at all. Loading during setup would also leave the
+// server's HTML showing the empty state while the client's first paint shows
+// the skeleton — a hydration mismatch. The other pages in this app load the
+// same way.
+onMounted(() => {
+  if (!projectId.value) return
+  void hooks.load(projectId.value)
+})
+
+watch(projectId, (id) => {
+  if (!import.meta.client || !id) return
+  void hooks.load(id)
+})
 
 // --- The per-project switch ------------------------------------------------
 //

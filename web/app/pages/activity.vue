@@ -51,21 +51,30 @@ function selectProject(value: unknown): void {
   settings.rememberProject(next)
 }
 
-watch(
-  [projectId, entityType, entityId, action, limit],
-  () => {
-    // Client-only: the endpoints are relative to the app's own origin, and a
-    // server-side render cannot resolve them.
-    if (!import.meta.client || !projectId.value) return
-    void load(projectId.value, {
-      entityType: entityType.value.trim(),
-      entityId: entityId.value.trim(),
-      action: action.value.trim(),
-      limit: limit.value
-    })
-  },
-  { immediate: true }
-)
+/**
+ * Reads the journal for the current project and filters.
+ *
+ * Client-only: the endpoints are relative to the app's own origin, and a
+ * server-side render cannot resolve them.
+ */
+async function refresh(): Promise<void> {
+  if (!import.meta.client || !projectId.value) return
+
+  await load(projectId.value, {
+    entityType: entityType.value.trim(),
+    entityId: entityId.value.trim(),
+    action: action.value.trim(),
+    limit: limit.value
+  })
+}
+
+// The first read runs after hydration rather than during setup, so the
+// server's HTML and the client's first paint agree: loading during setup
+// would leave the server showing the empty state while the client shows the
+// skeleton.
+onMounted(() => { void refresh() })
+
+watch([projectId, entityType, entityId, action, limit], () => { void refresh() })
 
 /** The event's payload, rendered as key and value rather than as JSON. */
 function pairs(event: AuditEvent): { key: string; value: string }[] {

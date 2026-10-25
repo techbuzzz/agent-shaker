@@ -1291,6 +1291,7 @@ was run on the host.
 | `scripts/migration-e2e.sh` | the migrations applied over a database that already held rows, and the rows survived (§11.17) |
 | `scripts/idempotency-e2e.sh` | a retry replayed the first answer, the task was claimed once, and a reused key on a different task executed for real (§11.18) |
 | `golangci-lint run` | **0 issues** — the first recorded lint findings in this repository's history, now fixed (§11.19) |
+| `actionlint` | clean — the workflows, including the new publish workflow, are valid against GitHub's own schema |
 
 Two operational notes the verification produced:
 
@@ -1603,3 +1604,29 @@ pre-existing:
 
 All eight are fixed. The linter now reports **0 issues**, and the claim
 "check-all is green" is finally one this repository can make.
+
+### 11.20 The hydration mismatch the Nuxt guidance found
+
+The Nuxt skill's SSR reference says to get every composable before any
+`await`, and to keep the server's HTML and the client's first paint in
+agreement. The second one is a real rule, and the two pages this phase
+introduced broke it.
+
+Both loaded their data from a `watch` with `immediate: true`. On the server
+the watcher returns early — the endpoints are relative to the app's own
+origin, so a server-side render cannot resolve them — and the server
+therefore renders the *empty state*. On the client the same watcher fires
+during setup, so the first paint renders the *skeleton*. Different HTML, same
+page: a hydration mismatch, on exactly the two pages that were supposed to be
+the new ones.
+
+The fix is the pattern the rest of the app already uses — `onMounted` for the
+first read, a plain watcher for the changes that follow:
+
+```ts
+onMounted(() => { void refresh() })
+watch([projectId, entityType, entityId, action, limit], () => { void refresh() })
+```
+
+Nothing else in the repository had the `immediate: true` shape, so the defect
+was confined to this phase's two pages — and is now confined to none.
