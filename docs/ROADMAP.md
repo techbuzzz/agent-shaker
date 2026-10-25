@@ -53,7 +53,9 @@ design document rather than maintained here. Its status against this codebase:
   [PHASE3_OPENCODE.md](./PHASE3_OPENCODE.md), which rebuilds the plan against
   the current OpenCode plugin API, adds the server-side hook layer (task
   lifecycle events run a command — the reference executor is `mcode exec`), and
-  writes the audit journal that migration 011 has been reserved for.
+  writes the audit journal that migration 011 has been reserved for. The work
+  is decomposed there into 42 tasks across five tracks (`P3.A1`…`P3.E7`),
+  alongside milestone M3's own T3.1–T3.6.
 - **Phase 4 — Copilot Bridge.** GitHub App registration, `agsh bridge` service,
   command parsing.
 - **Phase 5 — Refinement.** `announce_capability`, `get_team_status`, monitoring

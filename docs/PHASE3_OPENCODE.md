@@ -524,7 +524,7 @@ Only three, and none of them is on the critical path for the core loop:
    can serve — `compaction`, `context_injection`, `policy_gate`,
    `evidence_capture` — plus the host name and version and the negotiated MCP
    revision. Storage: a `capabilities JSONB` column on `agents`
-   (migration 020).
+   (migration 021).
    *Why it earns its place:* without it the server cannot know whether an agent
    can accept an injected context or a compaction snapshot, and Phase 5's
    `get_team_status` has nothing to report. The negotiated revision it carries
@@ -813,36 +813,143 @@ The controls are not optional:
 
 ## 6. Task breakdown
 
-Every task names the files it owns. "Depends on" is a hard dependency, not a
-preference.
+Task IDs are stable and meant to be copied into issues without rewriting, in
+the roadmap's convention. `P3.<track>.<n>` — track `A` foundation, `B` hook
+layer, `C` plugin, `D` server support, `E` distribution and surfaces. Where
+the roadmap already owns a task, it is referenced rather than duplicated.
 
-| # | Task | Files | Depends on | Acceptance |
-|---|---|---|---|---|
-| P3-0 | **Groundwork.** The VS Code and Copilot layouts are back (`b080689`), so the config surface is consistent again — `web/app/types/api.ts:133-141` lists `vscode` and `copilot` alongside the rest. What remains is the stale comment at `internal/models/tooltype.go:96-98`, which says the Copilot surfaces are unsupported while the switch at `:103` returns `true` for both. Fix the comment, and confirm the tree is clean and `make check-all` passes before anything else starts. | `internal/models/tooltype.go` | — | The comment matches the code; `git status` clean; `make check-all` passes; no format advertised by the server is missing from the client list. |
-| P3-1 | **Audit journal.** Migration `011_audit_events.up.sql`; `internal/audit/` writer; append-only enforcement. | `migrations/011_audit_events.up.sql`, `internal/audit/` | P3-0 | A row exists for every published event; a test proves the table refuses a mutation. |
-| P3-2 | **Event broker.** Extract `internal/events`; convert the direct hub broadcasts; normalise the `task_update`/`task_updated` and `agent_update`/`agent_updated` duplication. | `internal/events/`, `internal/websocket/hub.go`, `internal/mcp/coordination_tools.go`, `internal/handlers/*` | P3-1 | Existing WebSocket behaviour is unchanged (the frontend test suite passes); a fake subscriber receives a canonical event. |
-| P3-3 | **Hook store and runner.** Migration `019_hooks`; `internal/hooks/` — matcher, renderer, argv executor, payload builder, result classifier. | `migrations/019_hooks.up.sql`, `internal/hooks/` | P3-2 | A hook fires on `task.completed`; stdout lands in `hook_runs`; a non-zero exit is classified; a timeout kills the process group. |
-| P3-4 | **Hook security and API.** Allowlist, cwd constraint, secret references, redaction, global-off default, per-project opt-in; the REST surface including `/test`. | `internal/hooks/`, `internal/handlers/hooks.go`, `cmd/server/routes.go` | P3-3 | A hook outside the allowlist is rejected; a secret does not appear in the hook row, the logs, or the captured output. |
-| P3-5 | **Plugin package skeleton.** `plugins/opencode/` — `package.json`, `tsconfig.json`, dual export, capability probe, the Agent Shaker client in `core/`. | `plugins/opencode/` | P3-0 | The package loads on OpenCode 1.18.29+ and on OpenCode 2.x without error; a missing optional capability degrades to a warning. |
-| P3-6 | **Session lifecycle bridge.** The event→call mapping of §4.4; server-driven heartbeat scheduling from `lease_ttl_seconds`. | `plugins/opencode/src/core/lifecycle.ts` | P3-5 | The server lists the agent as live; the agent goes offline within lease + reaper after the plugin stops. |
-| P3-7 | **Compaction bridge.** Pre-compaction digest to `add_context`; post-compaction re-injection via `ctx.session.hook("context")`. | `plugins/opencode/src/core/compaction.ts` | P3-6 | After a compaction, a context row exists and the session carries the project context. |
-| P3-8 | **Policy gate and evidence capture.** `ctx.tool.hook` gate; `tool.execute.after` evidence capture. | `plugins/opencode/src/core/policy.ts` | P3-6 | A test asserts the gate throws for an unclaimed agent and passes for a claimed one; a failed gate does not block on a server timeout. |
-| P3-9 | **TUI surface.** `context.ui.toast.show`; one status panel via `context.ui.router.register`. | `plugins/opencode/src/adapters/v2-tui.ts` | P3-6 | A toast appears on a blocked tool call; the panel shows the current task and lease. |
-| P3-10 | **`announce_capability`.** New MCP tool; `agents.capabilities JSONB` (migration `020`); tool-registry extraction out of `handler.go`. | `internal/mcp/tools.go`, `internal/mcp/handler.go`, `internal/models/agent.go`, `migrations/020_agent_capabilities.up.sql` | P3-5 | An announcing plugin is visible through `get_agent`; the tool list and the dispatch cannot drift (a test enumerates both). |
-| P3-11 | **Config generation installs the plugin.** The generated `opencode.json` gains the plugin entry and its options. | `internal/configgen/configgen.go` | P3-5, P3-10 | A generated config, dropped into a scratch project, loads the plugin and reaches the server. |
-| P3-12 | **Hooks UI.** A Hooks page and a run log, plus the test button. | `web/app/pages/`, `web/app/composables/useHooks.ts` | P3-4 | An operator can create, test, enable, disable and inspect a hook without touching the API. |
-| P3-13 | **Distribution.** `publish-npm.yml` (publish on tag, OIDC provenance); the `.well-known/opencode` organisation manifest as an org-wide rollout channel; a `plugin-*` pair of Makefile targets wired into `check-all`. | `.github/workflows/publish-npm.yml`, `internal/handlers/`, `Makefile` | P3-5 | A tag publishes the package; `make check-all` type-checks and tests the plugin. |
-| P3-15 | **Skills-over-MCP channel** *(the lowest-priority item in this table — defer it wholesale if the phase is tight)*. Publish the coordination playbooks as an MCP Skills package (`SKILL.md` + supporting files, manifest with URI, SHA-256 digest and byte size) alongside the plugin, so a coordination playbook reaches any MCP-capable agent, not only OpenCode. Needs the server to expose `skills/list` and `skills/get`. | `internal/skills/`, `internal/mcp/` | P3-10 | The package validates against the Skills extension's rules: digests verified, under 512 files and 16 MiB, approval bound to the file set. |
-| P3-14 | **Contract tests.** Plugin ↔ server contract tests against a real instance in Docker; hook test suite covering event → argv → exit code → classification. | `plugins/opencode/tests/`, `internal/hooks/*_test.go` | P3-3, P3-6 | `make check-all` runs both; no LLM is involved in either suite. |
+Every task names the files it owns and a verifiable acceptance criterion. The
+criterion is what a reviewer checks; it is not a description of the work.
 
-**Sequencing.** P3-0 → (P3-1 → P3-2 → P3-3 → P3-4) in parallel with
-(P3-5 → P3-6 → P3-7/P3-8/P3-9) → P3-10 → P3-11 → P3-12 → P3-13 → P3-14, with
-P3-15 running alongside P3-13 as a distribution sibling.
+### 6.1 Track A — Foundation: the journal, the broker, idempotency
 
-Part A and Part B are genuinely independent: the plugin does not need the hook
-layer, and the hook layer does not need the plugin. They are worth building
-together because they share the audit journal and because the strongest demo of
-the hook layer is a reviewer agent reacting to work done through the plugin.
+Milestone M3 in the roadmap already owns the journal (T3.1–T3.6). Phase 3
+executes it — the journal is not optional groundwork for the hook layer, it
+*is* the hook layer's audit trail — and adds five tasks of its own.
+
+| ID | Task | Files | Acceptance |
+|---|---|---|---|
+| `P3.A1` | Introduce `internal/events`: an `Event` type, a `Broker` with `Publish`, subscriber registration | `internal/events/broker.go` (new) | A broker with two fake subscribers delivers one event to each; publishing under a cancelled context does not block |
+| `P3.A2` | Reconcile M3's T3.3 ("wrap the mutating paths") with the broker: publication goes through `internal/events`, and the journal becomes one of its subscribers rather than a second capture point | `internal/audit/`, `internal/events/` | Every mutating path still records an event with `before` and `after`, and the WebSocket still receives the same payloads — the frontend test suite is unchanged |
+| `P3.A3` | Convert the direct hub broadcasts, and normalise the event vocabulary (`task_update`/`task_updated`, `agent_update`/`agent_updated`) | `internal/websocket/hub.go`, `internal/mcp/coordination_tools.go`, `internal/handlers/*.go` | One canonical name per domain event; the old names survive as WebSocket aliases so the existing client keeps working |
+| `P3.A4` | Idempotency keys on the mutating MCP tools — `claim_task`, `complete_task` | `migrations/020_idempotency.up.sql`, `internal/mcp/handler.go` | A repeated request carrying the same key returns the first result instead of claiming twice or completing twice; a unique index enforces it |
+| `P3.A5` | The journal's hash chain and its anchor, if D6 is answered in favour | `migrations/011_audit_events.up.sql`, `internal/audit/` | The `prev_hash`/`hash` chain is verified by a test, and the anchor is published where the operator controls it — not stored only in the same database it protects |
+| `P3.A6` | Fix the stale comment in `tooltype.go` and confirm the tree is clean before anything else starts | `internal/models/tooltype.go` | The comment matches the switch at `:103`; `make check-all` passes |
+
+### 6.2 Track B — The hook layer
+
+| ID | Task | Files | Acceptance |
+|---|---|---|---|
+| `P3.B1` | Migration `019`: `hooks` and `hook_runs` | `migrations/019_hooks.up.sql` | Applies to a virgin database and to one that already holds data; indexes on `(project_id, event)` and `(hook_id, started_at DESC)` |
+| `P3.B2` | The hook configuration: model, store and CRUD | `internal/models/hook.go` (new), `internal/database/queries/hooks.go` (new) | A hook round-trips through the store; `command` is stored as an array and never as a string |
+| `P3.B3` | The matcher: an event plus a regular expression over a named field of the entity | `internal/hooks/matcher.go` (new) | A hook matching `{"field": "title", "pattern": "^\\[API\\]"}` fires only for a matching title; a malformed pattern is rejected at creation, not at fire time |
+| `P3.B4` | The renderer: `{{...}}` placeholders substituted per argv element, plus the stdin modes `event` and `prompt` | `internal/hooks/render.go` (new) | A placeholder resolving to a path containing a space stays one argv element; the prompt template receives the entity fields |
+| `P3.B5` | The runner: `exec` with an argv array, no shell, process-group kill on timeout, output capture truncated to 64 KB stdout and 16 KB stderr | `internal/hooks/runner.go` (new) | A timeout kills the whole process group, not just the direct child; a hook writing 1 MB stores at most 64 KB |
+| `P3.B6` | Result classification: the exit code verbatim plus a normalised `succeeded`/`failed`/`timeout`/`cancelled`, and the `exit_two_is_blocking` rule | `internal/hooks/classify.go` (new) | Exit 0 → `succeeded`; exit 2 → `failed` by default and `blocked` when the hook declares the rule; exit 130 → `cancelled` |
+| `P3.B7` | Security: the executable allowlist, the working directory constrained to a registered `project_repos` path, secrets by reference, redaction of captured output | `internal/hooks/security.go` (new) | A hook naming an executable outside the allowlist is rejected at creation; a secret appears in neither the hook row, nor the logs, nor the captured output |
+| `P3.B8` | The global off switch and the per-project opt-in | `cmd/server/main.go`, `internal/hooks/` | With `AGENT_SHAKER_HOOKS_ENABLED` unset, no hook runs; with it set, only projects that opted in run hooks |
+| `P3.B9` | Wire the broker to the runner: a subscriber that enqueues the matching hooks onto a bounded worker pool, with per-project and global concurrency caps | `internal/events/`, `internal/hooks/dispatcher.go` (new) | The write that caused the event returns before the hook runs; one project's slow hook cannot starve another's |
+| `P3.B10` | The `post` step: write the hook's stdout back into the domain as a context on the entity's project | `internal/hooks/post.go` (new) | A hook that prints a JSON verdict produces a context row attached to the task |
+| `P3.B11` | The REST surface: CRUD, the run log, and `POST /api/hooks/{id}/test` | `internal/handlers/hooks.go` (new), `cmd/server/routes.go` | The test endpoint runs a hook against a synthetic payload without touching real work |
+| `P3.B12` | Tests | `internal/hooks/*_test.go` (new) | Event → argv → exit code → classification is covered end to end; a database failure does not fail the business operation |
+
+### 6.3 Track C — The OpenCode plugin package
+
+| ID | Task | Files | Acceptance |
+|---|---|---|---|
+| `P3.C1` | The package skeleton: `plugins/opencode/` with `package.json`, `tsconfig.json`, the dual export (`Plugin.define` plus `server()`), and exact version pins for `@opencode/plugin` and `@opencode-ai/plugin` | `plugins/opencode/package.json`, `plugins/opencode/tsconfig.json`, `plugins/opencode/src/index.ts` | The package loads on OpenCode 1.18.29+ and on OpenCode 2.x without an error |
+| `P3.C2` | `core/client.ts`: a typed client over the tools that exist today | `plugins/opencode/src/core/client.ts` (new) | Every call the core makes maps to a tool that already exists — the core loop requires no new server surface |
+| `P3.C3` | The capability probe | `plugins/opencode/src/core/capabilities.ts` (new) | A missing optional capability degrades to one warning; a failure to register the session-lifecycle hooks fails setup loudly |
+| `P3.C4` | The event mapping: one core, two adapters | `plugins/opencode/src/adapters/v1.ts`, `plugins/opencode/src/adapters/v2.ts` | The v1 adapter uses the v1 hook keys and the v2 adapter the v2 domains; both drive the same core intent, and neither translates the other's shape |
+| `P3.C5` | The session lifecycle bridge: `session.created` → `send_heartbeat`, `session.idle` → `update_my_status`, `session.error` → blocked, `session.deleted` → offline | `plugins/opencode/src/core/lifecycle.ts` (new) | The server lists the agent as live; the agent goes offline within lease plus reaper after the plugin stops |
+| `P3.C6` | The heartbeat schedule, taken from the server's `lease_ttl_seconds` rather than a guess | `plugins/opencode/src/core/lifecycle.ts` | The plugin never beats the lease it was given, and a shortened lease takes effect on the next beat |
+| `P3.C7` | The compaction bridge: author the summary on v2, influence it on v1, and write the result back with `add_context` | `plugins/opencode/src/core/compaction.ts` (new) | After a compaction, a context row holds the summary the model actually saw, and the coordination identifiers survive in `result.metadata` |
+| `P3.C8` | The context re-injection: registered on `context`, `compaction` and `generate` together, cached per turn, bounded by a character cap | `plugins/opencode/src/core/context.ts` (new) | One fetch per prompt, not one per model call; the injected payload never exceeds the cap |
+| `P3.C9` | The policy gate: the tool hook and the shell hook, with `fail_closed` explicit per project | `plugins/opencode/src/core/policy.ts` (new) | The gate throws for an unclaimed agent and passes for a claimed one; a server timeout blocks only when `fail_closed` is set |
+| `P3.C10` | The evidence capture: `tool.execute.after` → `add_context` | `plugins/opencode/src/core/evidence.ts` (new) | A failed test run is attached to the task with its `event.error.message` |
+| `P3.C11` | The TUI surface: a toast and one status panel | `plugins/opencode/src/adapters/v2-tui.ts` (new) | A toast appears on a blocked tool call; the panel shows the current task and the lease countdown |
+| `P3.C12` | The tests: unit for the core, and a contract suite against a live server in Docker | `plugins/opencode/tests/` (new) | `make check-all` runs both, and no LLM is involved in either suite |
+
+### 6.4 Track D — Server support for the plugin
+
+| ID | Task | Files | Acceptance |
+|---|---|---|---|
+| `P3.D1` | Extract the tool registry out of `handler.go` — the list at `:615` and the dispatch at `:1397-1481` are two hand-maintained copies of the same thing | `internal/mcp/tools.go` (new), `internal/mcp/handler.go` | A test enumerates both and fails if they drift; `handler.go` shrinks by the size of the list |
+| `P3.D2` | The `announce_capability` tool: host name, host version, capabilities, negotiated MCP revision | `internal/mcp/tools.go`, `internal/mcp/handler.go` | An announcing plugin is visible through `get_agent`; the revision it reports is the one the server actually negotiated |
+| `P3.D3` | Migration `021`: `agents.capabilities JSONB` | `migrations/021_agent_capabilities.up.sql` | Applies to a virgin database and to one that already holds data |
+| `P3.D4` | The OpenCode config shape: `mcp.servers`, the `plugins` array with `options`, `protocol: "auto"`, with the v1 keys kept alongside | `internal/configgen/configgen.go` | The generated file parses as both a v1 and a v2 configuration, and the protocol value never asks for a revision the server refuses |
+| `P3.D5` | The config generator's own tests | `internal/configgen/configgen_test.go` | The generated OpenCode file is parsed, not string-compared |
+
+### 6.5 Track E — Distribution and surfaces
+
+| ID | Task | Files | Acceptance |
+|---|---|---|---|
+| `P3.E1` | The hooks UI: a page per project, the run log and the test button | `web/app/pages/hooks.vue` (new), `web/app/composables/useHooks.ts` (new) | An operator creates, tests, enables, disables and inspects a hook without touching the API |
+| `P3.E2` | The journal read API | `internal/handlers/activity.go` (new), `cmd/server/routes.go` | `GET /api/activity` filters by project, entity and time |
+| `P3.E3` | The activity UI: the journal reader | `web/app/pages/activity.vue` (new) | Filter by project and entity; `make web-typecheck` and `make web-test` pass |
+| `P3.E4` | The npm publish workflow | `.github/workflows/publish-npm.yml` (new) | A tag publishes the package with OIDC provenance; a dry run publishes nothing |
+| `P3.E5` | The organisation manifest at `/.well-known/opencode` | `internal/handlers/opencode.go` (new), `cmd/server/routes.go` | The manifest lists the MCP server and the plugin, and is served without authentication |
+| `P3.E6` | The build gate: `plugin-typecheck` and `plugin-test`, wired into `check-all` | `Makefile` | `make check-all` fails when the plugin does not typecheck or its tests fail |
+| `P3.E7` | The plugin README and the setup guide | `plugins/opencode/README.md` (new), `docs/MCP_SETUP.md` | The guide shows the generated config, the install command, and what the plugin does and does not do |
+
+### 6.6 Tracked separately, not in this phase
+
+- **The Skills-over-MCP channel.** The MCP Skills extension (SEP-2640) is the
+  host-neutral way to ship a coordination playbook — `SKILL.md` plus
+  supporting files, a manifest with a URI, a SHA-256 digest and a byte size,
+  validated against the extension's rules (digests verified, at most 512 files
+  and 16 MiB, approval bound to the file set). It needs the server to expose
+  `skills/list` and `skills/get`. Worth doing, but it is a distribution
+  sibling rather than part of the phase: `P3.E5` covers the host-specific
+  channel, and this one covers the protocol-neutral one.
+- **The signed journal** (`P3.A5`) and **agent identity** (§9 D10) depend on
+  decisions nobody has taken yet.
+
+### 6.7 Sequence
+
+Three waves, and the two products do not wait for each other.
+
+- **Wave 1 — foundation.** `P3.A1` → `P3.A2`/`P3.A3` → `P3.A4`/`P3.A5`/`P3.A6`,
+  in parallel with `P3.C1` → `P3.C2` → `P3.C3` → `P3.C4`. The plugin skeleton
+  touches no server code, so it moves while the journal lands.
+- **Wave 2 — the two products.** `P3.B1` → `P3.B2` → `P3.B3` → `P3.B4` →
+  `P3.B5` → `P3.B6` → `P3.B7` → `P3.B8` → `P3.B9` → `P3.B10`, in parallel with
+  `P3.C5` → `P3.C6` → `P3.C7`/`P3.C8`/`P3.C9`/`P3.C10` → `P3.C11`.
+- **Wave 3 — surfaces and distribution.** `P3.B11`/`P3.B12` → `P3.E1`;
+  `P3.D1` → `P3.D2`/`P3.D3` → `P3.D4`/`P3.D5` → `P3.E5`; `P3.C12` → `P3.E4` →
+  `P3.E6` → `P3.E7`; `P3.E2`/`P3.E3` land with the journal.
+
+**Critical path to a shipped hook:** `P3.A1` → `P3.A3` → `P3.B1` → `P3.B9` →
+`P3.B11` → `P3.E1`. Nine tasks.
+
+**Critical path to a shipped plugin:** `P3.C1` → `P3.C4` → `P3.C5` →
+`P3.C7`.
+
+### 6.8 Decisions that block tasks
+
+| Decision | Blocks |
+|---|---|
+| D1 — package name and scope | `P3.C1`, `P3.E4` |
+| D4 — hook default and authoring authority | `P3.B7`, `P3.B8` |
+| D5 — the OpenCode config shape | `P3.D4` |
+| D6 — the journal's anchor | `P3.A5` |
+| D9 — the lease against the host's warming cadence | `P3.C6` |
+
+### 6.9 Definition of done
+
+Every task in this phase is closed only when all of these hold:
+
+- The acceptance criterion is met, and the check is a command a reviewer can
+  run. Nothing closes on "it works on my machine".
+- `make check-all` passes.
+- No secret appears in a source file, a log line, a captured hook output or a
+  test fixture.
+- Every new table has a migration that applies both to a virgin database and
+  to one that already holds data.
+- Every new mutating path has a test that asserts the observable outcome, not
+  the literal response.
+- The task owns the files it names, and touches nothing else. Unrelated
+  refactors are separate tasks.
 
 ---
 
