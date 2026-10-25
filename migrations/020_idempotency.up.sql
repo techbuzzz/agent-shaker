@@ -38,7 +38,14 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
     request_hash VARCHAR(64) NOT NULL,
     -- The first result, replayed for a repeat of the same key and the same
     -- request.
-    response     JSONB NOT NULL,
+    --
+    -- TEXT rather than JSONB on purpose. JSONB normalises what it stores — it
+    -- drops insignificant whitespace and reorders keys — so a replay would
+    -- return an answer that parses the same but is not the same bytes as the
+    -- one the client first received. A client that compares its retry against
+    -- its first answer would see a difference. The row exists to replay one
+    -- exact answer, not to be queried.
+    response     TEXT NOT NULL,
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tool, agent_id, key, request_hash)
 );

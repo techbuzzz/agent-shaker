@@ -98,7 +98,7 @@ func (h *MCPHandler) recordIdempotent(ctx MCPContext, tool string, args map[stri
 		`INSERT INTO idempotency_keys (tool, agent_id, key, request_hash, response)
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (tool, agent_id, key, request_hash) DO NOTHING`,
-		tool, agentID, key, requestHash(tool, args), json.RawMessage(response),
+		tool, agentID, key, requestHash(tool, args), response,
 	)
 }
 

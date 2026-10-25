@@ -132,6 +132,9 @@ minimax-hook-e2e: ## Prove the MiniMax Code hook bridge reaches the server
 migration-e2e: ## Prove the migrations apply to a database that already holds data
 	bash scripts/migration-e2e.sh
 
+idempotency-e2e: ## Prove a retry does not claim a task twice
+	bash scripts/idempotency-e2e.sh
+
 # ------------------------------------------------------------------ go build
 
 build: ## Compile the server binary into bin/ with build metadata	@mkdir -p bin

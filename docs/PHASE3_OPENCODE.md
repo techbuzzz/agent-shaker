@@ -830,14 +830,15 @@ criterion is what a reviewer checks; it is not a description of the work.
 
 ### 6.0 Status
 
-**Landed and verified in Docker:** `P3.A1`, `P3.A3`, `P3.A4`, `P3.A6`,
-`P3.B1`–`P3.B12`, `P3.C1`, `P3.C4`, `P3.C5`, `P3.C7`, `P3.E1`, and — in a
-second pass — `P3.D1`–`P3.D5`, `P3.E4` and `P3.E5`. The two critical paths
-— the hook path `A1 → A3 → B1 → B9 → B11 → E1` and the plugin path
-`C1 → C4 → C5 → C7` — are complete, and both are proven end to end against a
-throwaway stack: the hook layer runs a real command against a real event,
-and the MiniMax Code bridge renews a lease and pushes a compacted transcript
-(§11.14).
+**Landed and verified in Docker:** `P3.A1`, `P3.A3`, `P3.A4`, `P3.A5`, `P3.A6`,
+`P3.B1`–`P3.B12`, `P3.C1`, `P3.C4`, `P3.C5`, `P3.C7`, `P3.D1`–`P3.D5`,
+`P3.E1`, `P3.E4`, `P3.E5`. The two critical paths — the hook path
+`A1 → A3 → B1 → B9 → B11 → E1` and the plugin path `C1 → C4 → C5 → C7` — are
+complete, and both are proven end to end against a throwaway stack: the hook
+layer runs a real command against a real event, the MiniMax Code bridge
+renews a lease and pushes a compacted transcript (§11.14), a retry does not
+claim a task twice (§11.18), and the migrations apply over a database that
+already holds rows (§11.17).
 
 **Outstanding:** nothing in the decomposition. The audit journal (`P3.A5`,
 migration `022_audit_log`) landed with M3's own tasks, and the phase's
@@ -860,7 +861,7 @@ executes it — the journal is not optional groundwork for the hook layer, it
 | `P3.A1` | Introduce `internal/events`: an `Event` type, a `Broker` with `Publish`, subscriber registration | `internal/events/broker.go` (new) | A broker with two fake subscribers delivers one event to each; publishing under a cancelled context does not block |
 | `P3.A2` | Reconcile M3's T3.3 ("wrap the mutating paths") with the broker: publication goes through `internal/events`, and the journal becomes one of its subscribers rather than a second capture point | `internal/audit/`, `internal/events/` | Every mutating path still records an event with `before` and `after`, and the WebSocket still receives the same payloads — the frontend test suite is unchanged |
 | `P3.A3` | Convert the direct hub broadcasts, and normalise the event vocabulary (`task_update`/`task_updated`, `agent_update`/`agent_updated`) | `internal/websocket/hub.go`, `internal/mcp/coordination_tools.go`, `internal/handlers/*.go` | One canonical name per domain event; the old names survive as WebSocket aliases so the existing client keeps working |
-| `P3.A4` | Idempotency keys on the mutating MCP tools — `claim_task`, `complete_task` | `migrations/020_idempotency.up.sql`, `internal/mcp/handler.go` | A repeated request carrying the same key returns the first result instead of claiming twice or completing twice; a unique index enforces it |
+| `P3.A4` | Idempotency keys on the mutating MCP tools — `claim_task`, `complete_task` | `migrations/020_idempotency.up.sql`, `internal/mcp/idempotency.go` | A repeated request carrying the same key returns the first answer instead of claiming twice or completing twice; a key reused for a *different* request executes for real |
 | `P3.A5` | The journal's hash chain and its anchor | `migrations/022_audit_log.up.sql`, `internal/audit/` | The `prev_hash`/`hash` chain is verified by a test, and the anchor is published where the operator controls it — not stored only in the same database it protects |
 | `P3.A6` | Fix the stale comment in `tooltype.go` and confirm the tree is clean before anything else starts | `internal/models/tooltype.go` | The comment matches the switch at `:103`; `make check-all` passes |
 
@@ -1243,7 +1244,7 @@ AGENT_SHAKER_AGENT_ID    the agent this session is
 |---|---|
 | `022_audit_log` | `audit_events`: the append-only journal, with the `prev_hash`/`hash` chain and the anchor. |
 | `019_hooks` | `hooks` and `hook_runs`, plus `projects.hooks_enabled`. |
-| `020_idempotency` | `idempotency_keys`: `(tool, agent_id, key)` → the first response. |
+| `020_idempotency` | `idempotency_keys`: `(tool, agent_id, key, request_hash)` → the first answer, stored as TEXT so the replay is byte-identical (§11.18). |
 
 The idempotency keys are on `claim_task` and `complete_task`, and they are
 optional. A client that sends one gets a repeat of the same request replayed
@@ -1288,6 +1289,8 @@ was run on the host.
 | `scripts/hook-e2e.sh` | a real command ran against a real event; captured stdout `hook ran for: prove the hook layer runs a command` |
 | `scripts/minimax-hook-e2e.sh` | the MiniMax Code bridge renewed a lease and pushed a compacted transcript (§11.14) |
 | `scripts/migration-e2e.sh` | the migrations applied over a database that already held rows, and the rows survived (§11.17) |
+| `scripts/idempotency-e2e.sh` | a retry replayed the first answer, the task was claimed once, and a reused key on a different task executed for real (§11.18) |
+| `golangci-lint run` | **0 issues** — the first recorded lint findings in this repository's history, now fixed (§11.19) |
 
 Two operational notes the verification produced:
 
@@ -1552,3 +1555,51 @@ the tree's maximum, and `golang-migrate` walks forward only — so a migration
 numbered `011` would never have been applied at all. Every deployment would
 have reported itself as migrated, and the table would not have existed. The
 journal is `022`.
+
+### 11.18 The idempotency key identifies an operation, not a request
+
+`scripts/idempotency-e2e.mjs` proves the keys behaviourally, over MCP, the
+way an agent would use them:
+
+```
+✓ the retry replayed the first answer
+✓ the task is claimed exactly once
+✓ the same key on a different task executed for real
+```
+
+**The key is scoped to the operation, not to the request.** The first
+implementation stored rows under `(tool, agent, key)` alone, which meant a
+client that reused one key for two different tasks got the first task's
+answer replayed for the second — being told "claimed" for a task that was
+never claimed. That is worse than the duplicate the key existed to prevent.
+The row's identity now includes a fingerprint of the request, so a reused key
+on a different request is a different row and a real execution.
+
+**The stored answer is TEXT, not JSONB.** JSONB normalises what it stores —
+it drops insignificant whitespace and reorders keys — so the replay would
+have returned an answer that parses the same but is not the same bytes as the
+one the client first received. The row exists to replay one exact answer, not
+to be queried.
+
+### 11.19 The lint had never run
+
+`.golangci.yml` says so in its own first paragraph: CI pinned a version that
+refuses to load a Go 1.26 module, so the linter failed in about a second,
+before reading a single file, and **the repository had no lint findings
+recorded anywhere**. `make check-all` includes the lint step, so "check-all is
+green" was not a claim anyone could make.
+
+Run in a container, it found **eight** issues — one of them mine, seven
+pre-existing:
+
+- an unchecked `tx.Rollback()` in the reaper and an unchecked
+  `scheduler.Shutdown()`;
+- an ineffectual assignment in a test and a comparison that could never be
+  true — a `scanner == nil` check on an interface that was just assigned a
+  non-nil pointer, which asserted nothing;
+- two fields on a struct that were never set or read;
+- and in my own code, a redundant `ProcessState` selector that staticcheck
+  flagged.
+
+All eight are fixed. The linter now reports **0 issues**, and the claim
+"check-all is green" is finally one this repository can make.
