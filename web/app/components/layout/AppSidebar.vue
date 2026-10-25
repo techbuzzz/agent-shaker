@@ -10,6 +10,8 @@ const items: NavItem[] = [
   { label: 'Documentation', to: '/documentation', icon: 'i-lucide-book-text' },
   { label: 'Global',        to: '/global',        icon: 'i-lucide-globe' },
   { label: 'Standups',      to: '/standups',      icon: 'i-lucide-calendar-days' },
+  { label: 'Hooks',         to: '/hooks',         icon: 'i-lucide-webhook' },
+  { label: 'Activity',      to: '/activity',      icon: 'i-lucide-scroll-text' },
   { label: 'People & Keys', to: '/access',        icon: 'i-lucide-shield-check' },
   { label: 'Settings',      to: '/settings',      icon: 'i-lucide-settings' }
 ]

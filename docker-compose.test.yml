@@ -1,0 +1,77 @@
+# Isolated test stack for `make verify-docker`.
+#
+# Everything here is throwaway. The database lives on a tmpfs, so the data
+# disappears when the container stops and `down -v` has nothing to delete —
+# there is no path from this file to a developer's real data.
+#
+# The compose project name is `agent-shaker-test`, which is deliberately
+# different from the deployment's `agent-shaker`. Two stacks, two project
+# names, two sets of volumes: running the tests cannot disturb a running
+# server, and a running server cannot make the tests pass.
+
+name: agent-shaker-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: agent_shaker_test
+      POSTGRES_USER: mcp
+      POSTGRES_PASSWORD: test-only
+      # Deterministic collation, so ORDER BY does not change between hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    tmpfs:
+      # The database never touches a disk. A test run that wrote to a volume
+      # would leave the next run with a schema it did not create.
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcp -d agent_shaker_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    networks: [test]
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./migrate", "-cmd", "up", "-dir", "migrations"]
+    environment:
+      DATABASE_URL: postgres://mcp:test-only@postgres:5432/agent_shaker_test?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [test]
+
+  # The API, with the hook layer enabled and one executable allowed.
+  #
+  # It exists for the end-to-end proof (scripts/hook-e2e.sh), which has to run
+  # against a real server: a hook that only ever ran in a unit test would not
+  # have proved that the broker, the dispatcher, the runner and the run log
+  # are wired to each other.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: "8080"
+      ENV: test
+      DATABASE_URL: postgres://mcp:test-only@postgres:5432/agent_shaker_test?sslmode=disable
+      API_KEYS: e2e-only
+      AGENT_SHAKER_HOOKS_ENABLED: "true"
+      AGENT_SHAKER_HOOK_EXECUTABLES: sh
+      AGENT_SHAKER_HOOK_WORKDIR: /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "18080:8080"
+    restart: "no"
+    networks: [test]
+
+networks:
+  test:
+    driver: bridge

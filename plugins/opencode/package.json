@@ -1,0 +1,36 @@
+{
+  "name": "@techbuzzz/opencode-agent-shaker",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that binds an OpenCode session to an Agent Shaker coordination server: heartbeat lease, context re-injection, compaction bridge and a local policy gate.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \"test-build/tests/**/*.test.js\""
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.1.4"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "1.19.4",
+    "@opencode-ai/sdk": "1.19.4",
+    "@types/node": "22.18.8",
+    "typescript": "5.9.3"
+  }
+}

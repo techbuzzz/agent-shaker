@@ -53,7 +53,7 @@ design document rather than maintained here. Its status against this codebase:
   [PHASE3_OPENCODE.md](./PHASE3_OPENCODE.md), which rebuilds the plan against
   the current OpenCode plugin API, adds the server-side hook layer (task
   lifecycle events run a command — the reference executor is `mcode exec`), and
-  writes the audit journal that migration 011 has been reserved for. The work
+  writes the audit journal that migration 022 has been reserved for. The work
   is decomposed there into 42 tasks across five tracks (`P3.A1`…`P3.E7`),
   alongside milestone M3's own T3.1–T3.6.
 - **Phase 4 — Copilot Bridge.** GitHub App registration, `agsh bridge` service,
@@ -147,7 +147,7 @@ been running is always more expensive than starting it now.
 
 | ID | Task | Files | Acceptance |
 |---|---|---|---|
-| T3.1 | Migration `011`: `audit_events` (id, occurred_at, actor_type, actor_id, project_id, entity_type, entity_id, action, before, after, trace_id, request_id) | `migrations/011_audit_log.up.sql` | Indexes on `(project_id, occurred_at DESC)` and `(entity_type, entity_id)` |
+| T3.1 | Migration `022`: `audit_events` (id, occurred_at, actor_type, actor_id, project_id, entity_type, entity_id, action, before, after, trace_id, request_id, prev_hash, hash) | `migrations/022_audit_log.up.sql` | Indexes on `(project_id, occurred_at DESC)` and `(entity_type, entity_id)` |
 | T3.2 | An `internal/audit` package: `Recorder` interface, Postgres implementation, no-op for tests | `internal/audit/recorder.go`, `internal/audit/postgres.go`, `internal/audit/noop.go` | A write failure is logged through `slog.ErrorContext` rather than panicking |
 | T3.3 | Wrap the mutating paths | `internal/handlers/*.go`, `internal/mcp/handler.go` | Every create, update and delete records an event with `before` and `after` |
 | T3.4 | Forbid mutation of the journal | `internal/audit` plus review | No `UPDATE` or `DELETE` against `audit_events` exists, and a test pins that |

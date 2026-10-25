@@ -135,6 +135,7 @@ export const CONFIG_FORMATS = [
   'codex',
   'cursor',
   'opencode',
+  'opencode-v2',
   'vscode',
   'copilot',
   'generic'
@@ -147,7 +148,11 @@ export const CONFIG_FORMAT_LABELS: Record<ConfigFormat, string> = {
   cursor: 'Cursor (.cursor/mcp.json)',
   // OpenCode keeps MCP servers inside its one settings document, so there is no
   // dedicated mcp file to point at.
-  opencode: 'OpenCode (opencode.json)',
+  opencode: 'OpenCode 1.x (opencode.json)',
+  // OpenCode 2 reads a different document: the servers nest under mcp.servers,
+  // the plugin list moves to `plugins`, and remote servers turn OAuth on
+  // unless the file says otherwise.
+  'opencode-v2': 'OpenCode 2.x (opencode.json)',
   // VS Code reads `servers` rather than `mcpServers`.
   vscode: 'VS Code (.vscode/mcp.json)',
   // Copilot reads repository instructions; it has no MCP config of its own here.

@@ -12,6 +12,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
@@ -21,10 +22,13 @@ import (
 type ContextHandler struct {
 	store *queries.ContextsStore
 	hub   *websocket.Hub
+	// broker publishes the domain events the hook layer reacts to. It is nil
+	// on a server running without the hook layer.
+	broker *events.Broker
 }
 
-func NewContextHandler(store *queries.ContextsStore, hub *websocket.Hub) *ContextHandler {
-	return &ContextHandler{store: store, hub: hub}
+func NewContextHandler(store *queries.ContextsStore, hub *websocket.Hub, broker *events.Broker) *ContextHandler {
+	return &ContextHandler{store: store, hub: hub, broker: broker}
 }
 
 func (h *ContextHandler) CreateContext(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +62,21 @@ func (h *ContextHandler) CreateContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.hub.BroadcastToProject(c.ProjectID, "context_added", c)
+
+	// A published context is a domain event. The hook layer reacts to the
+	// event, not to the broadcast: the broadcast is shaped for the browser,
+	// and a hook that had to read it would break whenever the UI moved a
+	// field.
+	events.Send(r.Context(), h.broker, events.New(events.ContextPublished, c.ProjectID, events.Options{
+		EntityType: events.EntityContext,
+		EntityID:   c.ID,
+		ActorType:  events.ActorAgent,
+		ActorID:    c.AgentID,
+		Payload: map[string]any{
+			events.PayloadTitle: c.Title,
+		},
+	}))
+
 	httpx.WriteJSON(w, http.StatusCreated, c)
 }
 

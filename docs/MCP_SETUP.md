@@ -255,3 +255,121 @@ agent it knows nothing about.
   `String.replace`, because the placeholder contains `$` and `$&` / `` $` ``
   would be interpreted as substitution patterns
 - Routing and scopes: `cmd/server/routes.go`
+
+## Beyond the generated config
+
+The generated files are enough for a host that only speaks MCP. Two hosts in
+this project's own toolchain can do more, because they have an extension
+point that lets them act rather than only observe.
+
+### OpenCode: the plugin package
+
+`plugins/opencode` is a published npm package (`@techbuzzz/opencode-agent-shaker`)
+that installs into OpenCode and adds the things MCP cannot reach:
+
+- the session's **heartbeat lease**, so the server knows the agent is alive;
+- the **compaction bridge**, which writes the summary back into the shared
+  contexts and re-injects the shared truth into the new, smaller context;
+- the **policy gate**, which can block a tool call before it runs.
+
+It exports both the v1 and the v2 plugin shapes from one entry point, because
+OpenCode has two plugin APIs and the v1 object form is only supported from
+1.18.29 onward.
+
+**Two configuration formats, and they are not interchangeable.** `mcp` is one
+key with two shapes, so one file cannot serve both majors: OpenCode 1 reads
+the servers directly under `mcp`, OpenCode 2 reads them under `mcp.servers`.
+Ask for the one that matches the host:
+
+```
+GET /api/agents/{id}/config?format=opencode      # OpenCode 1.x
+GET /api/agents/{id}/config?format=opencode-v2   # OpenCode 2.x
+```
+
+The v2 document also sets `"oauth": false`. OpenCode 2 turns OAuth on for
+every remote server unless the file says otherwise, and this server
+authenticates with a header — without the field the client tries to
+authenticate against a server that does not speak OAuth, and the agent
+connects to nothing.
+
+```jsonc
+// opencode.json — the v2 shape
+{
+  "mcp": {
+    "servers": {
+      "agent-shaker": {
+        "type": "remote",
+        "url": "https://agents.example.internal/mcp",
+        "disabled": false,
+        "headers": { "Authorization": "Bearer {env:AGENT_SHAKER_API_KEY}" },
+        "oauth": false,
+        "protocol": "legacy"
+      }
+    }
+  },
+  "plugins": [
+    { "package": "@techbuzzz/opencode-agent-shaker",
+      "options": { "endpoint": "https://agents.example.internal/mcp" } }
+  ]
+}
+```
+
+### The organisation manifest
+
+`GET /.well-known/opencode` publishes the same document for a whole
+organisation. OpenCode fetches it by itself, before any credential exists, and
+merges it underneath every other configuration source — so one endpoint hands
+a fleet of agents the same coordination server and the same plugin.
+
+It is unauthenticated on purpose, and it carries no secret: every credential in
+it is the `{env:AGENT_SHAKER_API_KEY}` placeholder. The connection it publishes
+is unbound, because an organisation does not know which agent is about to
+connect.
+
+### What a client says about itself
+
+An agent running the plugin announces once, at setup, what its client can do
+for the server — `compaction`, `context_injection`, `policy_gate`,
+`evidence_capture`. The server needs the answer before it routes work: an
+agent whose client cannot accept a pushed context, or author a compaction
+summary, is an agent the server must not ask to.
+
+A bare MCP client announces nothing, and that is a different fact from
+announcing an empty list: the first means "I have not told you what I am", the
+second means "I have, and the answer is nothing".
+
+### MiniMax Code: a project hook
+
+MiniMax Code has hooks of its own, so it needs no plugin. The repository
+carries one:
+
+- `.minimax/hooks.json` — `SessionStart`, `SessionEnd` and `PostCompact`.
+- `.minimax/agent-shaker-hook.mjs` — the script they call.
+
+`SessionStart` renews the agent's lease, `SessionEnd` releases it, and
+`PostCompact` reads the transcript and pushes it into the shared contexts —
+the same compaction bridge the OpenCode plugin implements.
+
+The hook file is inert until the operator enables it in
+**Settings → Hooks → Project**. The script reads:
+
+```
+AGENT_SHAKER_URL         the API base URL
+AGENT_SHAKER_API_KEY     the agent's credential
+AGENT_SHAKER_PROJECT_ID  the project the session belongs to
+AGENT_SHAKER_AGENT_ID    the agent this session is
+```
+
+It is fail-open and side-effect only: it never blocks a turn, never writes to
+stdout, and always exits 0.
+
+### The other direction: the server runs a command
+
+The hook layer inverts the relationship. Instead of an agent reporting to the
+server, a **task lifecycle event runs a command on the server** — for example
+a reviewer agent that reads the finished task and writes its verdict back as
+a context.
+
+See [PHASE3_OPENCODE.md](./PHASE3_OPENCODE.md) for the design, and
+`scripts/hook-e2e.sh` for a proof that runs the whole path against a
+throwaway stack.

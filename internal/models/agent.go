@@ -81,6 +81,85 @@ type Agent struct {
 	// heartbeat ever carries, written on every ping.
 	LastProgressPct  *int       `json:"last_progress_pct"`
 	LastHeartbeatETA *time.Time `json:"last_heartbeat_eta"`
+
+	// Capabilities is what this agent's client says it can do.
+	//
+	// An agent running a plugin can accept a context injection, author a
+	// compaction summary and enforce a policy gate; an agent running a bare
+	// MCP client can do none of those. The server needs to know which before it
+	// routes work, or it asks an agent to do something its client cannot do and
+	// the failure arrives without an explanation.
+	//
+	// NULL means the client has never announced. That is not the same as
+	// announcing nothing: a client that has never spoken is a client that has
+	// not told us what it is.
+	Capabilities *AgentCapabilities `json:"capabilities,omitempty" db:"capabilities"`
+}
+
+// AgentCapabilities is what an agent's client announced about itself.
+type AgentCapabilities struct {
+	// Capabilities are the names the client claims to support.
+	Capabilities []string `json:"capabilities"`
+
+	// Host is the client: "opencode", "claude-code", and so on.
+	Host string `json:"host,omitempty"`
+
+	// HostVersion is the host application's own version.
+	HostVersion string `json:"host_version,omitempty"`
+
+	// PluginVersion is the version of the client plugin that announced this.
+	//
+	// It is a separate field from the host's version because they answer
+	// different questions: the host is what the agent runs in, the plugin is
+	// what carries the coordination behaviour.
+	PluginVersion string `json:"plugin_version,omitempty"`
+
+	// ProtocolVersion is the MCP revision the client negotiated.
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+
+	// AnnouncedAt is when the client last said this.
+	AnnouncedAt time.Time `json:"announced_at,omitempty"`
+}
+
+// The capabilities a client can announce.
+//
+// The list is closed so a typo is caught rather than stored: a client that
+// announces "context-injection" instead of "context_injection" would be
+// recorded as supporting a capability nobody can act on.
+const (
+	// CapabilityCompaction means the client can author the compaction summary
+	// and write it back to shared truth.
+	CapabilityCompaction = "compaction"
+
+	// CapabilityContextInjection means the client can accept shared context
+	// pushed into its session.
+	CapabilityContextInjection = "context_injection"
+
+	// CapabilityPolicyGate means the client can block a tool call before it
+	// runs.
+	CapabilityPolicyGate = "policy_gate"
+
+	// CapabilityEvidenceCapture means the client can attach a tool outcome —
+	// a test run, a build — to the task it belongs to.
+	CapabilityEvidenceCapture = "evidence_capture"
+)
+
+// AllAgentCapabilities is the authoritative capability vocabulary.
+var AllAgentCapabilities = []string{
+	CapabilityCompaction,
+	CapabilityContextInjection,
+	CapabilityPolicyGate,
+	CapabilityEvidenceCapture,
+}
+
+// IsValidAgentCapability reports whether name is in the vocabulary.
+func IsValidAgentCapability(name string) bool {
+	for _, valid := range AllAgentCapabilities {
+		if valid == name {
+			return true
+		}
+	}
+	return false
 }
 
 // StaleAgent is one agent whose lease has expired, as the reaper sees it.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/httpx"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/validator"
@@ -49,6 +50,10 @@ type TaskHandler struct {
 	// resolver promotes dependent tasks when a predecessor finishes. It is nil
 	// when the server runs without a database.
 	resolver *coordination.DependencyResolver
+	// broker publishes the domain events the hook layer reacts to. It is nil
+	// on a server running without the hook layer, and every publisher treats
+	// that as "nobody is listening".
+	broker *events.Broker
 }
 
 // Compile-time proof that the real stores still satisfy the seams above. A
@@ -61,8 +66,8 @@ var (
 // NewTaskHandler builds the task handler. The resolver is optional: a server
 // without a database has no dependencies to resolve, and a nil resolver must
 // degrade to "just update the status" rather than panic.
-func NewTaskHandler(store *queries.TasksStore, agents *queries.AgentsStore, hub *websocket.Hub, resolver *coordination.DependencyResolver) *TaskHandler {
-	return &TaskHandler{store: store, agents: agents, hub: hub, resolver: resolver}
+func NewTaskHandler(store *queries.TasksStore, agents *queries.AgentsStore, hub *websocket.Hub, resolver *coordination.DependencyResolver, broker *events.Broker) *TaskHandler {
+	return &TaskHandler{store: store, agents: agents, hub: hub, resolver: resolver, broker: broker}
 }
 
 // resolveDependents runs the dependency resolver after a task reaches done.
@@ -255,6 +260,33 @@ func (h *TaskHandler) UpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, err)
 		return
 	}
+
+	// A status change is a domain event, and it is published from every
+	// surface: a hook that reacts to a task finishing must hear about it when
+	// a human moves the task as well as when an agent does.
+	switch req.Status {
+	case models.StatusTaskDone:
+		events.Send(r.Context(), h.broker, events.New(events.TaskCompleted, task.ProjectID, events.Options{
+			EntityType: events.EntityTask,
+			EntityID:   task.ID,
+			ActorType:  events.ActorService,
+			Payload: map[string]any{
+				events.PayloadTitle:  task.Title,
+				events.PayloadStatus: string(task.Status),
+			},
+		}))
+	case models.StatusTaskBlocked:
+		events.Send(r.Context(), h.broker, events.New(events.TaskBlocked, task.ProjectID, events.Options{
+			EntityType: events.EntityTask,
+			EntityID:   task.ID,
+			ActorType:  events.ActorService,
+			Payload: map[string]any{
+				events.PayloadTitle:  task.Title,
+				events.PayloadStatus: string(task.Status),
+			},
+		}))
+	}
+
 	httpx.WriteJSON(w, http.StatusOK, task)
 }
 

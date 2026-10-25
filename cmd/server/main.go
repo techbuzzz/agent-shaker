@@ -11,15 +11,19 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	a2aserver "github.com/techbuzzz/agent-shaker/internal/a2a/server"
+	"github.com/techbuzzz/agent-shaker/internal/audit"
 	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/handlers"
+	"github.com/techbuzzz/agent-shaker/internal/hooks"
 	"github.com/techbuzzz/agent-shaker/internal/mcp"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/observability"
@@ -119,6 +123,14 @@ func main() {
 	hub := websocket.NewHub()
 	go hub.Run()
 
+	// The domain event broker.
+	//
+	// One publication point for every state change, so the hook layer hears
+	// about a change without parsing the WebSocket broadcast the browser
+	// happens to receive. The broadcast is the UI's view of a change; the
+	// event is the domain's, and it has one name per change.
+	broker := events.NewBroker()
+
 	// Create handlers. Handlers own a typed query store. When the database
 	// is unavailable, pass a literal nil interface — a typed-nil *database.DB
 	// would box into a non-nil Querier interface, defeating the handlers'
@@ -144,6 +156,7 @@ func main() {
 	globalContextsStore := queries.NewGlobalContextsStore(querier)
 	peopleStore := queries.NewPeopleStore(querier)
 	apiKeysStore := queries.NewAPIKeysStore(querier)
+	hooksStore := queries.NewHooksStore(querier)
 
 	// Coordination Plane stores (migration 015). They share the one querier
 	// like every other store, so they inherit the same tracing and the same
@@ -184,16 +197,55 @@ func main() {
 		blockerHandler     *handlers.BlockerHandler
 	)
 	if db != nil {
-		dependencyResolver = coordination.NewDependencyResolver(depsStore, tasksQueryStore, hub)
+		dependencyResolver = coordination.NewDependencyResolver(depsStore, tasksQueryStore, hub, broker)
 		blockerHandler = handlers.NewBlockerHandler(
 			blockersStore, depsStore, agentStore, tasksQueryStore, dependencyResolver, hub,
 		)
 	}
 
+	// The journal. Every domain event is written to it, chained, so a trail
+	// rewritten inside the database cannot be rewritten quietly: the chain
+	// breaks, and the head is published outside it.
+	//
+	// The anchor directory is where the head hash is written. Empty means the
+	// head is only readable through the API, for the operator to pin
+	// somewhere they control.
+	auditStore := queries.NewAuditStore(querier)
+	activityHandler := handlers.NewActivityHandler(auditStore)
+
+	var recorder audit.Recorder = audit.NewNoopRecorder()
+	if db != nil {
+		recorder = audit.NewPostgresRecorder(db, strings.TrimSpace(os.Getenv("AGENT_SHAKER_AUDIT_ANCHOR_DIR")))
+	}
+	broker.Subscribe(audit.NewSubscriber(recorder))
+
+	// The hook layer.
+	//
+	// It is off unless AGENT_SHAKER_HOOKS_ENABLED says otherwise, and off for
+	// every project until an operator opts that project in. A hook is arbitrary
+	// command execution, so both switches are deliberate and both default to
+	// closed.
+	hookCfg := hookConfig()
+	var (
+		hookDispatcher *hooks.Dispatcher
+		hookHandler    *handlers.HookHandler
+	)
+	if db != nil {
+		hookDispatcher = hooks.NewDispatcher(
+			hookCfg,
+			hooksStore,
+			hooks.NewStoreResolver(projectStore, hookCfg.WorkDir),
+			contextsQueryStore,
+			nil,
+		)
+		broker.Subscribe(hookDispatcher)
+		hookHandler = handlers.NewHookHandler(hooksStore, hookDispatcher, hooks.NewRunner(hookCfg))
+	}
+
 	projectHandler := handlers.NewProjectHandler(projectStore, hub)
 	agentHandler := handlers.NewAgentHandler(agentStore, tasksQueryStore, heartbeatsStore, hub)
-	taskHandler := handlers.NewTaskHandler(tasksQueryStore, agentStore, hub, dependencyResolver)
-	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub)
+	taskHandler := handlers.NewTaskHandler(tasksQueryStore, agentStore, hub, dependencyResolver, broker)
+	contextHandler := handlers.NewContextHandler(contextsQueryStore, hub, broker)
 	standupHandler := handlers.NewStandupHandler(standupsQueryStore, hub)
 	wsHandler := handlers.NewWebSocketHandler(hub)
 	dashboardHandler := handlers.NewDashboardHandler(dashboardQueryStore)
@@ -204,7 +256,7 @@ func main() {
 	apiKeysHandler := handlers.NewAPIKeysHandler(apiKeysStore, peopleStore, agentStore, keyResolver)
 
 	mcpHandler := mcp.NewMCPHandlerWithCoordination(
-		db, hub, blockersStore, depsStore, agentStore, tasksQueryStore, heartbeatsStore,
+		db, hub, blockersStore, depsStore, agentStore, tasksQueryStore, heartbeatsStore, broker,
 	)
 
 	// A2A Protocol Setup.
@@ -363,36 +415,39 @@ func main() {
 	assumeTLS := os.Getenv("TLS_TERMINATED") == "true"
 
 	deps := routeDeps{
-		db:                   db,
-		hub:                  hub,
-		projectHandler:       projectHandler,
-		agentHandler:         agentHandler,
-		agentConfigHandler:   agentConfigHandler,
-		taskHandler:          taskHandler,
-		contextHandler:       contextHandler,
-		standupHandler:       standupHandler,
-		wsHandler:            wsHandler,
-		dashboardHandler:     dashboardHandler,
-		milestoneHandler:     milestoneHandler,
-		projectRepoHandler:   projectRepoHandler,
-		globalContextHandler: globalContextHandler,
-		peopleHandler:        peopleHandler,
-		apiKeysHandler:       apiKeysHandler,
-		blockerHandler:       blockerHandler,
-		mcpHandler:           mcpHandler,
-		agentCardHandler:     agentCardHandler,
-		a2aHandler:           a2aHandler,
-		streamingHandler:     streamingHandler,
-		artifactHandler:      artifactHandler,
-		obs:                  obs,
-		maxBodyBytes:         parseMaxBodyBytes(),
-		corsOrigins:          corsOrigins,
-		corsAllowCreds:       corsAllowCreds,
-		assumeTLS:            assumeTLS,
-		accessLog:            middleware.LoggerClientIP(trustedProxy),
-		auth:                 authMW,
-		wsAuth:               wsAuthMW,
-		rateLimitShutdown:    rateShutdown,
+		db:                      db,
+		hub:                     hub,
+		projectHandler:          projectHandler,
+		agentHandler:            agentHandler,
+		agentConfigHandler:      agentConfigHandler,
+		taskHandler:             taskHandler,
+		contextHandler:          contextHandler,
+		hookHandler:             hookHandler,
+		activityHandler:         activityHandler,
+		openCodeManifestHandler: handlers.NewOpenCodeManifestHandler(baseURL),
+		standupHandler:          standupHandler,
+		wsHandler:               wsHandler,
+		dashboardHandler:        dashboardHandler,
+		milestoneHandler:        milestoneHandler,
+		projectRepoHandler:      projectRepoHandler,
+		globalContextHandler:    globalContextHandler,
+		peopleHandler:           peopleHandler,
+		apiKeysHandler:          apiKeysHandler,
+		blockerHandler:          blockerHandler,
+		mcpHandler:              mcpHandler,
+		agentCardHandler:        agentCardHandler,
+		a2aHandler:              a2aHandler,
+		streamingHandler:        streamingHandler,
+		artifactHandler:         artifactHandler,
+		obs:                     obs,
+		maxBodyBytes:            parseMaxBodyBytes(),
+		corsOrigins:             corsOrigins,
+		corsAllowCreds:          corsAllowCreds,
+		assumeTLS:               assumeTLS,
+		accessLog:               middleware.LoggerClientIP(trustedProxy),
+		auth:                    authMW,
+		wsAuth:                  wsAuthMW,
+		rateLimitShutdown:       rateShutdown,
 	}
 
 	rootHandler, err := newServeMux(deps)
@@ -430,7 +485,7 @@ func main() {
 	schedCfg := schedulerConfig()
 	var background *coordination.Scheduler
 	if db != nil {
-		reaper := coordination.NewStaleAgentReaper(coordination.AgentStore{Store: agentStore}, hub, schedCfg.Reaper)
+		reaper := coordination.NewStaleAgentReaper(coordination.AgentStore{Store: agentStore}, hub, broker, schedCfg.Reaper)
 		sched, err := coordination.NewScheduler(context.Background(), reaper, heartbeatsStore, schedCfg)
 		if err != nil {
 			slog.Error("building the background scheduler failed", "error", err)
@@ -439,7 +494,7 @@ func main() {
 		background = sched
 	}
 
-	if err := runServer(":"+port, handler, hub, background); err != nil {
+	if err := runServer(":"+port, handler, hub, background, hookDispatcher); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)
 	}
@@ -457,7 +512,11 @@ func main() {
 // jobs and lets a sweep in progress finish before the connections drain — a
 // reaper interrupted mid-transaction leaves an agent marked offline whose tasks
 // were never released.
-func runServer(addr string, h http.Handler, hub *websocket.Hub, background *coordination.Scheduler) error {
+// hookDispatcher may be nil: the server runs without a database, and without
+// a database there are no events to react to. Closing it stops the hook
+// workers, so a command in flight is given the chance to finish before the
+// process exits.
+func runServer(addr string, h http.Handler, hub *websocket.Hub, background *coordination.Scheduler, hookDispatcher *hooks.Dispatcher) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           h,
@@ -500,6 +559,11 @@ func runServer(addr string, h http.Handler, hub *websocket.Hub, background *coor
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP shutdown error", "error", err)
+	}
+
+	if hookDispatcher != nil {
+		slog.Info("closing the hook dispatcher")
+		hookDispatcher.Close()
 	}
 
 	slog.Info("closing WebSocket hub")
@@ -562,6 +626,66 @@ func schedulerConfig() coordination.SchedulerConfig {
 	}
 
 	cfg.Reaper = reaper
+	return cfg
+}
+
+// hookConfig reads the hook layer's configuration from the environment.
+//
+// Every value is validated rather than trusted, and every default is the
+// closed one: hooks are off, no executable is allowed, and the concurrency
+// limits are small. A misconfigured deployment must fail closed, because the
+// thing being configured is arbitrary command execution.
+func hookConfig() hooks.Config {
+	cfg := hooks.DefaultConfig()
+
+	if raw := strings.TrimSpace(os.Getenv("AGENT_SHAKER_HOOKS_ENABLED")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			slog.Warn("ignoring unparseable AGENT_SHAKER_HOOKS_ENABLED", "value", raw)
+		} else {
+			cfg.Enabled = enabled
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AGENT_SHAKER_HOOK_EXECUTABLES")); raw != "" {
+		allowed := make([]string, 0)
+		for _, name := range strings.Split(raw, ",") {
+			if trimmed := strings.TrimSpace(name); trimmed != "" {
+				allowed = append(allowed, trimmed)
+			}
+		}
+		cfg.AllowedExecutables = allowed
+	}
+
+	// The directory hook commands run in. The project_repos table records a
+	// repository URL, not a path on disk, so the server has no local checkout
+	// to resolve and the operator names the directory instead.
+	if raw := strings.TrimSpace(os.Getenv("AGENT_SHAKER_HOOK_WORKDIR")); raw != "" {
+		cfg.WorkDir = raw
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AGENT_SHAKER_HOOK_MAX_CONCURRENCY")); raw != "" {
+		count, err := strconv.Atoi(raw)
+		if err != nil || count <= 0 {
+			slog.Warn("ignoring invalid AGENT_SHAKER_HOOK_MAX_CONCURRENCY", "value", raw)
+		} else {
+			cfg.MaxConcurrency = count
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AGENT_SHAKER_HOOK_QUEUE_SIZE")); raw != "" {
+		size, err := strconv.Atoi(raw)
+		if err != nil || size <= 0 {
+			slog.Warn("ignoring invalid AGENT_SHAKER_HOOK_QUEUE_SIZE", "value", raw)
+		} else {
+			cfg.QueueSize = size
+		}
+	}
+
+	if cfg.Enabled && len(cfg.AllowedExecutables) == 0 {
+		slog.Warn("the hook layer is enabled but no executable is allowed; hooks will not run")
+	}
+
 	return cfg
 }
 

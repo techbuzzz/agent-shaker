@@ -147,7 +147,7 @@ func (s *Scheduler) Start() { s.scheduler.Start() }
 // Shutdown stops the scheduler and waits for a job in flight to finish. It is
 // the graceful path: a reaper interrupted mid-transaction would leave an agent
 // marked offline whose tasks were never released.
-func (s *Scheduler) Shutdown() { s.scheduler.Shutdown() }
+func (s *Scheduler) Shutdown() { _ = s.scheduler.Shutdown() }
 
 // Jobs exposes the registered jobs, for logging and for tests.
 func (s *Scheduler) Jobs() []gocron.Job { return s.scheduler.Jobs() }

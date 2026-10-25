@@ -87,7 +87,7 @@ func TestReaperExpiresStaleAgentAndReleasesItsWork(t *testing.T) {
 		released:       []uuid.UUID{taskID},
 	}
 
-	reaped := NewStaleAgentReaper(store, nil, DefaultConfig()).SweepOnce(context.Background())
+	reaped := NewStaleAgentReaper(store, nil, nil, DefaultConfig()).SweepOnce(context.Background())
 
 	if reaped != 1 {
 		t.Fatalf("SweepOnce reaped %d agents, want 1", reaped)
@@ -110,7 +110,7 @@ func TestReaperLeavesAnAgentThatHeartbeatedMidSweepAlone(t *testing.T) {
 		released:       []uuid.UUID{uuid.New()},
 	}
 
-	reaped := NewStaleAgentReaper(store, nil, DefaultConfig()).SweepOnce(context.Background())
+	reaped := NewStaleAgentReaper(store, nil, nil, DefaultConfig()).SweepOnce(context.Background())
 
 	if reaped != 1 {
 		t.Fatalf("SweepOnce counted %d reaped, want 1 (the sweep did select it)", reaped)
@@ -133,7 +133,7 @@ func TestReaperContinuesAfterOneAgentFails(t *testing.T) {
 		failOffline:    map[uuid.UUID]bool{bad: true},
 	}
 
-	reaped := NewStaleAgentReaper(store, nil, DefaultConfig()).SweepOnce(context.Background())
+	reaped := NewStaleAgentReaper(store, nil, nil, DefaultConfig()).SweepOnce(context.Background())
 
 	if reaped != 1 {
 		t.Fatalf("SweepOnce reaped %d agents, want 1 (the healthy one)", reaped)
@@ -142,7 +142,7 @@ func TestReaperContinuesAfterOneAgentFails(t *testing.T) {
 
 func TestReaperSweepsNothingWhenListFails(t *testing.T) {
 	store := &listFailStore{}
-	reaped := NewStaleAgentReaper(store, nil, DefaultConfig()).SweepOnce(context.Background())
+	reaped := NewStaleAgentReaper(store, nil, nil, DefaultConfig()).SweepOnce(context.Background())
 	if reaped != 0 {
 		t.Fatalf("SweepOnce reaped %d agents after a list failure, want 0", reaped)
 	}

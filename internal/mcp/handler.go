@@ -24,6 +24,7 @@ import (
 	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/middleware"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
@@ -81,18 +82,6 @@ type InitializeResult struct {
 	ServerInfo      ServerInfo         `json:"serverInfo"`
 }
 
-type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema InputSchema `json:"inputSchema"`
-}
-
-type InputSchema struct {
-	Type       string                 `json:"type"`
-	Properties map[string]interface{} `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
-}
-
 type ToolsListResult struct {
 	Tools []Tool `json:"tools"`
 }
@@ -137,6 +126,7 @@ type ToolResultContent struct {
 type MCPHandler struct {
 	db       *database.DB
 	hub      *websocket.Hub
+	broker   *events.Broker
 	sessions sync.Map
 
 	// --- Coordination Plane stores (see NewMCPHandlerWithCoordination) ---
@@ -222,15 +212,16 @@ func NewMCPHandler(db *database.DB, hub *websocket.Hub) *MCPHandler {
 // NewMCPHandler stays valid on its own: the tools that need these stores answer
 // with a clear "not available on this server" error when they are absent, so a
 // deployment without the Coordination Plane still serves the rest of the surface.
-func NewMCPHandlerWithCoordination(db *database.DB, hub *websocket.Hub, blockers *queries.BlockersStore, deps *queries.TaskDependenciesStore, agents *queries.AgentsStore, tasks *queries.TasksStore, heartbeats *queries.HeartbeatsStore) *MCPHandler {
+func NewMCPHandlerWithCoordination(db *database.DB, hub *websocket.Hub, blockers *queries.BlockersStore, deps *queries.TaskDependenciesStore, agents *queries.AgentsStore, tasks *queries.TasksStore, heartbeats *queries.HeartbeatsStore, broker *events.Broker) *MCPHandler {
 	h := NewMCPHandler(db, hub)
 	h.blockers = blockers
 	h.deps = deps
 	h.agents = agents
 	h.tasks = tasks
 	h.heartbeats = heartbeats
+	h.broker = broker
 	if hub != nil && deps != nil && tasks != nil {
-		h.resolver = coordination.NewDependencyResolver(deps, tasks, hub)
+		h.resolver = coordination.NewDependencyResolver(deps, tasks, hub, broker)
 	}
 	return h
 }
@@ -613,705 +604,7 @@ func (h *MCPHandler) handleInitialize(params json.RawMessage, ctx MCPContext) (i
 }
 
 func (h *MCPHandler) handleToolsList(ctx MCPContext) (interface{}, *JSONRPCError) {
-	tools := []Tool{
-		// Context-aware tools (use configured project/agent automatically)
-		{
-			Name:        "get_my_identity",
-			Description: "Get the current agent's identity and assigned project based on MCP connection configuration",
-			InputSchema: InputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "get_my_project",
-			Description: "Get details of the project assigned to this MCP connection (requires project_id in connection URL)",
-			InputSchema: InputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "get_my_tasks",
-			Description: "Get tasks assigned to the current agent (requires agent_id in connection URL)",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional status filter (pending, in_progress, done, blocked)",
-					},
-				},
-			},
-		},
-		{
-			Name:        "update_my_status",
-			Description: "Update the current agent's status (requires agent_id in connection URL)",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "New agent status: " + models.JoinValues(models.AllAgentStatuses),
-						"enum":        models.StringSlice(models.AllAgentStatuses),
-					},
-				},
-				Required: []string{"status"},
-			},
-		},
-		{
-			Name:        "claim_task",
-			Description: "Claim (assign to self) a task from the project (requires agent_id in connection URL)",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The task ID to claim",
-					},
-				},
-				Required: []string{"task_id"},
-			},
-		},
-		{
-			Name:        "complete_task",
-			Description: "Mark a task as done (requires agent_id in connection URL)",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The task ID to complete",
-					},
-				},
-				Required: []string{"task_id"},
-			},
-		},
-		{
-			Name:        "reassign_task",
-			Description: "Reassign a task to another agent",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The task ID to reassign",
-					},
-					"agent_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The ID of the agent to assign the task to",
-					},
-				},
-				Required: []string{"task_id", "agent_id"},
-			},
-		},
-		// General tools (for exploring all data)
-		{
-			Name:        "list_projects",
-			Description: "List all projects in the system",
-			InputSchema: InputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "get_project",
-			Description: "Get details of a specific project",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The project ID (UUID)",
-					},
-				},
-				Required: []string{"project_id"},
-			},
-		},
-		{
-			Name:        "list_agents",
-			Description: "List all agents, optionally filtered by project",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional project ID to filter agents",
-					},
-				},
-			},
-		},
-		{
-			Name:        "get_agent",
-			Description: "Get details of a specific agent",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"agent_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The agent ID (UUID)",
-					},
-				},
-				Required: []string{"agent_id"},
-			},
-		},
-		{
-			Name:        "list_tasks",
-			Description: "List tasks, optionally filtered by project or agent",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional project ID to filter tasks",
-					},
-					"agent_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional agent ID to filter tasks",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional status filter (pending, in_progress, done, blocked)",
-					},
-				},
-			},
-		},
-		{
-			Name:        "create_task",
-			Description: "Create a new task in a project. If connected with project_id and agent_id in URL, those will be used automatically.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The project ID (optional if project_id in MCP connection URL)",
-					},
-					"title": map[string]interface{}{
-						"type":        "string",
-						"description": "Task title",
-					},
-					"description": map[string]interface{}{
-						"type":        "string",
-						"description": "Task description",
-					},
-					"priority": map[string]interface{}{
-						"type":        "string",
-						"description": "Priority: low, medium, high",
-						"enum":        []string{"low", "medium", "high"},
-					},
-					"created_by": map[string]interface{}{
-						"type":        "string",
-						"description": "Agent ID who creates the task (optional, will use agent_id from URL or first agent)",
-					},
-					"assigned_to": map[string]interface{}{
-						"type":        "string",
-						"description": "Agent ID to assign the task to",
-					},
-					"milestone_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional milestone id to link this task to",
-					},
-					"tags": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]string{"type": "string"},
-						"description": "Optional tags. Use 'feature:<name>' to roll up into the Features view.",
-					},
-				},
-				Required: []string{"title"},
-			},
-		},
-		{
-			Name:        "update_task_status",
-			Description: "Update the status of a task",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The task ID",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "New task status: " + models.JoinValues(models.AllTaskStatuses),
-						"enum":        models.StringSlice(models.AllTaskStatuses),
-					},
-				},
-				Required: []string{"task_id", "status"},
-			},
-		},
-		{
-			Name:        "list_contexts",
-			Description: "List all documentation and contexts shared by agents in the project. Content is in markdown format for easy reading. Prefer search_contexts when you know what you are looking for: this returns everything in the project.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional project ID to filter contexts (uses connection URL context if not provided)",
-					},
-				},
-			},
-		},
-		{
-			Name: "search_contexts",
-			Description: "Full-text search over a project's contexts, most relevant first. " +
-				"Use this instead of list_contexts when you are looking for specific knowledge: " +
-				"it returns only matching notes rather than the whole project. Matching is plain " +
-				"word matching with no stemming, so search for the word as it was written. " +
-				"Scoped to one project by design; pass the project explicitly if the connection " +
-				"does not already carry it.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"query": map[string]interface{}{
-						"type":        "string",
-						"description": "Words to look for in context titles and bodies. Multiple words all have to match.",
-					},
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Project to search within. Required: a context belongs to a project and search never crosses that boundary.",
-					},
-					"limit": map[string]interface{}{
-						"type":        "integer",
-						"description": "Maximum number of results. Defaults to 20 and is capped at 100.",
-						"minimum":     1,
-						"maximum":     100,
-					},
-				},
-				Required: []string{"query", "project_id"},
-			},
-		},
-		{
-			Name:        "add_context",
-			Description: "Add documentation or context to share with other agents in the project. Supports full markdown formatting for better readability. If connected with project_id and agent_id in URL, those will be used automatically. Other agents can read this context to understand your work.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The project ID (optional if project_id in MCP connection URL)",
-					},
-					"agent_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Agent ID who creates the context (optional, will use agent_id from URL or first agent)",
-					},
-					"title": map[string]interface{}{
-						"type":        "string",
-						"description": "Context title - make it descriptive so other agents can find it",
-					},
-					"content": map[string]interface{}{
-						"type":        "string",
-						"description": "Context content in markdown format. Use headings (# ## ###), code blocks (```), lists (- item), bold (**text**), italic (*text*), links ([text](url)), etc. This will be rendered beautifully for other agents to read.",
-					},
-					"tags": map[string]interface{}{
-						"type":        "array",
-						"description": "Tags for categorization",
-						"items":       map[string]string{"type": "string"},
-					},
-				},
-				Required: []string{"title", "content"},
-			},
-		},
-		{
-			Name:        "get_dashboard",
-			Description: "Get dashboard statistics and overview",
-			InputSchema: InputSchema{
-				Type:       "object",
-				Properties: map[string]interface{}{},
-			},
-		},
-		// A2A Integration tools
-		{
-			Name:        "discover_a2a_agent",
-			Description: "Discover an external A2A agent by fetching its agent card. Returns the agent's capabilities, endpoints, and metadata.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"agent_url": map[string]interface{}{
-						"type":        "string",
-						"description": "The base URL of the A2A agent to discover (e.g., https://agent.example.com)",
-					},
-				},
-				Required: []string{"agent_url"},
-			},
-		},
-		{
-			Name:        "delegate_to_a2a_agent",
-			Description: "Delegate a task to an external A2A agent. The agent will process the message and return a task ID for tracking.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"agent_url": map[string]interface{}{
-						"type":        "string",
-						"description": "The base URL of the A2A agent",
-					},
-					"message": map[string]interface{}{
-						"type":        "string",
-						"description": "The message/task content to send to the agent",
-					},
-					"wait_for_completion": map[string]interface{}{
-						"type":        "boolean",
-						"description": "If true, wait for the task to complete before returning (default: false)",
-					},
-					"timeout_seconds": map[string]interface{}{
-						"type":        "integer",
-						"description": "Timeout in seconds when waiting for completion (default: 60)",
-					},
-				},
-				Required: []string{"agent_url", "message"},
-			},
-		},
-		{
-			Name:        "get_a2a_task_status",
-			Description: "Get the status of a task from an external A2A agent",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"agent_url": map[string]interface{}{
-						"type":        "string",
-						"description": "The base URL of the A2A agent",
-					},
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "The task ID to check",
-					},
-				},
-				Required: []string{"agent_url", "task_id"},
-			},
-		},
-
-		// -----------------------------------------------------------------
-		// Mesh app additions — Phase 1/2/3/4 (agent-shaker #mesh-plan)
-		// -----------------------------------------------------------------
-		// Agent self-registration. Use this the first time an agent joins
-		// the mesh: the project_id/agent_id URL params then carry forward
-		// for every subsequent MCP call.
-		{
-			Name:        "register_self",
-			Description: "Register this agent against a project. Use this when the agent is connecting for the first time and you want the server to create an `agents` row (and optionally a `project_repos` row) on your behalf.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Project ID (optional if project_id is in the MCP connection URL)",
-					},
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Agent name (unique within the project)",
-					},
-					"role": map[string]interface{}{
-						"type": "string",
-						// "pm" is deliberately absent from this enum. It used to be
-						// listed, which told a client the server would accept it and
-						// then refused at runtime — the advertisement and the
-						// behaviour disagreed, and the error arrived after the agent
-						// had already committed to the call. PM is granted by a
-						// human; see the guard in executeRegisterSelf.
-						"description": "Agent role: backend | frontend (free-text accepted). NOT 'pm' — the PM role carries approval authority and is granted by a human, so a self-service request for it is refused.",
-						"enum":        []string{"backend", "frontend"},
-					},
-					"team": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional team label (e.g. 'auth', 'growth')",
-					},
-					"repo_url": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional git URL — when provided, a project_repos row is created and linked to this agent",
-					},
-					"repo_branch": map[string]interface{}{
-						"type":        "string",
-						"description": "Branch for the repo (default 'main')",
-					},
-				},
-				Required: []string{"name", "role"},
-			},
-		},
-
-		// Milestones — PM-side tool. Returns 403 for non-PM agents.
-		{
-			Name:        "create_milestone",
-			Description: "PM-only: create a milestone for the connected project. Milestones group tasks and have status planned | active | done | dropped.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Project ID (optional if project_id is in the MCP connection URL)",
-					},
-					"title": map[string]interface{}{
-						"type":        "string",
-						"description": "Milestone title (max 255 chars)",
-					},
-					"description": map[string]interface{}{
-						"type":        "string",
-						"description": "Long-form description (markdown OK)",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"enum":        []string{"planned", "active", "done", "dropped"},
-						"description": "Initial status (default 'planned')",
-					},
-					"target_date": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional target date (ISO 8601 YYYY-MM-DD)",
-					},
-				},
-				Required: []string{"title"},
-			},
-		},
-		{
-			Name:        "list_milestones",
-			Description: "List milestones for the connected project.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Project ID (optional if project_id is in the MCP connection URL)",
-					},
-				},
-			},
-		},
-		{
-			Name:        "assign_task_to_milestone",
-			Description: "PM-only: link an existing task to a milestone.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id":      map[string]interface{}{"type": "string"},
-					"milestone_id": map[string]interface{}{"type": "string"},
-				},
-				Required: []string{"task_id", "milestone_id"},
-			},
-		},
-
-		// Global context (server-wide playbook) — PM write side.
-		{
-			Name:        "publish_global_context",
-			Description: "PM-only: publish a markdown playbook or note visible to every agent on this server (scope='global') or only to the connected project (scope='project').",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"scope": map[string]interface{}{
-						"type":        "string",
-						"enum":        []string{"global", "project"},
-						"description": "Either 'global' (server-wide) or 'project' (this project only)",
-					},
-					"project_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Required when scope='project'; ignored otherwise",
-					},
-					"title": map[string]interface{}{"type": "string"},
-					"content": map[string]interface{}{
-						"type":        "string",
-						"description": "Markdown content",
-					},
-					"tags": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]string{"type": "string"},
-						"description": "Optional tags for grouping",
-					},
-				},
-				Required: []string{"scope", "title", "content"},
-			},
-		},
-		{
-			Name:        "list_global_contexts",
-			Description: "List server-wide (scope='global') and/or project-scoped docs. Useful before reading one via read_global_context.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"scope":      map[string]interface{}{"type": "string", "enum": []string{"global", "project"}},
-					"project_id": map[string]interface{}{"type": "string"},
-					"tag_prefix": map[string]interface{}{"type": "string"},
-				},
-			},
-		},
-		{
-			Name:        "read_global_context",
-			Description: "Read one global or project-scoped doc by id, or one global playbook by title (use title='On-call playbook' style).",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"id":    map[string]interface{}{"type": "string", "description": "Doc id (UUID) — preferred"},
-					"title": map[string]interface{}{"type": "string", "description": "Title of a scope='global' doc"},
-				},
-			},
-		},
-		// Coordination Plane tools
-		{
-			Name: "send_heartbeat",
-			Description: "Report that you are alive and renew your work lease. Send it every 30 seconds while you are " +
-				"working, and after every meaningful state change. An agent whose lease expires is marked offline " +
-				"and its tasks are taken back, so a missed heartbeat ends your assignment. The agent reported is " +
-				"always the one this MCP connection is bound to; you cannot report for another agent.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Your current presence: " + models.JoinValues(models.AllHeartbeatStatuses),
-						"enum":        models.StringSlice(models.AllHeartbeatStatuses),
-					},
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task you are working on. Shown to humans as 'who is on what'.",
-					},
-					"progress_pct": map[string]interface{}{
-						"type":        "integer",
-						"description": "How far along the current task you are, 0-100.",
-						"minimum":     0,
-						"maximum":     100,
-					},
-					"eta": map[string]interface{}{
-						"type":        "string",
-						"description": "When you expect to finish, RFC3339 (e.g. 2026-01-31T15:04:05Z). Advisory only.",
-					},
-					"metadata": map[string]interface{}{
-						"type":        "object",
-						"description": "Anything else worth recording with this beat: branch name, current step, what you are waiting on.",
-					},
-				},
-				Required: []string{"status"},
-			},
-		},
-		{
-			Name: "complete_task_with_handoff",
-			Description: "Close a task you own and, in the same call, create the follow-up task it implies — linked by a " +
-				"dependency edge and carrying your handoff context. Use this instead of complete_task whenever finishing " +
-				"the work reveals the next step, so there is never a window where the work is done and nobody knows " +
-				"what comes next. The successor starts blocked if something else is outstanding, and every other task " +
-				"waiting on the completed one is unblocked.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task to complete. You must be the assignee.",
-					},
-					"output": map[string]interface{}{
-						"type":        "string",
-						"description": "What you produced: the answer, the file changed, the decision taken.",
-					},
-					"successor_title": map[string]interface{}{
-						"type":        "string",
-						"description": "Title of the follow-up task this handoff creates.",
-					},
-					"successor_description": map[string]interface{}{
-						"type":        "string",
-						"description": "What the successor task has to achieve.",
-					},
-					"successor_assigned_to": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the agent that should pick up the successor. Leave unset to leave it unassigned.",
-					},
-					"handoff_context": map[string]interface{}{
-						"type":        "string",
-						"description": "What the next agent needs and cannot re-derive: the API shape, the branch, the gotcha, what you already tried. Required — a successor without it makes the next agent repeat your work.",
-					},
-				},
-				Required: []string{"task_id", "successor_title", "handoff_context"},
-			},
-		},
-		{
-			Name: "add_task_dependency",
-			Description: "Record that a task cannot start until another one is done, and block the waiting task until " +
-				"then. Use it when you discover the ordering yourself — the blocked task is promoted to ready " +
-				"automatically when its last predecessor completes. A cycle is refused.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task that has to wait.",
-					},
-					"depends_on_task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task that must be done first.",
-					},
-				},
-				Required: []string{"task_id", "depends_on_task_id"},
-			},
-		},
-		{
-			Name: "get_task_dependencies",
-			Description: "List both directions of a task's dependency edges: what it waits for, and what it unblocks. " +
-				"Use it before starting work to see whether a task is claimable, and before completing one to see what " +
-				"your finish will release.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task to inspect.",
-					},
-				},
-				Required: []string{"task_id"},
-			},
-		},
-		{
-			Name: "raise_blocker",
-			Description: "Report that you cannot proceed until a human decides or provides something, and block your " +
-				"task and yourself. Use it for the work that will not move without a person: an approval, a design " +
-				"decision, a missing credential, access to a system. Do not use it for ordinary dependencies between " +
-				"tasks — use add_task_dependency for those. One blocker per distinct ask; several on one task are " +
-				"legitimate, and none of them is replaced by another.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"task_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the task that is stuck.",
-					},
-					"blocker_type": map[string]interface{}{
-						"type":        "string",
-						"description": "What kind of help you need: " + models.JoinValues(models.AllBlockerTypes),
-						"enum":        models.StringSlice(models.AllBlockerTypes),
-					},
-					"title": map[string]interface{}{
-						"type":        "string",
-						"description": "One line naming what you need, 500 characters or fewer.",
-					},
-					"description": map[string]interface{}{
-						"type":        "string",
-						"description": "What you tried, what you already ruled out, and what a good answer would let you do next.",
-					},
-				},
-				Required: []string{"task_id", "blocker_type", "title"},
-			},
-		},
-		{
-			Name: "check_blocker_status",
-			Description: "Check whether a blocker you raised has been answered, and read the answer. Use it instead " +
-				"of re-raising the blocker when polling. Only the agent that raised it can read it.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"blocker_id": map[string]interface{}{
-						"type":        "string",
-						"description": "UUID of the blocker to check, as returned by raise_blocker.",
-					},
-				},
-				Required: []string{"blocker_id"},
-			},
-		},
-		{
-			Name: "get_my_blockers",
-			Description: "List the blockers you raised, newest first, optionally filtered by status. Use it after " +
-				"reconnecting to catch up on answers you missed while offline.",
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]interface{}{
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional blocker status filter: " + models.JoinValues(models.AllBlockerStatuses),
-						"enum":        models.StringSlice(models.AllBlockerStatuses),
-					},
-				},
-			},
-		},
-	}
+	tools := toolDefinitions()
 
 	requireRequiredStrings(tools)
 
@@ -1394,90 +687,11 @@ func (h *MCPHandler) handleToolsCall(params json.RawMessage, ctx MCPContext) (in
 	var resultText string
 	var isError bool
 
-	switch callParams.Name {
-	// Context-aware tools
-	case "get_my_identity":
-		resultText, isError = h.executeGetMyIdentity(ctx)
-	case "get_my_project":
-		resultText, isError = h.executeGetMyProject(ctx)
-	case "get_my_tasks":
-		resultText, isError = h.executeGetMyTasks(callParams.Arguments, ctx)
-	case "update_my_status":
-		resultText, isError = h.executeUpdateMyStatus(callParams.Arguments, ctx)
-	case "claim_task":
-		resultText, isError = h.executeClaimTask(callParams.Arguments, ctx)
-	case "complete_task":
-		resultText, isError = h.executeCompleteTask(callParams.Arguments, ctx)
-	case "reassign_task":
-		resultText, isError = h.executeReassignTask(callParams.Arguments)
-	// General tools
-	case "list_projects":
-		resultText, isError = h.executeListProjects()
-	case "get_project":
-		resultText, isError = h.executeGetProject(callParams.Arguments)
-	case "list_agents":
-		resultText, isError = h.executeListAgents(callParams.Arguments)
-	case "get_agent":
-		resultText, isError = h.executeGetAgent(callParams.Arguments)
-	case "list_tasks":
-		resultText, isError = h.executeListTasks(callParams.Arguments)
-	case "create_task":
-		resultText, isError = h.executeCreateTask(callParams.Arguments, ctx)
-	case "update_task_status":
-		resultText, isError = h.executeUpdateTaskStatus(callParams.Arguments)
-	case "list_contexts":
-		resultText, isError = h.executeListContexts(callParams.Arguments)
-	case "search_contexts":
-		resultText, isError = h.executeSearchContexts(callParams.Arguments)
-	case "add_context":
-		resultText, isError = h.executeAddContext(callParams.Arguments, ctx)
-	case "get_dashboard":
-		resultText, isError = h.executeGetDashboard()
-	// A2A Integration tools
-	case "discover_a2a_agent":
-		resultText, isError = h.executeDiscoverA2AAgent(callParams.Arguments)
-	case "delegate_to_a2a_agent":
-		resultText, isError = h.executeDelegateToA2AAgent(callParams.Arguments)
-	case "get_a2a_task_status":
-		resultText, isError = h.executeGetA2ATaskStatus(callParams.Arguments)
-	// Mesh app additions — Phase 1/2/3/4
-	case "register_self":
-		resultText, isError = h.executeRegisterSelf(callParams.Arguments, ctx)
-	case "create_milestone":
-		resultText, isError = h.executeCreateMilestone(callParams.Arguments, ctx)
-	case "list_milestones":
-		resultText, isError = h.executeListMilestones(callParams.Arguments, ctx)
-	case "assign_task_to_milestone":
-		resultText, isError = h.executeAssignTaskToMilestone(callParams.Arguments, ctx)
-	case "publish_global_context":
-		resultText, isError = h.executePublishGlobalContext(callParams.Arguments, ctx)
-	case "list_global_contexts":
-		resultText, isError = h.executeListGlobalContexts(callParams.Arguments, ctx)
-	case "read_global_context":
-		resultText, isError = h.executeReadGlobalContext(callParams.Arguments)
-	// Coordination Plane tools
-	case "send_heartbeat":
-		resultText, isError = h.executeSendHeartbeat(callParams.Arguments, ctx)
-	case "complete_task_with_handoff":
-		resultText, isError = h.executeCompleteTaskWithHandoff(callParams.Arguments, ctx)
-	case "add_task_dependency":
-		resultText, isError = h.executeAddTaskDependency(callParams.Arguments, ctx)
-	case "get_task_dependencies":
-		resultText, isError = h.executeGetTaskDependencies(callParams.Arguments, ctx)
-	case "raise_blocker":
-		resultText, isError = h.executeRaiseBlocker(callParams.Arguments, ctx)
-	case "check_blocker_status":
-		resultText, isError = h.executeCheckBlockerStatus(callParams.Arguments, ctx)
-	case "get_my_blockers":
-		resultText, isError = h.executeGetMyBlockers(callParams.Arguments, ctx)
-	default:
+	resultText, isError, rpcErr := h.dispatchTool(callParams.Name, callParams.Arguments, ctx)
+	if rpcErr != nil {
 		span.RecordError(fmt.Errorf("unknown tool: %s", callParams.Name))
 		span.SetStatus(codes.Error, "unknown tool")
-		return nil, &JSONRPCError{
-			Code:    -32601,
-			Message: "Unknown tool",
-			Data:    fmt.Sprintf("Tool not found: %s", callParams.Name),
-		}
+		return nil, rpcErr
 	}
 
 	// A tool that returns IsError is a failed call even though the JSON-RPC
@@ -3378,6 +2592,12 @@ func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContex
 		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
 	}
 
+	// A retry carrying the same key replays the first answer instead of
+	// claiming the task a second time.
+	if replay, ok := h.replayIdempotent(ctx, "claim_task", args); ok {
+		return replay, false
+	}
+
 	if h.db == nil {
 		return `{"error": "Database not connected"}`, true
 	}
@@ -3456,6 +2676,8 @@ func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContex
 		})
 	}
 
+	h.publishTaskEvent(ctx, events.TaskClaimed, claimedProjectID.String(), claimedID, claimedTitle, claimedStatus)
+
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":   true,
 		"task_id":   taskID,
@@ -3465,12 +2687,19 @@ func (h *MCPHandler) executeClaimTask(args map[string]interface{}, ctx MCPContex
 		"message":   "Task claimed and status set to in_progress",
 		"broadcast": h.hub != nil,
 	}, "", "  ")
+	h.recordIdempotent(ctx, "claim_task", args, string(resultJSON))
 	return string(resultJSON), false
 }
 
 func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPContext) (string, bool) {
 	if ctx.AgentID == "" {
 		return `{"error": "No agent_id configured in MCP connection URL. Add ?agent_id=UUID to the URL."}`, true
+	}
+
+	// A retry carrying the same key replays the first answer instead of
+	// completing the task a second time.
+	if replay, ok := h.replayIdempotent(ctx, "complete_task", args); ok {
+		return replay, false
 	}
 
 	if h.db == nil {
@@ -3526,6 +2755,8 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 	// the next task blocked forever.
 	h.resolveAfterCompletion(ctx.requestContext(), taskID)
 
+	h.publishTaskEvent(ctx, events.TaskCompleted, ctx.ProjectID, taskID, title, string(models.StatusTaskDone))
+
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":  true,
 		"task_id":  taskID,
@@ -3534,6 +2765,7 @@ func (h *MCPHandler) executeCompleteTask(args map[string]interface{}, ctx MCPCon
 		"status":   string(models.StatusTaskDone),
 		"message":  "Task marked as completed",
 	}, "", "  ")
+	h.recordIdempotent(ctx, "complete_task", args, string(resultJSON))
 	return string(resultJSON), false
 }
 
@@ -3560,8 +2792,8 @@ func (h *MCPHandler) executeReassignTask(args map[string]interface{}) (string, b
 	}
 
 	// Verify the task exists
-	var taskTitle string
-	err = h.db.QueryRow("SELECT title FROM tasks WHERE id = $1", taskID).Scan(&taskTitle)
+	var taskTitle, taskProjectID string
+	err = h.db.QueryRow("SELECT title, project_id FROM tasks WHERE id = $1", taskID).Scan(&taskTitle, &taskProjectID)
 	if err != nil {
 		return fmt.Sprintf(`{"error": "Task not found: %s"}`, err.Error()), true
 	}
@@ -3571,6 +2803,15 @@ func (h *MCPHandler) executeReassignTask(args map[string]interface{}) (string, b
 	if err != nil {
 		return fmt.Sprintf(`{"error": "Failed to reassign task: %s"}`, err.Error()), true
 	}
+
+	h.publishServiceEvent(
+		events.TaskReassigned,
+		taskProjectID,
+		events.EntityTask,
+		taskID,
+		taskTitle,
+		"reassigned",
+	)
 
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":    true,

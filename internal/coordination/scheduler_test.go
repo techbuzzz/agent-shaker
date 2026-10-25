@@ -25,7 +25,7 @@ func (f *fakeRetention) DeleteOlderThan(_ context.Context, before time.Time) (in
 func TestSchedulerRegistersBothJobs(t *testing.T) {
 	store := &fakeRetention{}
 	s, err := NewScheduler(context.Background(),
-		NewStaleAgentReaper(nil, nil, DefaultConfig()), store, DefaultSchedulerConfig())
+		NewStaleAgentReaper(nil, nil, nil, DefaultConfig()), store, DefaultSchedulerConfig())
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}

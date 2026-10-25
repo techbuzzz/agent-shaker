@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
@@ -23,6 +24,7 @@ type DependencyResolver struct {
 	store  DependencyStore
 	tasks  ReadyTaskStore
 	hub    *websocket.Hub
+	broker *events.Broker
 	logger *slog.Logger
 }
 
@@ -44,11 +46,12 @@ type ReadyTaskStore interface {
 }
 
 // NewDependencyResolver returns a resolver bound to the supplied stores.
-func NewDependencyResolver(store DependencyStore, tasks ReadyTaskStore, hub *websocket.Hub) *DependencyResolver {
+func NewDependencyResolver(store DependencyStore, tasks ReadyTaskStore, hub *websocket.Hub, broker *events.Broker) *DependencyResolver {
 	return &DependencyResolver{
 		store:  store,
 		tasks:  tasks,
 		hub:    hub,
+		broker: broker,
 		logger: slog.Default().With("component", "dependency_resolver"),
 	}
 }
@@ -106,22 +109,35 @@ func (r *DependencyResolver) maybePromote(ctx context.Context, taskID uuid.UUID)
 	// The nil check is not defensive padding: the promotion is the important
 	// half and it has already happened, so a missing hub must not turn a
 	// successful unlock into a panic that rolls the caller's transaction back.
-	if r.hub != nil {
-		if task, err := r.tasks.GetTask(ctx, taskID); err == nil {
-			r.hub.BroadcastToProject(task.ProjectID, "task_ready", map[string]any{
-				"task_id":     task.ID,
-				"project_id":  task.ProjectID,
-				"title":       task.Title,
-				"status":      string(models.StatusTaskReady),
-				"assigned_to": task.AssignedTo,
-			})
-		} else {
-			// The promotion itself succeeded; only the notification failed. Say
-			// so rather than reporting an error the caller would retry against.
-			r.logger.Warn("task promoted but could not be read for broadcast",
-				"task_id", taskID, "error", err)
-		}
+	task, err := r.tasks.GetTask(ctx, taskID)
+	if err != nil {
+		// The promotion itself succeeded; only the notification failed. Say
+		// so rather than reporting an error the caller would retry against.
+		r.logger.Warn("task promoted but could not be read for broadcast",
+			"task_id", taskID, "error", err)
+		return true, nil
 	}
+
+	if r.hub != nil {
+		r.hub.BroadcastToProject(task.ProjectID, "task_ready", map[string]any{
+			"task_id":     task.ID,
+			"project_id":  task.ProjectID,
+			"title":       task.Title,
+			"status":      string(models.StatusTaskReady),
+			"assigned_to": task.AssignedTo,
+		})
+	}
+
+	events.Send(ctx, r.broker, events.New(events.TaskReady, task.ProjectID, events.Options{
+		EntityType: events.EntityTask,
+		EntityID:   task.ID,
+		ActorType:  events.ActorService,
+		Payload: map[string]any{
+			events.PayloadTitle:  task.Title,
+			events.PayloadStatus: string(models.StatusTaskReady),
+		},
+	}))
+
 	return true, nil
 }
 

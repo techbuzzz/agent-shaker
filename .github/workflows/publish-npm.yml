@@ -1,0 +1,78 @@
+name: publish-npm
+
+# Publish the OpenCode plugin to npm.
+#
+# Only from a version tag, and only when the tag agrees with the package's
+# own version. The two checks are separate on purpose: the tag filter decides
+# when the workflow runs, and the version check decides what it publishes. A
+# tag that disagrees with package.json is a mistake, and publishing it would
+# put a version on the registry that the source does not describe.
+#
+# The release action is therefore: merge the reviewed PR, wait for `ci` to go
+# green, then
+#
+#   git tag opencode-agent-shaker-v0.1.0
+#   git push origin opencode-agent-shaker-v0.1.0
+#
+# The tag prefix is the package's own name rather than a bare `v*`, because
+# the Docker images and the npm package are released independently and must
+# not move together.
+
+on:
+  push:
+    tags: [ 'opencode-agent-shaker-v*' ]
+
+concurrency:
+  # One publish per tag. A retry supersedes the run in flight rather than
+  # queueing behind it.
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # npm trusted publishing: the registry verifies this workflow's identity
+      # through an OIDC token, so there is no long-lived npm token in the
+      # secrets and nothing to rotate.
+      id-token: write
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@techbuzzz/opencode-agent-shaker
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: The tag and the package must agree
+        working-directory: plugins/opencode
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#opencode-agent-shaker-v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::the tag says $tag but package.json says $version"
+            exit 1
+          fi
+
+      # The checks run here, at publish time, rather than trusting that `ci`
+      # ran on the same commit. The npm artifact is what consumers install,
+      # and this is the last point before it exists.
+      - name: Install, check and build
+        working-directory: plugins/opencode
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Publish
+        working-directory: plugins/opencode
+        run: npm publish --provenance --access public

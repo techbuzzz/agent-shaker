@@ -71,7 +71,7 @@ func TestResolverPromotesOnlyTasksWithNoUnfinishedDependencies(t *testing.T) {
 		readyTask: {ID: readyTask, ProjectID: uuid.New(), Title: "Wire the UI"},
 	}}
 
-	promoted, err := NewDependencyResolver(store, tasks, nil).ResolveAfterCompletion(context.Background(), uuid.New())
+	promoted, err := NewDependencyResolver(store, tasks, nil, nil).ResolveAfterCompletion(context.Background(), uuid.New())
 	if err != nil {
 		t.Fatalf("ResolveAfterCompletion: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestResolverDoesNotReportAPromotionTheDatabaseRefused(t *testing.T) {
 	}
 	tasks := &fakeTaskStore{tasks: map[uuid.UUID]*models.Task{}}
 
-	promoted, err := NewDependencyResolver(store, tasks, nil).ResolveAfterCompletion(context.Background(), uuid.New())
+	promoted, err := NewDependencyResolver(store, tasks, nil, nil).ResolveAfterCompletion(context.Background(), uuid.New())
 	if err != nil {
 		t.Fatalf("ResolveAfterCompletion: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestResolverKeepsGoingWhenOneDependentCannotBeChecked(t *testing.T) {
 	}
 	tasks := &fakeTaskStore{tasks: map[uuid.UUID]*models.Task{}}
 
-	promoted, err := NewDependencyResolver(store, tasks, nil).ResolveAfterCompletion(context.Background(), uuid.New())
+	promoted, err := NewDependencyResolver(store, tasks, nil, nil).ResolveAfterCompletion(context.Background(), uuid.New())
 	if err != nil {
 		t.Fatalf("ResolveAfterCompletion: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestResolverReleaseKeepsABlockerTaskBlockedWhileDependenciesRemain(t *testi
 		unfinished: map[uuid.UUID]int{task: 1},
 		blocked:    map[uuid.UUID]bool{task: true},
 	}
-	resolver := NewDependencyResolver(store, &fakeTaskStore{}, nil)
+	resolver := NewDependencyResolver(store, &fakeTaskStore{}, nil, nil)
 
 	if err := resolver.ReleaseAfterBlockerResolution(context.Background(), nil, task, true); err != nil {
 		t.Fatalf("ReleaseAfterBlockerResolution: %v", err)
@@ -140,7 +140,7 @@ func TestResolverReleaseKeepsABlockerTaskBlockedWhileDependenciesRemain(t *testi
 func TestResolverReleaseSendsAResumedTaskBackToWork(t *testing.T) {
 	task := uuid.New()
 	store := &fakeDepsStore{unfinished: map[uuid.UUID]int{task: 0}}
-	resolver := NewDependencyResolver(store, &fakeTaskStore{}, nil)
+	resolver := NewDependencyResolver(store, &fakeTaskStore{}, nil, nil)
 
 	if err := resolver.ReleaseAfterBlockerResolution(context.Background(), nil, task, true); err != nil {
 		t.Fatalf("ReleaseAfterBlockerResolution: %v", err)

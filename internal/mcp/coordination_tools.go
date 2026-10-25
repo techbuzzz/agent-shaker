@@ -14,6 +14,7 @@ import (
 
 	"github.com/techbuzzz/agent-shaker/internal/coordination"
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 )
 
@@ -377,6 +378,12 @@ func (h *MCPHandler) executeCompleteTaskWithHandoff(args map[string]interface{},
 		})
 	}
 
+	// The handoff is two changes: the task finished, and the work moved to
+	// somebody else. A hook bound to task.handoff reacts to the second; a hook
+	// bound to task.completed reacts to the first.
+	h.publishTaskEvent(ctx, events.TaskCompleted, task.ProjectID.String(), completedID.String(), completedTitle, string(models.StatusTaskDone))
+	h.publishTaskEvent(ctx, events.TaskHandoff, task.ProjectID.String(), completedID.String(), completedTitle, "handed off")
+
 	// Anything else waiting on the completed task is promoted too, not just the
 	// successor: the resolver is the only place that decides readiness.
 	if h.resolver != nil {
@@ -630,6 +637,15 @@ func (h *MCPHandler) executeRaiseBlocker(args map[string]interface{}, ctx MCPCon
 			"status":       blocker.Status,
 		})
 	}
+
+	h.publishBlockerEvent(
+		ctx,
+		task.ProjectID.String(),
+		taskUUID.String(),
+		blocker.ID.String(),
+		blocker.Title,
+		string(blocker.Type),
+	)
 
 	resultJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"success":      true,

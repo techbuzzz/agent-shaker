@@ -93,11 +93,11 @@ func IsValidToolType(s string) bool {
 // SupportsConfigGeneration reports whether the config endpoint can render a
 // file layout for this tool type.
 //
-// A false result is deliberate: windsurf, both Copilot surfaces and a2a are
-// Phase 3 and Phase 4 work, and an a2a agent is not an MCP host at all. Every
-// false entry still gets a usable generic `.mcp.json`, which is what most hosts
-// read — rendering a plausible-looking file for a client that has no layout
-// here would be worse than being honest about it.
+// A false result is deliberate: windsurf and a2a are Phase 3 and Phase 4
+// work, and an a2a agent is not an MCP host at all. Every false entry still
+// gets a usable generic `.mcp.json`, which is what most hosts read —
+// rendering a plausible-looking file for a client that has no layout here
+// would be worse than being honest about it.
 func (t ToolType) SupportsConfigGeneration() bool {
 	switch t {
 	case ToolClaudeCode, ToolCodex, ToolOpenCode, ToolCursor, ToolCopilotVS, ToolCopilotCLI, ToolGenericMCP:
@@ -139,8 +139,17 @@ const (
 	ConfigFormatCursor   ConfigFormat = "cursor"
 	ConfigFormatGeneric  ConfigFormat = "generic"
 	ConfigFormatOpenCode ConfigFormat = "opencode"
-	ConfigFormatVSCode   ConfigFormat = "vscode"
-	ConfigFormatCopilot  ConfigFormat = "copilot"
+	// ConfigFormatOpenCodeV2 is the OpenCode 2.x layout.
+	//
+	// It is a separate format rather than a variation of the OpenCode one
+	// because the two majors read different documents: 2 nests the servers
+	// under mcp.servers, renames the disable flag, turns OAuth on for remote
+	// servers unless told otherwise, and takes a different key for plugins.
+	// One file cannot be both — `mcp` is one key — so the format has to be
+	// chosen by the caller rather than guessed.
+	ConfigFormatOpenCodeV2 ConfigFormat = "opencode-v2"
+	ConfigFormatVSCode     ConfigFormat = "vscode"
+	ConfigFormatCopilot    ConfigFormat = "copilot"
 )
 
 // AllConfigFormats is every format the server can render today, in the order
@@ -151,6 +160,7 @@ var AllConfigFormats = []ConfigFormat{
 	ConfigFormatCodex,
 	ConfigFormatCursor,
 	ConfigFormatOpenCode,
+	ConfigFormatOpenCodeV2,
 	ConfigFormatVSCode,
 	ConfigFormatCopilot,
 	ConfigFormatGeneric,

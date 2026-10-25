@@ -54,6 +54,24 @@ const APIKeyPlaceholder = "${env:" + APIKeyEnvVar + "}"
 // revoked key rather than a formatting mistake.
 const OpenCodeAPIKeyPlaceholder = "{env:" + APIKeyEnvVar + "}"
 
+// OpenCodePluginPackage is the npm package that binds an OpenCode session to
+// this server.
+//
+// The generated configuration names it, which means the file only works once
+// the package is published. A checkout can point the same key at a local
+// directory instead — OpenCode 2 accepts a path in `package` — and the setup
+// document says so.
+const OpenCodePluginPackage = "@techbuzzz/opencode-agent-shaker"
+
+// OpenCodeEndpointEnvVar is where the plugin reads the MCP endpoint from when
+// the configuration carries no options.
+//
+// OpenCode 1 reads a plugin list of bare names, so there is nowhere in the
+// configuration to put an endpoint: the plugin has to find it in the
+// environment. OpenCode 2 accepts an options object, and writes the endpoint
+// there instead.
+const OpenCodeEndpointEnvVar = "AGENT_SHAKER_ENDPOINT"
+
 // ServerName is the key the server entry gets inside mcpServers.
 const ServerName = "agent-shaker"
 
@@ -121,7 +139,8 @@ func (in Input) MCPURL() string {
 func Render(in Input, format models.ConfigFormat) ([]models.ConfigFile, error) {
 	switch format {
 	case models.ConfigFormatClaude, models.ConfigFormatCodex, models.ConfigFormatCursor,
-		models.ConfigFormatOpenCode, models.ConfigFormatVSCode, models.ConfigFormatCopilot,
+		models.ConfigFormatOpenCode, models.ConfigFormatOpenCodeV2,
+		models.ConfigFormatVSCode, models.ConfigFormatCopilot,
 		models.ConfigFormatGeneric:
 		return renderFor(format, in)
 	default:
@@ -160,6 +179,32 @@ type layout struct {
 	// entryType is the discriminator OpenCode requires on every remote server.
 	entryType string
 
+	// serversUnder is the key the server objects live under, inside the
+	// top-level server key.
+	//
+	// OpenCode 2 nests them under "servers" and says so in its own words:
+	// "V2 does not place server names directly under mcp". Every other host
+	// puts them directly. One file cannot be both — `mcp` is one key — so
+	// this is the difference between two formats rather than a flag.
+	serversUnder string
+
+	// pluginKey is the top-level key the plugin list goes under.
+	//
+	// OpenCode 1 reads "plugin" with bare names; OpenCode 2 reads "plugins"
+	// with objects. A host that reads no plugins has no key for them, so the
+	// key is empty for every format but the two OpenCode ones.
+	pluginKey string
+
+	// pluginOptions says whether a plugin entry may carry an options object.
+	// OpenCode 2 accepts one; OpenCode 1 does not.
+	pluginOptions bool
+
+	// openCodeV2 marks the OpenCode 2 layout, which differs from OpenCode 1 in
+	// more than one key: the servers nest, the disable flag replaces the
+	// enable flag, OAuth is on by default for remote servers, and the
+	// protocol revision is selectable.
+	openCodeV2 bool
+
 	// instructionsFile is where the working document goes for this client.
 	//
 	// Copilot is the odd one: it reads `.github/copilot-instructions.md`
@@ -184,10 +229,34 @@ func layoutFor(format models.ConfigFormat) layout {
 		// would produce a file the tool never reads.
 		return layout{
 			filename:         "opencode.json",
-			description:      "OpenCode reads this from the project directory or ~/.config/opencode",
+			description:      "OpenCode 1.x reads this from the project directory or ~/.config/opencode",
 			serverKey:        "mcp",
 			credential:       OpenCodeAPIKeyPlaceholder,
 			entryType:        "remote",
+			pluginKey:        "plugin",
+			instructionsFile: "AGENT_SHAKER.md",
+		}
+	case models.ConfigFormatOpenCodeV2:
+		// The OpenCode 2 document. Four things differ from OpenCode 1, and all
+		// four are silent when wrong: the servers nest under mcp.servers, the
+		// disable flag replaces the enable flag, OAuth is on by default for
+		// remote servers, and the protocol revision is selectable.
+		//
+		// The OAuth one is the sharpest edge. OpenCode 2 turns OAuth on for every
+		// remote server unless the file says `oauth: false`, and this server
+		// authenticates with a header rather than a token. Without the field
+		// the client tries to authenticate against a server that does not speak
+		// OAuth, and the agent connects to nothing.
+		return layout{
+			filename:         "opencode.json",
+			description:      "OpenCode 2.x reads this from the project directory or ~/.config/opencode",
+			serverKey:        "mcp",
+			serversUnder:     "servers",
+			credential:       OpenCodeAPIKeyPlaceholder,
+			entryType:        "remote",
+			pluginKey:        "plugins",
+			pluginOptions:    true,
+			openCodeV2:       true,
 			instructionsFile: "AGENT_SHAKER.md",
 		}
 	case models.ConfigFormatCodex:
@@ -251,24 +320,13 @@ func renderFor(format models.ConfigFormat, in Input) ([]models.ConfigFile, error
 	lay := layoutFor(format)
 
 	// Every host in mcpServers form uses the same shape; OpenCode differs in
-	// three ways at once (the `mcp` key, an explicit `type: remote`, and its own
-	// {env:VAR} syntax), so it gets its own branch rather than three booleans
-	// threaded through one template.
+	// several ways at once (the `mcp` key, an explicit `type: remote`, its own
+	// {env:VAR} syntax, and two incompatible document layouts across its
+	// majors), so it gets its own renderer rather than booleans threaded
+	// through one template.
 	var config string
 	if lay.entryType != "" {
-		config = fmt.Sprintf(`{
-  %q: {
-    %q: {
-      "type": %q,
-      "url": %q,
-      "enabled": true,
-      "headers": {
-        "Authorization": "Bearer %s"
-      }
-    }
-  }
-}
-`, lay.serverKey, ServerName, lay.entryType, in.MCPURL(), lay.credential)
+		config = renderOpenCode(in, lay)
 	} else {
 		config = fmt.Sprintf(`{
   %q: {
@@ -312,9 +370,75 @@ func renderFor(format models.ConfigFormat, in Input) ([]models.ConfigFile, error
 
 type instructionsFile struct {
 	filename string
-	target   string
-	install  string
 	body     string
+}
+
+// renderOpenCode renders the OpenCode configuration.
+//
+// The two majors read different documents, and the differences are not
+// cosmetic:
+//
+//   - OpenCode 1 puts the servers directly under `mcp`; OpenCode 2 nests them
+//     under `mcp.servers` and states that it does.
+//   - OpenCode 1 disables a server with `enabled`; OpenCode 2 with `disabled`.
+//   - OpenCode 2 turns OAuth on for every remote server unless the file says
+//     `oauth: false`. This server authenticates with a header, so the field
+//     is not optional — without it the client tries to authenticate against a
+//     server that does not speak OAuth.
+//   - OpenCode 2 selects the protocol revision per server. `legacy` is the
+//     right answer while this server speaks the pre-2026 revisions; `auto`
+//     and `2026-07-28` become correct when it speaks the stateless core.
+//
+// A file written for one major is valid JSON that the other ignores, which is
+// the worst kind of broken: the agent connects to nothing and there is no
+// error to read.
+func renderOpenCode(in Input, lay layout) string {
+	endpoint := in.MCPURL()
+
+	if !lay.openCodeV2 {
+		return fmt.Sprintf(`{
+  %q: {
+    %q: {
+      "type": "remote",
+      "url": %q,
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer %s"
+      }
+    }
+  },
+  %q: [
+    %q
+  ]
+}
+`, lay.serverKey, ServerName, endpoint, lay.credential, lay.pluginKey, OpenCodePluginPackage)
+	}
+
+	return fmt.Sprintf(`{
+  %q: {
+    %q: {
+      %q: {
+        "type": "remote",
+        "url": %q,
+        "disabled": false,
+        "headers": {
+          "Authorization": "Bearer %s"
+        },
+        "oauth": false,
+        "protocol": "legacy"
+      }
+    }
+  },
+  %q: [
+    {
+      "package": %q,
+      "options": {
+        "endpoint": %q
+      }
+    }
+  ]
+}
+`, lay.serverKey, lay.serversUnder, ServerName, endpoint, lay.credential, lay.pluginKey, OpenCodePluginPackage, endpoint)
 }
 
 // SetupDocFilename is the setup document emitted alongside every bundle.
@@ -355,6 +479,37 @@ func (in Input) setupDoc(lay layout, format models.ConfigFormat) string {
 	// OpenCode — and the reader never types that, they copy the file. So this
 	// document does not branch on the client: there is nothing for it to say
 	// that the file itself does not already say.
+	//
+	// The plugin is the exception. It is part of the OpenCode bundle, and
+	// OpenCode 1 has nowhere in the configuration to tell it where the server
+	// is — the plugin list carries bare names only — so its endpoint has to
+	// come from the environment.
+	pluginSection := ""
+	if lay.pluginKey != "" {
+		pluginSection = "\n" +
+			"### The session plugin\n" +
+			"\n" +
+			"This bundle also installs `" + OpenCodePluginPackage + "`, which binds\n" +
+			"the session to the server: it keeps the agent's lease alive, carries\n" +
+			"shared context across a compaction, and can block a tool call when the\n" +
+			"agent has no claimed task.\n" +
+			"\n"
+		if !lay.pluginOptions {
+			pluginSection += "OpenCode 1 reads a plugin list of names, so the plugin finds\n" +
+				"the endpoint in the environment:\n" +
+				"\n" +
+				"```bash\n" + "export " + OpenCodeEndpointEnvVar + "=\"" + in.MCPURL() + "\"\n" + "```\n" +
+				"\n"
+		} else {
+			pluginSection += "The endpoint is already in the configuration file, in the\n" +
+				"plugin's `options`.\n" +
+				"\n"
+		}
+		pluginSection += "The package is published as `" + OpenCodePluginPackage + "`. Until it\n" +
+			"is on npm, point the same key at a checkout — OpenCode 2 accepts a\n" +
+			"path in `package`.\n"
+	}
+
 	return "# Agent Shaker setup\n" +
 		"\n" +
 		"Generated for project **" + projectLabel + "**" +
@@ -368,6 +523,7 @@ func (in Input) setupDoc(lay layout, format models.ConfigFormat) string {
 		"```bash\n" + "export " + APIKeyEnvVar + "=<your key>\n" + "```\n" +
 		"\n" +
 		"Keep it in your shell or a git-ignored `.env` — never in a tracked file.\n" +
+		pluginSection +
 		"\n" +
 		"## 2. The files\n" +
 		"\n" +

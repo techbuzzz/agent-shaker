@@ -786,17 +786,24 @@ The controls are not optional:
   post JSONB, timeout_seconds, enabled, created_by, created_at)`;
   `hook_runs(id, hook_id, delivery_id, event, entity_type, entity_id,
   status, exit_code, stdout, stderr, duration_ms, started_at, finished_at)`.
-- **Migration 011 — `audit_events`.** The gap in the numbering has been
-  reserved for this table since the first plan (`docs/ROADMAP.md:144`, task
-  `T3.1`). It is the append-only journal M3 promises, and it is the first
-  thing both halves of Phase 3 write to. Columns: `id BIGSERIAL`, `project_id`,
-  `actor_type`, `actor_id`, `event_type`, `entity_type`, `entity_id`,
-  `payload JSONB`, `occurred_at`, `created_at`.
-  *Optional, recommended:* a `prev_hash`/`hash` pair makes the chain
-  tamper-**evident**. A hash chain is only as strong as its anchor, so the
-  anchor must be published somewhere the operator controls — the anchor's value
-  and where it is published are a decision (§9 D6), not an implementation
-  detail.
+- **Migration 022 — `audit_events`.** The append-only journal M3 promises, and
+  the first thing both halves of Phase 3 write to. Columns: `id BIGSERIAL`,
+  `occurred_at`, `actor_type`, `actor_id`, `project_id`, `entity_type`,
+  `entity_id`, `action`, `before JSONB`, `after JSONB`, `trace_id`,
+  `request_id`, `prev_hash`, `hash`.
+
+  The number was `011` in the first plan, and it is `022` now because the
+  tree moved. `011` and `012` were reserved for M3 and M4 when `011` was the
+  next free number; Phase 3 took `019` and `020`, and a migration numbered
+  below the tree's maximum would never be applied at all — `golang-migrate`
+  walks forward only, so a late `011` would sit in the directory forever
+  while every deployment reported itself as migrated. The forward-only rule
+  wins over the placeholder.
+
+  The `prev_hash`/`hash` pair makes the chain tamper-**evident**. A hash chain
+  is only as strong as its anchor, so the head is published where the operator
+  controls it: a file the operator names, and the API that reads it back
+  (§9 D6, §11.15).
 - **`internal/events/`** — the broker (§5.1).
 - **`internal/hooks/`** — config store, matcher, renderer, runner, result
   classifier.
@@ -821,6 +828,27 @@ the roadmap already owns a task, it is referenced rather than duplicated.
 Every task names the files it owns and a verifiable acceptance criterion. The
 criterion is what a reviewer checks; it is not a description of the work.
 
+### 6.0 Status
+
+**Landed and verified in Docker:** `P3.A1`, `P3.A3`, `P3.A4`, `P3.A6`,
+`P3.B1`–`P3.B12`, `P3.C1`, `P3.C4`, `P3.C5`, `P3.C7`, `P3.E1`, and — in a
+second pass — `P3.D1`–`P3.D5`, `P3.E4` and `P3.E5`. The two critical paths
+— the hook path `A1 → A3 → B1 → B9 → B11 → E1` and the plugin path
+`C1 → C4 → C5 → C7` — are complete, and both are proven end to end against a
+throwaway stack: the hook layer runs a real command against a real event,
+and the MiniMax Code bridge renews a lease and pushes a compacted transcript
+(§11.14).
+
+**Outstanding:** nothing in the decomposition. The audit journal (`P3.A5`,
+migration `022_audit_log`) landed with M3's own tasks, and the phase's
+evidence layer is the journal rather than a promise of one.
+
+**Deliberately not done:** the row-level change log. T3.3 asks for "every
+create, update and delete" to record an event with `before` and `after`; the
+journal records the **domain** vocabulary — the changes that affect
+coordination. A row-level history of every column of every table is a
+different feature, and it is not what a coordination trail is for.
+
 ### 6.1 Track A — Foundation: the journal, the broker, idempotency
 
 Milestone M3 in the roadmap already owns the journal (T3.1–T3.6). Phase 3
@@ -833,7 +861,7 @@ executes it — the journal is not optional groundwork for the hook layer, it
 | `P3.A2` | Reconcile M3's T3.3 ("wrap the mutating paths") with the broker: publication goes through `internal/events`, and the journal becomes one of its subscribers rather than a second capture point | `internal/audit/`, `internal/events/` | Every mutating path still records an event with `before` and `after`, and the WebSocket still receives the same payloads — the frontend test suite is unchanged |
 | `P3.A3` | Convert the direct hub broadcasts, and normalise the event vocabulary (`task_update`/`task_updated`, `agent_update`/`agent_updated`) | `internal/websocket/hub.go`, `internal/mcp/coordination_tools.go`, `internal/handlers/*.go` | One canonical name per domain event; the old names survive as WebSocket aliases so the existing client keeps working |
 | `P3.A4` | Idempotency keys on the mutating MCP tools — `claim_task`, `complete_task` | `migrations/020_idempotency.up.sql`, `internal/mcp/handler.go` | A repeated request carrying the same key returns the first result instead of claiming twice or completing twice; a unique index enforces it |
-| `P3.A5` | The journal's hash chain and its anchor, if D6 is answered in favour | `migrations/011_audit_events.up.sql`, `internal/audit/` | The `prev_hash`/`hash` chain is verified by a test, and the anchor is published where the operator controls it — not stored only in the same database it protects |
+| `P3.A5` | The journal's hash chain and its anchor | `migrations/022_audit_log.up.sql`, `internal/audit/` | The `prev_hash`/`hash` chain is verified by a test, and the anchor is published where the operator controls it — not stored only in the same database it protects |
 | `P3.A6` | Fix the stale comment in `tooltype.go` and confirm the tree is clean before anything else starts | `internal/models/tooltype.go` | The comment matches the switch at `:103`; `make check-all` passes |
 
 ### 6.2 Track B — The hook layer
@@ -958,7 +986,7 @@ Every task in this phase is closed only when all of these hold:
 | Dependency | Blocking? | Reasoning |
 |---|---|---|
 | **M5 — stateless MCP (2026-07-28)** | **No** | The server negotiates `2024-11-05` and the OpenCode host speaks it. The plugin is built against today's revision and reports the negotiated revision through `announce_capability`, so it adapts when M5 lands. Waiting for M5 would delay Phase 3 by weeks to buy nothing the plugin needs. |
-| **M3 — audit journal** | **Yes, and Phase 3 delivers it** | Migration `011` was reserved for `audit_events` and never written. Phase 3 writes it, because the hook layer and the plugin both need somewhere to put their evidence. |
+| **M3 — audit journal** | **Yes, and Phase 3 delivers it** | The journal was reserved for M3 as migration `011` and never written; Phase 3 writes it as `022`, because the hook layer and the plugin both need somewhere to put their evidence. |
 | **M4 — approvals** | **No** | Approvals are needed for the `permission.asked` gate (§4.4) and for a *blocking* hook mode. Both are deferred. Phase 3 ships asynchronous hooks only. |
 | **Idempotency keys on mutating tools** | **Yes, and Phase 3 delivers it** | The 2026 protocol makes retries normal traffic: a broken response stream loses the in-flight request and the client MUST re-issue it with a new request id, and an MRTR retry re-sends the *original* request. A coordination plane whose tools mutate shared state must be idempotent by construction. `claim_task` and `complete_task` should accept a client-supplied idempotency key **now**, not after M5 — the cost is one column and one unique index, and the alternative is a duplicated claim or a double-completed task. |
 | **M7 — context retrieval** | **No** | The compaction bridge uses `search_contexts` and `list_contexts`, which exist and work. M7 improves retrieval; Phase 3 does not wait for it. |
@@ -1089,7 +1117,7 @@ Repository, as of `feat/coordinate-plan`:
   credential spellings (`:47`, `:55`), the three-file bundle.
 - `internal/models/tooltype.go` — the tool-type vocabulary, the formats, and
   the `announce_capability` note (`:18-19`).
-- `migrations/` — 001–018, with 011 and 012 unallocated.
+- `migrations/` — 001–022, with 011 and 012 unallocated.
 - `docs/ROADMAP.md` — the M3/M4/M5 milestones, task T3.1, and the A2A
   execution defect (`:22-25`).
 - `docs/research/agent-shaker-community-ideas-2026-09.md` — the in-repo
@@ -1125,3 +1153,402 @@ with per-claim URLs:
 - Paperclip (MIT, 106,790 stars) — the execution-side competitor.
 - Claude Managed Agents, the OpenAI Agents API, Microsoft Entra Agent ID —
   the server-side governance and identity direction.
+
+## 11. Implementation notes
+
+What the build changed against the plan above. These are the places where the
+code said something different from the design, and the design was wrong.
+
+### 11.1 The domain event stream is not the WebSocket stream
+
+The plan said the broker replaces the direct hub broadcasts. It does not, and
+it should not: the broadcasts are the browser's notification and carry
+whatever shape the UI wants — `task_update` and `task_updated` were two names
+for one change, and the payloads are flat maps that predate the coordination
+plane.
+
+So there are two views of a change, published at the same place:
+
+- the **broadcast** goes to the WebSocket, unchanged, under its existing name;
+- the **domain event** goes to the broker, with one canonical name per change.
+
+The hook layer consumes the domain event. A hook that had to parse a UI
+payload to work out which task completed would break whenever the frontend
+moved a field, and would silently stop firing on the changes nobody
+remembered to update it for.
+
+The publishers are the mutation sites themselves: claim, complete, reassign,
+handoff, blocker raised, task blocked, task ready, context published, agent
+gone stale. `internal/events` holds the vocabulary; `internal/events/broker.go`
+holds the fan-out.
+
+### 11.2 The hook's working directory is configured, not derived
+
+The plan said the working directory is constrained to a registered
+`project_repos` path. `project_repos` records a repository **URL**, not a path
+on disk — the server has no local checkout to resolve, and guessing one would
+put a command in a directory nobody chose.
+
+`AGENT_SHAKER_HOOK_WORKDIR` names it instead. The `{{project.repo_path}}`
+placeholder therefore means "the directory the hook runs in", and it resolves
+to that value.
+
+### 11.3 The environment contract
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AGENT_SHAKER_HOOKS_ENABLED` | `false` | The global switch. Off means no hook runs, whatever is configured. |
+| `AGENT_SHAKER_HOOK_EXECUTABLES` | empty | The allow-list, comma separated. An empty list allows nothing. |
+| `AGENT_SHAKER_HOOK_WORKDIR` | the server's own directory | Where hook commands run. |
+| `AGENT_SHAKER_HOOK_MAX_CONCURRENCY` | 4 | How many hooks run at once across the process. |
+| `AGENT_SHAKER_HOOK_QUEUE_SIZE` | 64 | How many runs may be waiting. |
+
+The per-project switch is `projects.hooks_enabled` (migration 019). Creating a
+hook turns it on for that project, because creating a hook *is* the decision
+to run commands for it — and a separate switch nobody knew about is a hook
+that silently never fires. `PUT /api/projects/{id}/hook-settings` turns it
+back off without deleting anything.
+
+### 11.4 The MiniMax Code bridge needs no plugin
+
+MiniMax Code has hooks of its own, so it does not need the OpenCode plugin
+path at all. The bridge is a project hook:
+
+- `.minimax/hooks.json` — `SessionStart`, `SessionEnd` and `PostCompact`.
+- `.minimax/agent-shaker-hook.mjs` — the script they call.
+
+`SessionStart` renews the agent's lease, `SessionEnd` releases it, and
+`PostCompact` reads the transcript and pushes it into the shared contexts. The
+last one is the same compaction bridge the OpenCode plugin implements, and it
+is the reason the shared store exists: the session's context survives the
+session.
+
+The script is fail-open and side-effect only. It never blocks a turn, never
+writes to stdout — an empty stdout is what tells the runtime "nothing to add"
+— and always exits 0. A bridge that could fail a turn would be turned off.
+
+The hook file is inert until the operator enables it in Settings → Hooks →
+Project. The environment it reads:
+
+```
+AGENT_SHAKER_URL         the API base URL
+AGENT_SHAKER_API_KEY     the agent's credential
+AGENT_SHAKER_PROJECT_ID  the project the session belongs to
+AGENT_SHAKER_AGENT_ID    the agent this session is
+```
+
+### 11.5 The schema
+
+| Migration | What |
+|---|---|
+| `022_audit_log` | `audit_events`: the append-only journal, with the `prev_hash`/`hash` chain and the anchor. |
+| `019_hooks` | `hooks` and `hook_runs`, plus `projects.hooks_enabled`. |
+| `020_idempotency` | `idempotency_keys`: `(tool, agent_id, key)` → the first response. |
+
+The idempotency keys are on `claim_task` and `complete_task`, and they are
+optional. A client that sends one gets a repeat of the same request replayed
+rather than a second claim or a second completion; a client that sends none
+gets the old behaviour, because requiring a key would break every existing
+agent on the day the revision landed.
+
+### 11.6 The checks run in Docker
+
+`scripts/verify-docker.sh` and `scripts/verify-docker.ps1` run every check in
+a container: gofmt, `go vet`, the build, `golangci-lint`, the tests, the race
+detector, the frontend typecheck and the frontend tests.
+`docker-compose.test.yml` brings up a throwaway Postgres on a tmpfs under its
+own compose project, so the integration stack cannot reach a developer's
+running database.
+
+The rule the scripts exist to enforce: nothing is installed on the host and
+nothing is run on the host. A checkout is not a toolchain, and a check that
+depends on what the developer happens to have installed is a check that passes
+on one machine and fails on another.
+
+`scripts/hook-e2e.mjs` is the end-to-end proof: it creates a project, an
+agent and a task, binds a hook to `task.completed`, completes the task, and
+waits for the run log to show the command's own captured output.
+
+#### What was verified, and where
+
+Every check ran in a container. Nothing was installed on the host and nothing
+was run on the host.
+
+| Check | Result |
+|---|---|
+| `gofmt -l cmd internal tests` | clean |
+| `go vet ./cmd/... ./internal/... ./tests/...` | clean |
+| `go build ./...` | clean |
+| `go test -count=1` | 20 packages, all pass |
+| `go test -race -count=1` | 20 packages, all pass — after the race in the runner was fixed (§11.7) |
+| `npm run typecheck` (web) | clean |
+| `npm test` (web) | 6 files, **83/83** pass, of which 29 are the hook composable's |
+| `npm run typecheck` (plugin) | clean |
+| `npm test` (plugin) | **54/54** pass |
+| `scripts/hook-e2e.sh` | a real command ran against a real event; captured stdout `hook ran for: prove the hook layer runs a command` |
+| `scripts/minimax-hook-e2e.sh` | the MiniMax Code bridge renewed a lease and pushed a compacted transcript (§11.14) |
+| `scripts/migration-e2e.sh` | the migrations applied over a database that already held rows, and the rows survived (§11.17) |
+
+Two operational notes the verification produced:
+
+- **The Go package list is explicit, not `./...`.** `./...` walks
+  `web/node_modules` when it exists, which is slow and races any npm run in
+  the same tree — a race that actually broke a verification run here.
+- **The frontend is copied into its container, not bind-mounted.** `npm ci`
+  deletes and recreates `node_modules`, so a bind mount writes that tree into
+  the checkout. The copy keeps the host tree untouched.
+
+### 11.7 What the verification caught
+
+The build was verified in Docker, and the verification found three defects
+that reading the code would not have:
+
+- **A non-zero exit was reported as a signal.** The runner set `Signaled` on
+  every `exec.ExitError`, so a command that ran and exited 3 was recorded as
+  exit 128. The distinction is the one thing a hook author has to work with:
+  128 means "killed", 3 means "the command said no". The runner now asks the
+  process state whether the process actually exited.
+- **The runner raced with itself.** `cmd.Run` publishes `cmd.Process` from
+  inside the goroutine it runs in, and the timeout path reads that same field
+  to kill the process group — a data race on precisely the field the timeout
+  depends on. The race detector finds it in the timeout test every time. The
+  process is now started in the calling goroutine, so the field is published
+  before anything reads it.
+- **`project_repos` records a URL, not a path.** The plan said the hook's
+  working directory would be constrained to a registered repository path. It
+  cannot be, because there is no local checkout in the schema — see §11.2.
+- **The per-project opt-in had no API.** The column existed and nothing could
+  set it, so every hook would have sat inert. Creating a hook now turns the
+  project on, and `PUT /api/projects/{id}/hook-settings` turns it back off.
+
+Two more came out of the delegation, and both are worth keeping: the v1
+plugin API's `server` export is a **function**, not an object, and the v1 tool
+hooks carry `{tool, sessionID, callID}` rather than the `{tool, input}` shape
+the plan assumed.
+
+### 11.8 The tool registry
+
+`P3.D1` moved the advertised schemas and the dispatch that serves them out of
+`internal/mcp/handler.go` and into `internal/mcp/tools.go`. The file shrank
+from 3,285 lines to 2,827, and the two halves of the registry now sit in one
+place instead of two ends of a very long file.
+
+The dispatch became a **map** rather than a switch:
+
+```go
+var toolExecutors = map[string]toolExecutor{...}
+```
+
+A switch's case labels are not enumerable at runtime, so the test that holds
+the advertised tools and the callable tools in step would have had to parse Go
+source to do it. With a map it is a map lookup. The test is symmetric — an
+executor without a schema is a tool nobody can find, and a schema without an
+executor is a tool that fails when it is called.
+
+The move itself was scripted (`scripts/extract-tool-registry.mjs`) rather than
+retyped, because a 700-line schema block retyped by hand is a 700-line chance
+to introduce a difference. The script derives the executors from the switch it
+replaces, and it refuses to run twice.
+
+**The script found a defect in itself.** Its first pass matched tool names
+with `[a-z_]+`, which silently skipped the three A2A tools — their names
+contain a digit. The registry's own test named them, which is the argument for
+having the test.
+
+### 11.9 The OpenCode 2 document
+
+`P3.D4` and `P3.D5` added the OpenCode 2 layout. It is a **separate format**,
+not a variation of the OpenCode one, and the reason is structural: `mcp` is one
+key with two shapes, so one file cannot serve both majors. OpenCode 1 reads
+the servers directly under `mcp`; OpenCode 2 reads them under `mcp.servers` and
+says so in its own words.
+
+Four things differ, and all four fail silently when wrong:
+
+| | OpenCode 1 | OpenCode 2 |
+|---|---|---|
+| Servers | `mcp.agent-shaker` | `mcp.servers.agent-shaker` |
+| Disabled | `enabled` | `disabled` |
+| OAuth | not mentioned | **on by default for remote servers** |
+| Plugins | `plugin: ["name"]` | `plugins: [{ package, options }]` |
+
+The OAuth one is the sharpest edge: OpenCode 2 turns OAuth on for every remote
+server unless the file says `oauth: false`, and this server authenticates with
+a header. Without the field the client tries to authenticate against a server
+that does not speak OAuth, and the agent connects to nothing — with no error to
+read. The generated file says `"oauth": false`.
+
+The protocol revision is pinned to `legacy`, because that is what the server
+speaks today. `auto` would spend a probe on every connection to discover what
+`legacy` already says, and `2026-07-28` would fail against a server that has
+not made the move. Both become correct when it does.
+
+The format is chosen by the caller — `GET /api/agents/{id}/config?format=opencode-v2`
+— and the default for `tool_type: opencode` stays the v1 layout, because that is
+the one that is known to work for the installations that exist.
+
+The tests parse the rendered document rather than matching its text. A document
+can be valid JSON, carry every key anyone expects, and still be a document the
+host ignores.
+
+### 11.10 What a client says about itself
+
+`P3.D2` and `P3.D3` added `announce_capability` and migration `021`.
+
+The server has to know what a client can do for it, and it cannot guess: an
+agent whose client cannot accept a pushed context, or author a compaction
+summary, is an agent the server must not ask to. The tool is called once, at
+setup, and the answer lands in `agents.capabilities`.
+
+The vocabulary is closed (`compaction`, `context_injection`, `policy_gate`,
+`evidence_capture`), so a typo is refused rather than stored: a capability
+nobody can act on is worse than an announcement that failed.
+
+The plugin announces only what it can honour — the intersection of the host
+surface it probed and the features it is configured for. Announcing a
+capability the client cannot deliver would send the server looking for a
+feature that is not there.
+
+### 11.11 The organisation manifest
+
+`P3.E5` publishes `/.well-known/opencode`: the one place an organisation can
+hand a whole fleet of agents the same coordination server and the same plugin
+without touching a machine. OpenCode fetches it itself, before any credential
+exists, and merges what it finds underneath every other configuration source.
+
+It is rendered by the same generator that renders a per-agent bundle, so there
+is one implementation of the OpenCode document rather than two that drift. It
+carries no secret — every credential in it is the `{env:AGENT_SHAKER_API_KEY}`
+placeholder — which is what makes it safe to serve from an unauthenticated
+path.
+
+### 11.12 The publish path
+
+`P3.E4` adds `.github/workflows/publish-npm.yml`: a tag, a check that the tag
+agrees with the package's own version, the checks run again at publish time,
+and npm trusted publishing with OIDC provenance — no long-lived token in the
+secrets and nothing to rotate.
+
+The tag prefix is the package's own name rather than a bare `v*`, because the
+Docker images and the npm package are released independently and must not move
+together.
+
+### 11.13 The page, split
+
+The hook page was the largest route view in the app — 34,870 bytes, with the
+form, the list, the run log and three dialogs in one file. It is now 13,673
+bytes, below `projects/[id].vue`, and the pieces live where the rest of the
+app keeps them:
+
+| File | Responsibility |
+|---|---|
+| `components/domain/HookCard.vue` | one configured hook: what it runs, what it matches, and the four actions |
+| `components/domain/HookFormModal.vue` | the form, its validation, and the conversion to the request body |
+| `components/domain/HookRunRow.vue` | one run, with its captured output collapsed |
+| `pages/hooks.vue` | the composition surface: the project picker, the switch, the list, the log, the dialogs |
+
+The rule is the repo's own convention — every other feature has a `*Card.vue`
+and a `*FormModal.vue` under `components/domain` — and it is also the Vue
+composition rule: a route view that owns orchestration *and* the markup for
+three sections has two responsibilities.
+
+The form moved with its state, including the guard against a double submit:
+`FormModal` emits `submit` twice for one click, so the in-flight request is
+latched inside the modal rather than in the page that happens to use it today.
+
+### 11.14 The MiniMax bridge, proven
+
+The bridge was written and left unproven, which is the state in which a hook
+looks like a feature and behaves like a guess. `scripts/minimax-hook-e2e.mjs`
+drives the hook script the way MiniMax Code would — the payload on stdin, the
+environment in place — against the throwaway stack:
+
+```
+✓ an agent-bound credential was minted
+✓ SessionStart renewed the lease (last_seen …895782Z → …007331Z)
+✓ PostCompact pushed the transcript as context …
+```
+
+What it proves is the part that is ours: the script reads the payload,
+resolves the agent, renews the lease and pushes the compacted transcript. What
+it does **not** prove is that MiniMax Code invokes the hook — that needs the
+host, and the hook stays inert until an operator enables it in
+Settings → Hooks → Project.
+
+The credential matters: the hook runs with a key bound to one agent, so it can
+renew its own lease and write its own contexts, and nothing else. A bridge
+that ran with a flat key would be a bridge with no owner.
+
+### 11.15 The journal
+
+`internal/audit` is the evidence layer. The broker publishes a domain event;
+the journal subscriber writes it; the chain makes the record checkable.
+
+**The chain is per project, and it is written under a lock.** Two writers
+reading the same head produce two rows claiming the same predecessor — a fork,
+which is exactly what the chain exists to prevent. The writer takes a
+Postgres advisory transaction lock on the project before it reads the head, so
+there is one writer per chain at a time.
+
+**The anchor is the point.** A hash chain is only as strong as its anchor: a
+database-level attacker who rewrites the trail can recompute every hash in it.
+So the head is published *outside* the database — a file the operator names
+(`AGENT_SHAKER_AUDIT_ANCHOR_DIR`), and the API that reads it back
+(`GET /api/activity/anchor`). An operator who pins the head has a value that
+a rewrite of the trail cannot match.
+
+**Nothing rewrites the journal.** There is no update and no delete against
+`audit_events` anywhere in the codebase, and a test pins that by reading the
+package's own source — there is no behavioural way to prove the absence of a
+statement, so the check is a source scan.
+
+**A journal write never fails the operation that caused it.** The subscriber
+swallows the error; the recorder returns it. The decision to ignore it belongs
+to the caller, and the caller knows that a trail is worth less than the work.
+
+**What it records is the domain vocabulary**, not every column of every row.
+A task claimed, a context published, an agent gone stale. A row-level change
+log for the whole schema is a different feature and is not what a coordination
+trail is for; the distinction is stated rather than blurred.
+
+`web/app/pages/activity.vue` reads it: filter by project and entity, and the
+chain head beside the list.
+
+### 11.16 A PowerShell trap worth writing down
+
+The verification scripts are `.ps1`, and Windows PowerShell 5.1 reads a
+BOM-less file as **ANSI**, not UTF-8. A `✓` written in UTF-8 is three bytes,
+and read as CP1252 they are `â`, `œ` and a **right double quotation mark** —
+which PowerShell treats as a string delimiter. The file parses as an
+unterminated string and fails with an error pointing at a line that looks
+perfectly fine.
+
+The repository's own scripts get away with it because their non-ASCII
+characters are in comments. The rule that falls out: **a non-ASCII character
+inside a double-quoted string in a `.ps1` file is a parse error waiting to
+happen.** Comments are safe; strings are not.
+
+The same trap applies to the em dash, which is also three bytes ending in a
+smart quote.
+
+### 11.17 The migrations over data that already exists
+
+A migration that only ever runs against an empty database proves nothing
+about the case it will actually meet. `scripts/migration-e2e.sh` applies every
+migration but the journal, writes a project, an agent, a task and a context
+through the API, applies the journal migration **over those rows**, and then
+checks that the rows are still readable and that the journal now records what
+happens.
+
+It found a defect that only exists with rows in the table: the journal's read
+path scanned its nullable string columns into plain `string`, and a NULL in
+`trace_id` failed the whole read with *"converting NULL to string is
+unsupported"*. An empty database never produced a NULL there, so no unit test
+would have found it.
+
+**The migration number was wrong, and the proof caught it.** The journal was
+planned as `011`, reserved for M3 since the first plan. `011` is now *below*
+the tree's maximum, and `golang-migrate` walks forward only — so a migration
+numbered `011` would never have been applied at all. Every deployment would
+have reported itself as migrated, and the table would not have existed. The
+journal is `022`.

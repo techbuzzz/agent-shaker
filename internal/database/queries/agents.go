@@ -62,7 +62,7 @@ func (s *AgentsStore) CreateAgent(ctx context.Context, a *models.Agent) error {
 // per agent.
 const agentSelectColumns = `
 		a.id, a.project_id, a.name, a.role, a.team, a.status, a.last_seen, a.created_at, a.tool_type,
-		a.lease_expires_at, a.current_task_id, a.heartbeat_payload,
+		a.lease_expires_at, a.current_task_id, a.heartbeat_payload, a.capabilities,
 		hb.progress_pct, hb.eta`
 
 // ListAgents returns all agents, or agents filtered by project when projectID
@@ -116,14 +116,15 @@ func (s *AgentsStore) GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent
 
 	a := &models.Agent{}
 	var (
-		lease    sql.NullTime
-		payload  []byte
-		progress sql.NullInt64
-		eta      sql.NullTime
+		lease        sql.NullTime
+		payload      []byte
+		capabilities []byte
+		progress     sql.NullInt64
+		eta          sql.NullTime
 	)
 	if err := row.Scan(
 		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt, &a.ToolType,
-		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
+		&lease, &a.CurrentTaskID, &payload, &capabilities, &progress, &eta,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("agent %s not found", id)
@@ -131,6 +132,7 @@ func (s *AgentsStore) GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
 	applyAgentCoordination(a, lease, payload, progress, eta)
+	applyAgentCapabilities(a, capabilities)
 	return a, nil
 }
 
@@ -138,18 +140,20 @@ func (s *AgentsStore) GetAgent(ctx context.Context, id uuid.UUID) (*models.Agent
 func scanAgentRow(row rowScanner) (*models.Agent, error) {
 	a := &models.Agent{}
 	var (
-		lease    sql.NullTime
-		payload  []byte
-		progress sql.NullInt64
-		eta      sql.NullTime
+		lease        sql.NullTime
+		payload      []byte
+		capabilities []byte
+		progress     sql.NullInt64
+		eta          sql.NullTime
 	)
 	if err := row.Scan(
 		&a.ID, &a.ProjectID, &a.Name, &a.Role, &a.Team, &a.Status, &a.LastSeen, &a.CreatedAt, &a.ToolType,
-		&lease, &a.CurrentTaskID, &payload, &progress, &eta,
+		&lease, &a.CurrentTaskID, &payload, &capabilities, &progress, &eta,
 	); err != nil {
 		return nil, fmt.Errorf("scan agent: %w", err)
 	}
 	applyAgentCoordination(a, lease, payload, progress, eta)
+	applyAgentCapabilities(a, capabilities)
 	return a, nil
 }
 
@@ -176,6 +180,42 @@ func applyAgentCoordination(a *models.Agent, lease sql.NullTime, payload []byte,
 		v := eta.Time
 		a.LastHeartbeatETA = &v
 	}
+}
+
+// applyAgentCapabilities decodes the announced capabilities.
+//
+// A row whose object cannot be decoded must still read back rather than fail
+// the list: the column belongs to the client that wrote it, and a client that
+// invented a field should not take the agent list down with it.
+func applyAgentCapabilities(a *models.Agent, capabilities []byte) {
+	if len(capabilities) == 0 {
+		return
+	}
+
+	var decoded models.AgentCapabilities
+	if err := json.Unmarshal(capabilities, &decoded); err != nil {
+		return
+	}
+	a.Capabilities = &decoded
+}
+
+// SetCapabilities records what an agent's client says it can do.
+//
+// The whole announcement replaces the previous one: a client that drops a
+// capability has stopped supporting it, and keeping the old list would leave
+// the server routing work to a client that no longer accepts it.
+func (s *AgentsStore) SetCapabilities(ctx context.Context, id uuid.UUID, caps *models.AgentCapabilities) error {
+	encoded, err := json.Marshal(caps)
+	if err != nil {
+		return fmt.Errorf("encode agent capabilities: %w", err)
+	}
+
+	_, err = s.q.ExecContext(ctx,
+		`UPDATE agents SET capabilities = $2 WHERE id = $1`, id, encoded)
+	if err != nil {
+		return fmt.Errorf("update agent capabilities: %w", err)
+	}
+	return nil
 }
 
 // UpdateAgentStatus sets status and bumps last_seen.

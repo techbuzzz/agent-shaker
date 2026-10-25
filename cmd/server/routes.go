@@ -43,16 +43,24 @@ type routeDeps struct {
 	// without a database. The routes are registered behind a nil check for the
 	// same reason the milestone routes are: a nil handler would panic on the
 	// first request instead of returning the 503 the other handlers write.
-	blockerHandler   *handlers.BlockerHandler
-	mcpHandler       *mcp.MCPHandler
-	agentCardHandler *server.AgentCardHandler
-	a2aHandler       *server.A2AHandler
-	streamingHandler *server.StreamingHandler
-	artifactHandler  *server.ArtifactHandler
-	obs              *observability.Metrics
-	maxBodyBytes     int64
-	corsOrigins      []string
-	corsAllowCreds   bool
+	blockerHandler *handlers.BlockerHandler
+	hookHandler    *handlers.HookHandler
+	mcpHandler     *mcp.MCPHandler
+	// activityHandler serves the append-only journal. It is nil when the
+	// server runs without a database, and the routes are registered behind a
+	// nil check for the same reason the others are.
+	activityHandler *handlers.ActivityHandler
+	// openCodeManifestHandler serves /.well-known/opencode, which OpenCode
+	// fetches on its own.
+	openCodeManifestHandler *handlers.OpenCodeManifestHandler
+	agentCardHandler        *server.AgentCardHandler
+	a2aHandler              *server.A2AHandler
+	streamingHandler        *server.StreamingHandler
+	artifactHandler         *server.ArtifactHandler
+	obs                     *observability.Metrics
+	maxBodyBytes            int64
+	corsOrigins             []string
+	corsAllowCreds          bool
 	// assumeTLS is an operator override, not the primary mechanism. HSTS is
 	// decided per request from r.TLS / X-Forwarded-Proto; see
 	// middleware.SecurityHeaders. Set only when the fronting proxy does not set
@@ -143,6 +151,29 @@ func newServeMux(d routeDeps) (http.Handler, error) {
 	mux.Handle("POST /{$}", mcpHandler)
 	mux.Handle("OPTIONS /{$}", mcpHandler)
 	mux.Handle("GET /mcp", mcpHandler)
+	// The organisation-wide OpenCode manifest.
+	//
+	// Unauthenticated on purpose: OpenCode fetches this before any credential
+	// exists, and the document carries no secret — every credential in it is
+	// the {env:AGENT_SHAKER_API_KEY} placeholder — so there is nothing here to
+	// protect. It sits on the root mux rather than under /api for the same
+	// reason the agent card does.
+	if d.openCodeManifestHandler != nil {
+		mux.HandleFunc("GET /.well-known/opencode", d.openCodeManifestHandler.Manifest)
+	}
+
+	// The append-only journal. Read-only by construction: there is no route
+	// here that can change a row, because a trail that can be rewritten is not
+	// a trail.
+	//
+	// Registered behind a nil check for the same reason the other handlers
+	// are: a nil handler would panic on the first request instead of
+	// returning the 503 the others write.
+	if d.activityHandler != nil {
+		mux.HandleFunc("GET /api/activity", d.activityHandler.ListActivity)
+		mux.HandleFunc("GET /api/activity/anchor", d.activityHandler.ChainHead)
+	}
+
 	mux.Handle("POST /mcp", mcpHandler)
 	mux.Handle("OPTIONS /mcp", mcpHandler)
 	mux.Handle("POST /mcp/message", mcpHandler)
@@ -385,6 +416,40 @@ func (d routeDeps) apiRouter() http.Handler {
 		mux.HandleFunc("GET /api/projects/{project_id}/blockers/{blocker_id}", d.blockerHandler.GetBlocker)
 		mux.HandleFunc("PUT /api/projects/{project_id}/blockers/{blocker_id}/resolve", d.blockerHandler.ResolveBlocker)
 		mux.HandleFunc("PUT /api/projects/{project_id}/blockers/{blocker_id}/dismiss", d.blockerHandler.DismissBlocker)
+	}
+
+	// Hook layer. A hook runs a command on the server, so the mutating routes
+	// are behind the admin scope: creating one is not a project setting, it
+	// is a decision to let the server execute something.
+	//
+	// The scope is applied per route rather than through
+	// RequireScopeOnPaths because the create route lives under
+	// /api/projects/{id}/hooks, where a path prefix would either be too
+	// broad — gating every project route — or not apply at all.
+	if d.hookHandler != nil {
+		mux.HandleFunc("GET /api/projects/{project_id}/hooks", d.hookHandler.ListHooks)
+		mux.HandleFunc("GET /api/projects/{project_id}/hook-runs", d.hookHandler.ListHookRuns)
+		mux.HandleFunc("GET /api/projects/{project_id}/hook-settings", d.hookHandler.GetHookSettings)
+		mux.Handle("PUT /api/projects/{project_id}/hook-settings", middleware.Apply(
+			http.HandlerFunc(d.hookHandler.UpdateHookSettings),
+			middleware.RequireScope(models.ScopeAdmin),
+		))
+		mux.Handle("POST /api/projects/{project_id}/hooks", middleware.Apply(
+			http.HandlerFunc(d.hookHandler.CreateHook),
+			middleware.RequireScope(models.ScopeAdmin),
+		))
+		mux.Handle("PATCH /api/hooks/{id}", middleware.Apply(
+			http.HandlerFunc(d.hookHandler.UpdateHook),
+			middleware.RequireScope(models.ScopeAdmin),
+		))
+		mux.Handle("DELETE /api/hooks/{id}", middleware.Apply(
+			http.HandlerFunc(d.hookHandler.DeleteHook),
+			middleware.RequireScope(models.ScopeAdmin),
+		))
+		mux.Handle("POST /api/hooks/{id}/test", middleware.Apply(
+			http.HandlerFunc(d.hookHandler.TestHook),
+			middleware.RequireScope(models.ScopeAdmin),
+		))
 	}
 
 	// Milestones (Phase 1)

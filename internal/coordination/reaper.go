@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/techbuzzz/agent-shaker/internal/database/queries"
+	"github.com/techbuzzz/agent-shaker/internal/events"
 	"github.com/techbuzzz/agent-shaker/internal/models"
 	"github.com/techbuzzz/agent-shaker/internal/websocket"
 )
@@ -67,6 +68,7 @@ type StaleAgentHandler interface {
 type StaleAgentReaper struct {
 	store  StaleAgentHandler
 	hub    *websocket.Hub
+	broker *events.Broker
 	config Config
 	logger *slog.Logger
 }
@@ -75,9 +77,9 @@ type StaleAgentReaper struct {
 // A nil hub disables broadcasting without disabling the reaper — the server can
 // run without WebSocket clients, and silently skipping the expiry in that case
 // would leave work stuck forever.
-func NewStaleAgentReaper(store StaleAgentHandler, hub *websocket.Hub, config Config) *StaleAgentReaper {
+func NewStaleAgentReaper(store StaleAgentHandler, hub *websocket.Hub, broker *events.Broker, config Config) *StaleAgentReaper {
 	logger := slog.Default().With("component", "stale_agent_reaper")
-	return &StaleAgentReaper{store: store, hub: hub, config: config, logger: logger}
+	return &StaleAgentReaper{store: store, hub: hub, broker: broker, config: config, logger: logger}
 }
 
 // Timing lives in the scheduler now (see scheduler.go): the reaper is a task,
@@ -121,7 +123,9 @@ func (r *StaleAgentReaper) reapAgent(ctx context.Context, agent models.StaleAgen
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	// The rollback is a no-op once the transaction has been committed, and its
+	// error carries nothing the caller could act on.
+	defer func() { _ = tx.Rollback() }()
 
 	changed, err := r.store.MarkAgentOffline(ctx, tx, agent.ID)
 	if err != nil {
@@ -149,17 +153,31 @@ func (r *StaleAgentReaper) reapAgent(ctx context.Context, agent models.StaleAgen
 // broadcast tells the UI what happened. The payload carries project_id because
 // the hub routes by it — see websocket.Hub.broadcastMessage.
 func (r *StaleAgentReaper) broadcast(agent models.StaleAgent, released []uuid.UUID) {
-	if r.hub == nil {
-		return
-	}
 	taskIDs := make([]string, 0, len(released))
 	for _, id := range released {
 		taskIDs = append(taskIDs, id.String())
 	}
-	r.hub.BroadcastToProject(agent.ProjectID, "agent_gone_stale", map[string]any{
-		"agent_id":        agent.ID,
-		"agent_name":      agent.Name,
-		"project_id":      agent.ProjectID,
-		"reassigned_task": taskIDs,
-	})
+
+	if r.hub != nil {
+		r.hub.BroadcastToProject(agent.ProjectID, "agent_gone_stale", map[string]any{
+			"agent_id":        agent.ID,
+			"agent_name":      agent.Name,
+			"project_id":      agent.ProjectID,
+			"reassigned_task": taskIDs,
+		})
+	}
+
+	// An agent going stale is a domain event: the lease lapsed, and the work
+	// it held went back to the backlog. A hook that reacts to that hears it
+	// from here rather than by watching the browser.
+	events.Send(context.Background(), r.broker, events.New(events.AgentStale, agent.ProjectID, events.Options{
+		EntityType: events.EntityAgent,
+		EntityID:   agent.ID,
+		ActorType:  events.ActorService,
+		Payload: map[string]any{
+			events.PayloadTitle:     agent.Name,
+			events.PayloadStatus:    string(models.StatusAgentOffline),
+			events.PayloadActorName: agent.Name,
+		},
+	}))
 }

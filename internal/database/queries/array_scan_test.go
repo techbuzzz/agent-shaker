@@ -21,8 +21,11 @@ import (
 // this stops compiling — which is the point.
 func TestStringArraySatisfiesScannerAndSliceDoesNot(t *testing.T) {
 	var tags pq.StringArray
-	var scanner interface{ Scan(src any) error } = &tags
-	if scanner == nil {
+	// The assertion has to be a type assertion, not a nil check. Assigning to
+	// an interface already proves the implementation at compile time, and the
+	// interface it lands in is never nil — so `scanner == nil` is a
+	// comparison that can never be true and says nothing.
+	if _, ok := any(&tags).(interface{ Scan(src any) error }); !ok {
 		t.Fatal("pq.StringArray must implement sql.Scanner for a TEXT[] column")
 	}
 

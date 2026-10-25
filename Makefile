@@ -31,6 +31,7 @@ WEB_DIR    := web
 
 .PHONY: help check check-all workflow-lint fmt fmt-check vet lint build run clean \
         test test-race test-integration cover \
+        verify-docker verify-docker-go verify-docker-web verify-docker-integration \
         web-install web-build web-typecheck web-test web-dev \
         migrate-up migrate-version migrate-force \
         db-backup db-backups db-restore \
@@ -100,10 +101,40 @@ cover: ## Generate the coverage report
 	go tool cover -html=cover.out -o cover.html
 	@echo "Coverage report: cover.html"
 
+# ---------------------------------------------------------- docker verification
+#
+# Every check runs in a container. Nothing is installed on the host and
+# nothing is run on the host: a checkout is not a toolchain, and a check that
+# depends on what the developer happens to have installed is a check that
+# passes on one machine and fails on another.
+#
+# The integration stack lives in its own compose project with a throwaway
+# database on a tmpfs, so `down -v` cannot reach a developer's data.
+
+verify-docker: ## Run every check in Docker, isolated
+	bash scripts/verify-docker.sh all
+
+verify-docker-go: ## Run the Go checks in Docker (fmt, vet, build, lint, test, race)
+	bash scripts/verify-docker.sh go
+
+verify-docker-web: ## Run the frontend checks in Docker (typecheck, test)
+	bash scripts/verify-docker.sh web
+
+verify-docker-integration: ## Run the integration tests against a throwaway database
+	bash scripts/verify-docker.sh integration
+
+hook-e2e: ## Prove the hook layer end to end against a throwaway stack
+	bash scripts/hook-e2e.sh
+
+minimax-hook-e2e: ## Prove the MiniMax Code hook bridge reaches the server
+	bash scripts/minimax-hook-e2e.sh
+
+migration-e2e: ## Prove the migrations apply to a database that already holds data
+	bash scripts/migration-e2e.sh
+
 # ------------------------------------------------------------------ go build
 
-build: ## Compile the server binary into bin/ with build metadata
-	@mkdir -p bin
+build: ## Compile the server binary into bin/ with build metadata	@mkdir -p bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/mcp-server ./cmd/server
 	@echo "✓ bin/mcp-server  ($(VERSION) / $(COMMIT))"
 

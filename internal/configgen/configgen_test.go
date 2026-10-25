@@ -94,7 +94,7 @@ func fileLabel(f models.ConfigFile) string {
 // apart, and a file carrying the wrong one is valid JSON, shows a real-looking
 // header, and authenticates as nobody.
 func placeholderFor(format models.ConfigFormat) string {
-	if format == models.ConfigFormatOpenCode {
+	if format == models.ConfigFormatOpenCode || format == models.ConfigFormatOpenCodeV2 {
 		return OpenCodeAPIKeyPlaceholder
 	}
 	return APIKeyPlaceholder
@@ -291,7 +291,7 @@ func TestEveryFormatRendersAUsablePlaceholder(t *testing.T) {
 			config := files[0]
 
 			want := APIKeyPlaceholder
-			if format == models.ConfigFormatOpenCode {
+			if format == models.ConfigFormatOpenCode || format == models.ConfigFormatOpenCodeV2 {
 				want = OpenCodeAPIKeyPlaceholder
 			}
 			if !strings.Contains(config.Content, "Bearer "+want) {
@@ -348,6 +348,16 @@ func TestRenderedConfigIsValidJSON(t *testing.T) {
 			server, ok := config[lay.serverKey].(map[string]any)
 			if !ok {
 				t.Fatalf("no %q entry in %s", lay.serverKey, files[0].Content)
+			}
+			// A layout may nest the servers one level deeper. OpenCode 2 does,
+			// and a test that only knew the flat shape would have passed while
+			// the host read nothing at all.
+			if lay.serversUnder != "" {
+				nested, ok := server[lay.serversUnder].(map[string]any)
+				if !ok {
+					t.Fatalf("no %q entry under %q in %s", lay.serversUnder, lay.serverKey, files[0].Content)
+				}
+				server = nested
 			}
 			entry, ok := server[ServerName].(map[string]any)
 			if !ok {

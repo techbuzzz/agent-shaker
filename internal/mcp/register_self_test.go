@@ -87,12 +87,10 @@ func TestRegisterSelfSchemaDoesNotAdvertisePM(t *testing.T) {
 		t.Fatalf("unexpected result type %T", result)
 	}
 
-	var found bool
 	for _, tool := range list.Tools {
 		if tool.Name != "register_self" {
 			continue
 		}
-		found = true
 
 		role, ok := tool.InputSchema.Properties["role"].(map[string]interface{})
 		if !ok {
@@ -111,9 +109,7 @@ func TestRegisterSelfSchemaDoesNotAdvertisePM(t *testing.T) {
 		}
 		return
 	}
-	if !found {
-		t.Fatal("register_self is not in the tool list")
-	}
+	t.Fatal("register_self is not in the tool list")
 }
 
 // The ON CONFLICT fix is deliberately not unit-tested here.
